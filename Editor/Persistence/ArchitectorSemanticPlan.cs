@@ -215,7 +215,7 @@ namespace Architector.Editor
         {
             var layers = candidate.project.layers.ToDictionary(
                 layer => layer.id,
-                layer => candidate.documents.TryGetValue(layer.id, out var changed) ? changed : ReadLayer(layer.id),
+                layer => candidate.documents.TryGetValue(layer.id, out var changed) ? changed : LoadLayer(layer.id),
                 StringComparer.Ordinal);
             return Commit(
                 string.IsNullOrWhiteSpace(actionName) ? "Apply Semantic Plan" : actionName.Trim(),

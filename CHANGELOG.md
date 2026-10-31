@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- Fixed semantic plans failing with "Layer Portal pair must contain exactly two endpoints" when they delete the last relationship between two layers.
+- `dry_run_plan` no longer changes the session state.
+
 ## 0.2.0
 
 - The Architector MCP server is now a standalone program for Windows, macOS and Linux. It needs no .NET SDK.

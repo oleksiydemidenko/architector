@@ -1701,7 +1701,7 @@ namespace Architector.Editor
             if (nextProject != null)
             {
                 RequireCompleteLayers(nextProject, nextLayers);
-                RemoveLonelyPortals(nextLayers);
+                RemoveLonelyPortals(nextLayers, dryRun);
                 portalPairs = ArchitectorValidation.ValidateRepository(nextProject, nextSettings ?? Settings, nextLayers);
                 var nextFiles = ArchitectorStorageCodec.Encode(nextProject, nextLayers);
                 IReadOnlyDictionary<string, string> previousFiles = recoveryDiskFiles == null && layerErrors.Count == 0
@@ -2208,7 +2208,7 @@ namespace Architector.Editor
                 });
         }
 
-        private void RemoveLonelyPortals(IReadOnlyDictionary<string, ArchitectorLayerDocuments> layers)
+        private void RemoveLonelyPortals(IReadOnlyDictionary<string, ArchitectorLayerDocuments> layers, bool dryRun)
         {
             var connected = new HashSet<string>(StringComparer.Ordinal);
             foreach (var edge in layers.Values.SelectMany(documents => documents.semantic.edges))
@@ -2219,8 +2219,9 @@ namespace Architector.Editor
                 var lonely = documents.semantic.nodes
                     .Where(node => IsPortal(node) && !connected.Contains(LayerPairKey(documents.semantic.layerId, node.portal.targetLayerId)))
                     .ToArray();
-                foreach (var portal in documents.semantic.nodes.Where(IsPortal).Except(lonely))
-                    unconnectedPortalPairIds.Remove(portal.portal.pairId);
+                if (!dryRun)
+                    foreach (var portal in documents.semantic.nodes.Where(IsPortal).Except(lonely))
+                        unconnectedPortalPairIds.Remove(portal.portal.pairId);
                 var removed = lonely
                     .Where(node => !unconnectedPortalPairIds.Contains(node.portal.pairId))
                     .Select(node => node.id)

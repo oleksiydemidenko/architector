@@ -529,6 +529,43 @@ namespace Architector.Editor.Tests
         }
 
         [Test]
+        public void SemanticPlanDeletingLastRelationshipRemovesPairWithoutTouchingTheSessionOnDryRun()
+        {
+            var sourceLayerId = repository.CreateLayer(string.Empty, "Source Layer");
+            var targetLayerId = repository.CreateLayer(string.Empty, "Target Layer");
+            var sourceNode = repository.CreateEmptyNode(sourceLayerId, 0f, 0f);
+            var targetNode = repository.CreateEmptyNode(targetLayerId, 0f, 0f);
+            repository.CreateCrossLayerEdge(sourceLayerId, sourceNode, targetLayerId, targetNode, ArchitectorEdgeKinds.Dependency);
+            var edgeId = repository.LoadLayer(sourceLayerId).semantic.edges.Single(edge => edge.targetLayerId == targetLayerId).id;
+            var plan = new ArchitectorSemanticPlan
+            {
+                deletions =
+                {
+                    new ArchitectorPlanDeletion { kind = "edge", target = edgeId }
+                }
+            };
+            int PortalCount(string layerId) =>
+                repository.LoadLayer(layerId).semantic.nodes.Count(node => node.kind == ArchitectorNodeKinds.LayerPortal);
+
+            repository.DryRunSemanticPlan(plan);
+            repository.DryRunSemanticPlan(plan);
+
+            Assert.That(PortalCount(sourceLayerId), Is.EqualTo(1));
+            Assert.That(PortalCount(targetLayerId), Is.EqualTo(1));
+
+            repository.ApplySemanticPlan(plan);
+
+            Assert.That(PortalCount(sourceLayerId), Is.Zero);
+            Assert.That(PortalCount(targetLayerId), Is.Zero);
+            Assert.That(Directory.GetFiles(Path.Combine(temporaryRoot, "Architector", "Links")), Is.Empty);
+
+            repository.Undo();
+
+            Assert.That(PortalCount(sourceLayerId), Is.EqualTo(1));
+            Assert.That(PortalCount(targetLayerId), Is.EqualTo(1));
+        }
+
+        [Test]
         public void SemanticPlanRecursiveEntryDeletionCleansPortalsAndUndoRestoresEverything()
         {
             var groupId = repository.CreateGroup(string.Empty, "Disposable");
