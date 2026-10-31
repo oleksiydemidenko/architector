@@ -1,10 +1,8 @@
 # Architector
 
-Early development: expect changes and rough edges.
-
 Machine-readable architecture for Unity projects. Architector keeps your architecture as a layered graph in plain JSON files next to the code: groups, layers, typed nodes, relationships, approvals and code scopes. People edit it in a Unity window. Coding agents read and edit it through tools. Conformance checks compare it with the compiled code.
 
-It answers the question an agent otherwise pays for with search: *what governs this piece of code, and what may it depend on?*
+It is built around one question: *what governs this piece of code, and what may it depend on?*
 
 ## What You Get
 
@@ -14,7 +12,7 @@ It answers the question an agent otherwise pays for with search: *what governs t
 - **Conformance.** Linked nodes are checked against compiled types and selected members.
 - **Dependency evidence.** A command-line tool compares real code dependencies with the declared ones.
 - **Routing without Unity.** `context_route` goes from a file or type to its layer, its digest lines and the documents worth reading.
-- **Agent access.** Its own MCP server for any MCP client on Windows, macOS and Linux, plus adapters for MCP for Unity by Coplay and Unity MCP by Ivan Murzak. Agents with a shell need no MCP at all.
+- **Agent access.** An MCP server for Windows, macOS and Linux, plus adapters for MCP for Unity by Coplay and Unity MCP by Ivan Murzak. Agents with a shell can use the command-line tools instead.
 
 Architector models contracts, not everything. It does not check lifecycle behaviour, method bodies or gameplay correctness.
 
@@ -28,7 +26,7 @@ In Unity open **Window > Package Manager > + > Add package from git URL** and en
 https://github.com/oleksiydemidenko/architector.git
 ```
 
-## First Ten Minutes
+## Getting Started
 
 1. Open **Window > Architector > Window**.
 2. Create a group and a layer, then add a node and link it to a type from your project.
@@ -68,7 +66,7 @@ Keep **Project Settings > Player > Run In Background** on when agents talk to th
 
 ## Status
 
-Architector is in development. Expect changes and rough edges, and please report them. Developed on Unity 6000.3.16f1 on Linux.
+Architector is in development. It is developed on Unity 6000.3.16f1 on Linux. The MCP server has been used with Claude Code and Codex.
 
 ## Contributing
 

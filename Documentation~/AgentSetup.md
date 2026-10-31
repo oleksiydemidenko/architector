@@ -2,9 +2,9 @@
 
 ## 1. Choose Your Access
 
-**File access works with every agent that has a shell.** Nothing to install beyond the .NET SDK. The agent reads the digest and runs `context_route`.
+**File access needs an agent with a shell.** Nothing to install beyond the .NET SDK. The agent reads the digest and runs `context_route`.
 
-**The Architector MCP server works with every MCP client.** It is one small program for Windows, macOS or Linux. It needs no .NET SDK and no other Unity MCP package.
+**The Architector MCP server is for MCP clients.** It is one program for Windows, macOS or Linux. It needs no .NET SDK and no other Unity MCP package.
 
 1. Open **Window > Architector > MCP Server** and press **Install Server**. The server goes to `~/.architector/mcp/<version>/`.
 2. Copy the settings for your client from the same window:
@@ -38,7 +38,7 @@ Another MCP server needs a small adapter: see [Adding an Agent Integration](Addi
 
 ## 2. Tell The Agent
 
-Add this to your `AGENTS.md`, `CLAUDE.md` or Cursor rules. Keep it short: agents follow what such files say, and every line is read in every session.
+Add this to your `AGENTS.md`, `CLAUDE.md` or Cursor rules. Keep it short: every line is read in every session.
 
 ```markdown
 ## Architecture
