@@ -40,7 +40,7 @@ public static class McpServer
             {
                 ["protocolVersion"] = (string?)parameters?["protocolVersion"] ?? ProtocolVersion,
                 ["capabilities"] = new JsonObject { ["tools"] = new JsonObject() },
-                ["serverInfo"] = new JsonObject { ["name"] = "architector", ["version"] = "0.1.2" }
+                ["serverInfo"] = new JsonObject { ["name"] = "architector", ["version"] = "0.1.3" }
             },
             "ping" => new JsonObject(),
             "tools/list" => new JsonObject { ["tools"] = Tools() },

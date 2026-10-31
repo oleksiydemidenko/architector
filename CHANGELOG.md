@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.3
+
+- Fixed the Editor bridge not starting in some projects.
+
 ## 0.1.2
 
 - Added the Architector MCP server (`Tools~/ArchitectorMcp`): any MCP client connects directly, without a third-party Unity MCP package.

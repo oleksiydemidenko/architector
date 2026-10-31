@@ -20,6 +20,7 @@ namespace Architector.Editor.Agents
         private const int RequestTimeoutMilliseconds = 120000;
         private static readonly ConcurrentQueue<Action> Pending = new();
         private static TcpListener listener;
+        private static bool started;
         private static string token;
 
         static ArchitectorAgentBridge()
@@ -28,8 +29,7 @@ namespace Architector.Editor.Agents
                 return;
             AssemblyReloadEvents.beforeAssemblyReload += Stop;
             EditorApplication.quitting += Stop;
-            EditorApplication.update += Drain;
-            EditorApplication.delayCall += Start;
+            EditorApplication.update += Tick;
         }
 
         public static int Port { get; private set; }
@@ -127,8 +127,13 @@ namespace Architector.Editor.Agents
             }
         }
 
-        private static void Drain()
+        private static void Tick()
         {
+            if (!started)
+            {
+                started = true;
+                Start();
+            }
             while (Pending.TryDequeue(out var action))
                 action();
         }
