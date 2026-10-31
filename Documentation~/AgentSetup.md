@@ -4,10 +4,43 @@
 
 **File access works with every agent that has a shell.** Nothing to install beyond the .NET SDK. The agent reads the digest and runs `context_route`.
 
-**Editor access adds graph editing.** Install one of the supported MCP servers and connect your agent to it:
+**The Architector MCP server works with every MCP client.** It needs the .NET SDK and no other Unity MCP package. Tools: `architector_route` works from files, `architector_query` and `architector_edit` go to the open Editor through a local bridge.
+
+Register it in your client. `<package>` is `Library/PackageCache/com.oleksiydemidenko.architector@<hash>`, and the hash changes when the package updates.
+
+Claude Code:
+
+```
+claude mcp add architector -- dotnet run --project <package>/Tools~/ArchitectorMcp -- <project path>
+```
+
+Codex, in `config.toml`:
+
+```toml
+[mcp_servers.architector]
+command = "dotnet"
+args = ["run", "--project", "<package>/Tools~/ArchitectorMcp", "--", "<project path>"]
+```
+
+Cursor and most other clients, in their MCP JSON file:
+
+```json
+{
+    "mcpServers": {
+        "architector": {
+            "command": "dotnet",
+            "args": ["run", "--project", "<package>/Tools~/ArchitectorMcp", "--", "<project path>"]
+        }
+    }
+}
+```
+
+The bridge listens on the loopback interface only and accepts a token that the Editor writes to `Library/Architector/agent-bridge.json` for each session. Turn it off in **Window > Architector > Settings > AI Integration**.
+
+**If you already use a Unity MCP server,** Architector can add its tools there instead:
 
 - [MCP for Unity by Coplay](https://github.com/CoplayDev/unity-mcp): tools `architector_query` and `architector_edit`.
-- [Unity MCP by Ivan Murzak](https://github.com/IvanMurzak/Unity-MCP) 1.6.0 or later: tools `architector-query` and `architector-edit`. Both take one `parameters` string with a JSON object, for example `{"action":"project_summary"}`.
+- [Unity MCP by Ivan Murzak](https://github.com/IvanMurzak/Unity-MCP) 1.6.0 or later: tools `architector-query` and `architector-edit`. Both take one `parameters` string with a JSON object, for example `{"action":"project_summary"}`. This plugin starts in cloud mode and logs an authorization error until you sign in or switch it to a local server.
 
 Architector detects the package and registers its tools. Check the state in **Window > Architector > Settings > AI Integration**.
 

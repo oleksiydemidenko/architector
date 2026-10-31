@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2
+
+- Added the Architector MCP server (`Tools~/ArchitectorMcp`): any MCP client connects directly, without a third-party Unity MCP package.
+- Added a local Editor bridge for it, bound to the loopback interface and protected by a per-session token.
+
 ## 0.1.1
 
 - Added an adapter for Unity MCP by Ivan Murzak (`architector-query`, `architector-edit`).

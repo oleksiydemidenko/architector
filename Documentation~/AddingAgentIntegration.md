@@ -1,6 +1,6 @@
 # Adding an Agent Integration
 
-Architector owns the canonical repository, validation, approval workflow, and the transport-neutral `ArchitectorAgentApi` in the `Architector.Agents.Editor` assembly. A Unity MCP integration is only an optional transport adapter. It must remain removable without changing architecture data or breaking the core Editor UI.
+Architector owns the canonical repository, validation, approval workflow, and the transport-neutral `ArchitectorAgentApi` in the `Architector.Agents.Editor` assembly. You may not need an adapter at all: the [Architector MCP server](AgentSetup.md) works with every MCP client. A Unity MCP integration is only an optional transport adapter. It must remain removable without changing architecture data or breaking the core Editor UI.
 
 ## 1. Describe the package
 

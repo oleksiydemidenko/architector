@@ -12,7 +12,7 @@ It answers the question an agent otherwise pays for with search: *what governs t
 - **Conformance.** Linked nodes are checked against compiled types and selected members.
 - **Dependency evidence.** A command-line tool compares real code dependencies with the declared ones.
 - **Routing without Unity.** `context_route` goes from a file or type to its layer, its digest lines and the documents worth reading.
-- **Agent access.** A transport-neutral API with adapters for MCP for Unity by Coplay and Unity MCP by Ivan Murzak. Writing your own adapter takes one small assembly.
+- **Agent access.** Its own MCP server for any MCP client, plus adapters for MCP for Unity by Coplay and Unity MCP by Ivan Murzak. Agents with a shell need no MCP at all.
 
 Architector models contracts, not everything. It does not check lifecycle behaviour, method bodies or gameplay correctness.
 
@@ -50,6 +50,7 @@ Reading works from files. Writing to the graph needs the Editor, because validat
 | --- | --- | --- |
 | `context_route` | no | From a file or type to its layer, digest lines and documents |
 | `Architecture.digest.md` | no | Approved architecture as text |
+| `architector_route` (MCP) | no | The same routing for MCP clients |
 | `DependencyEvidence` | no | Undeclared layer dependencies, from sources |
 | `architector_query` (`architector-query` with Ivan Murzak's server) | yes | Project, layer, approval, conformance and type queries |
 | `architector_edit` (`architector-edit`) | yes | Work sessions, dry runs, plans and approvals |
