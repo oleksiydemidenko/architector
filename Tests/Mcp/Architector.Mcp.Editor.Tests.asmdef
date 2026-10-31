@@ -1,0 +1,34 @@
+{
+  "name": "Architector.Mcp.Editor.Tests",
+  "rootNamespace": "Architector.Editor.Mcp.Tests",
+  "references": [
+    "Architector.Editor",
+    "Architector.Agents.Editor",
+    "Architector.Mcp.Editor",
+    "MCPForUnity.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": true,
+  "precompiledReferences": [
+    "Newtonsoft.Json.dll"
+  ],
+  "autoReferenced": false,
+  "defineConstraints": [
+    "ARCHITECTOR_COPLAY_UNITY_MCP"
+  ],
+  "versionDefines": [
+    {
+      "name": "com.coplaydev.unity-mcp",
+      "expression": "10.1.0",
+      "define": "ARCHITECTOR_COPLAY_UNITY_MCP"
+    }
+  ],
+  "noEngineReferences": false,
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ]
+}

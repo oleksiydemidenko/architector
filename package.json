@@ -1,0 +1,15 @@
+{
+  "name": "com.oleksiydemidenko.architector",
+  "version": "0.1.0",
+  "displayName": "Architector",
+  "description": "Machine-readable architecture for Unity projects: a layered design graph with contracts, approvals and conformance checks against the code, built to be read and edited by coding agents.",
+  "unity": "6000.3",
+  "license": "MIT",
+  "author": {
+    "name": "Oleksiy Demidenko",
+    "url": "https://github.com/oleksiydemidenko"
+  },
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.2.1"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "Architector.Mcp.Editor",
+  "rootNamespace": "Architector.Editor.Mcp",
+  "references": [
+    "Architector.Editor",
+    "Architector.Agents.Editor",
+    "MCPForUnity.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [
+    "ARCHITECTOR_COPLAY_UNITY_MCP"
+  ],
+  "versionDefines": [
+    {
+      "name": "com.coplaydev.unity-mcp",
+      "expression": "10.1.0",
+      "define": "ARCHITECTOR_COPLAY_UNITY_MCP"
+    }
+  ],
+  "noEngineReferences": false
+}
