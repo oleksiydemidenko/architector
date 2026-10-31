@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0
+
+- The Architector MCP server is now a standalone program for Windows, macOS and Linux. It needs no .NET SDK.
+- Added **Window > Architector > MCP Server**: installs the server and gives ready settings for Claude Code, Codex, Cursor and other clients.
+- The server finds the Unity project from its working directory, or takes `--project`.
+- Added `architector_status` and `architector_digest`, and server instructions for agents.
+
 ## 0.1.3
 
 - Fixed the Editor bridge not starting in some projects.

@@ -1,5 +1,3 @@
-using UnityEngine;
-
 namespace Architector.Editor.Agents
 {
     public sealed class ArchitectorAgentBridgeProbe : IArchitectorAgentIntegrationProbe
@@ -28,7 +26,7 @@ namespace Architector.Editor.Agents
 
         public void OpenSetup()
         {
-            Application.OpenURL(Descriptor.documentationUrl);
+            ArchitectorMcpSetupWindow.Open();
         }
     }
 }

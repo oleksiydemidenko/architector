@@ -1,0 +1,63 @@
+name: MCP server
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths: ["Tools~/**", ".github/workflows/mcp-server.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, rid: linux-x64, smoke: true }
+          - { os: ubuntu-24.04-arm, rid: linux-arm64, smoke: true }
+          - { os: windows-latest, rid: win-x64, smoke: true, ext: .exe }
+          - { os: macos-latest, rid: osx-arm64, smoke: true }
+          - { os: macos-latest, rid: osx-x64, smoke: false }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Publish
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          [[ "$GITHUB_REF" == refs/tags/* ]] || version=0.0.0-dev
+          dotnet publish "Tools~/ArchitectorMcp" -c Release -r ${{ matrix.rid }} --self-contained \
+            -p:PublishSingleFile=true -p:PublishTrimmed=true -p:EnableCompressionInSingleFile=true \
+            -p:Version="$version" -o out
+          mkdir dist
+          cp "out/architector-mcp${{ matrix.ext }}" "dist/architector-mcp-${{ matrix.rid }}${{ matrix.ext }}"
+      - name: Smoke test
+        if: matrix.smoke
+        shell: bash
+        run: python3 "Tools~/ArchitectorMcp/smoke_test.py" "dist/architector-mcp-${{ matrix.rid }}${{ matrix.ext }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.rid }}
+          path: dist/*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && sha256sum * > checksums.txt)
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes

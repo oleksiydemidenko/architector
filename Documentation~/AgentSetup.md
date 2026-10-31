@@ -4,38 +4,26 @@
 
 **File access works with every agent that has a shell.** Nothing to install beyond the .NET SDK. The agent reads the digest and runs `context_route`.
 
-**The Architector MCP server works with every MCP client.** It needs the .NET SDK and no other Unity MCP package. Tools: `architector_route` works from files, `architector_query` and `architector_edit` go to the open Editor through a local bridge.
+**The Architector MCP server works with every MCP client.** It is one small program for Windows, macOS or Linux. It needs no .NET SDK and no other Unity MCP package.
 
-Register it in your client. `<package>` is `Library/PackageCache/com.oleksiydemidenko.architector@<hash>`, and the hash changes when the package updates.
+1. Open **Window > Architector > MCP Server** and press **Install Server**. The server goes to `~/.architector/mcp/<version>/`.
+2. Copy the settings for your client from the same window:
+   - Claude Code: a `claude mcp add` command.
+   - Codex: a block for `config.toml`.
+   - Cursor and other clients: a block for their MCP JSON file.
+3. Restart the client if it does not pick the server up.
 
-Claude Code:
+| Tool | Needs the Editor | Purpose |
+| --- | --- | --- |
+| `architector_status` | no | Which project is served, and whether the Editor is reachable |
+| `architector_route` | no | From a file or type to its layer, digest lines and documents |
+| `architector_digest` | no | The list of approved layers, or one layer's section |
+| `architector_query` | yes | Project, layer, approval, conformance and type queries |
+| `architector_edit` | yes | Work sessions, dry runs, plans and approvals |
 
-```
-claude mcp add architector -- dotnet run --project <package>/Tools~/ArchitectorMcp -- <project path>
-```
+You can also download the program for your system from the [releases page](https://github.com/oleksiydemidenko/architector/releases). The server finds the project from its working directory, from `--project <path>` or from the `ARCHITECTOR_PROJECT` variable. So one global entry in a client works for every Unity project you open there, if the client starts servers in the project folder.
 
-Codex, in `config.toml`:
-
-```toml
-[mcp_servers.architector]
-command = "dotnet"
-args = ["run", "--project", "<package>/Tools~/ArchitectorMcp", "--", "<project path>"]
-```
-
-Cursor and most other clients, in their MCP JSON file:
-
-```json
-{
-    "mcpServers": {
-        "architector": {
-            "command": "dotnet",
-            "args": ["run", "--project", "<package>/Tools~/ArchitectorMcp", "--", "<project path>"]
-        }
-    }
-}
-```
-
-The bridge listens on the loopback interface only and accepts a token that the Editor writes to `Library/Architector/agent-bridge.json` for each session. Turn it off in **Window > Architector > Settings > AI Integration**.
+The server runs on the machine with the project. It talks to the Editor through a bridge that listens on the loopback interface only and accepts a token that the Editor writes to `Library/Architector/agent-bridge.json` for each session. Turn it off in **Window > Architector > Settings > AI Integration**.
 
 **If you already use a Unity MCP server,** Architector can add its tools there instead:
 

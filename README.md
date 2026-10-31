@@ -1,5 +1,7 @@
 # Architector
 
+Early development: expect changes and rough edges.
+
 Machine-readable architecture for Unity projects. Architector keeps your architecture as a layered graph in plain JSON files next to the code: groups, layers, typed nodes, relationships, approvals and code scopes. People edit it in a Unity window. Coding agents read and edit it through tools. Conformance checks compare it with the compiled code.
 
 It answers the question an agent otherwise pays for with search: *what governs this piece of code, and what may it depend on?*
@@ -12,13 +14,13 @@ It answers the question an agent otherwise pays for with search: *what governs t
 - **Conformance.** Linked nodes are checked against compiled types and selected members.
 - **Dependency evidence.** A command-line tool compares real code dependencies with the declared ones.
 - **Routing without Unity.** `context_route` goes from a file or type to its layer, its digest lines and the documents worth reading.
-- **Agent access.** Its own MCP server for any MCP client, plus adapters for MCP for Unity by Coplay and Unity MCP by Ivan Murzak. Agents with a shell need no MCP at all.
+- **Agent access.** Its own MCP server for any MCP client on Windows, macOS and Linux, plus adapters for MCP for Unity by Coplay and Unity MCP by Ivan Murzak. Agents with a shell need no MCP at all.
 
 Architector models contracts, not everything. It does not check lifecycle behaviour, method bodies or gameplay correctness.
 
 ## Install
 
-Unity 6000.3 or later. The .NET SDK is needed only for the command-line tools.
+Unity 6000.3 or later. The MCP server needs nothing else. The .NET SDK is needed only for `DependencyEvidence` and for running `context_route` directly.
 
 In Unity open **Window > Package Manager > + > Add package from git URL** and enter:
 
@@ -32,7 +34,7 @@ https://github.com/oleksiydemidenko/architector.git
 2. Create a group and a layer, then add a node and link it to a type from your project.
 3. Open **Window > Architector > Settings** and set the source roots to index, for example `Assets/Scripts`.
 4. Commit the `Architector/` folder. It belongs in version control.
-5. Connect your agent: see [Agent Setup](Documentation~/AgentSetup.md).
+5. Open **Window > Architector > MCP Server**, press **Install Server** and copy the settings for your agent. See [Agent Setup](Documentation~/AgentSetup.md) for the details.
 
 ## Working Without Unity
 
@@ -50,7 +52,7 @@ Reading works from files. Writing to the graph needs the Editor, because validat
 | --- | --- | --- |
 | `context_route` | no | From a file or type to its layer, digest lines and documents |
 | `Architecture.digest.md` | no | Approved architecture as text |
-| `architector_route` (MCP) | no | The same routing for MCP clients |
+| `architector_status`, `architector_route`, `architector_digest` (MCP) | no | Project state, routing and the digest for MCP clients |
 | `DependencyEvidence` | no | Undeclared layer dependencies, from sources |
 | `architector_query` (`architector-query` with Ivan Murzak's server) | yes | Project, layer, approval, conformance and type queries |
 | `architector_edit` (`architector-edit`) | yes | Work sessions, dry runs, plans and approvals |

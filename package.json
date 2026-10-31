@@ -1,8 +1,8 @@
 {
   "name": "com.oleksiydemidenko.architector",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "displayName": "Architector",
-  "description": "Machine-readable architecture for Unity projects: a layered design graph with contracts, approvals and conformance checks against the code, built to be read and edited by coding agents.",
+  "description": "Machine-readable architecture for Unity projects: a layered design graph with contracts, approvals and conformance checks against the code, built to be read and edited by coding agents. In early development.",
   "unity": "6000.3",
   "license": "MIT",
   "author": {
