@@ -23,7 +23,7 @@ The registry already reports `Disabled` for a disabled descriptor and `Unavailab
 
 ## 4. Expose Architector tools
 
-Register two tools and forward their parameters to `ArchitectorAgentApi.Query` and `ArchitectorAgentApi.Edit` with your integration ID. Use `QueryJson` and `EditJson` when the transport works with JSON text. `ArchitectorAgentResult` carries `success`, `message`, `code`, `error` and `data`; map it to the transport's response type. The API already enforces expected-revision checks, work-lease tokens, dry-run behavior, approval rules, validation and one atomic Undo transaction per apply, so an adapter holds no Architector logic.
+`Editor/McpMurzak` is a complete example in three files. Register two tools and forward their parameters to `ArchitectorAgentApi.Query` and `ArchitectorAgentApi.Edit` with your integration ID. Use `QueryJson` and `EditJson` when the transport works with JSON text. `ArchitectorAgentResult` carries `success`, `message`, `code`, `error` and `data`; map it to the transport's response type. The API already enforces expected-revision checks, work-lease tokens, dry-run behavior, approval rules, validation and one atomic Undo transaction per apply, so an adapter holds no Architector logic.
 
 ## Draft authoring and review
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+
+- Added an adapter for Unity MCP by Ivan Murzak (`architector-query`, `architector-edit`).
+- Fixed `context_route` failing on a new project that has no groups or links yet.
+
 ## 0.1.0
 
 First public version.

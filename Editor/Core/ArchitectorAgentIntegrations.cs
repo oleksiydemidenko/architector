@@ -59,13 +59,21 @@ namespace Architector.Editor
             documentationUrl = "https://github.com/CoplayDev/unity-mcp"
         };
 
+        public static readonly ArchitectorAgentIntegrationDescriptor IvanMurzakUnityMcp = new()
+        {
+            id = "ivanmurzak-unity-mcp",
+            displayName = "Unity MCP by Ivan Murzak",
+            packageName = "com.ivanmurzak.unity.mcp",
+            documentationUrl = "https://github.com/IvanMurzak/Unity-MCP"
+        };
+
         private static IReadOnlyList<ArchitectorAgentIntegrationDescriptor> descriptors;
 
         public static IReadOnlyList<ArchitectorAgentIntegrationDescriptor> Descriptors => descriptors ??= Discover();
 
         private static IReadOnlyList<ArchitectorAgentIntegrationDescriptor> Discover()
         {
-            var known = new List<ArchitectorAgentIntegrationDescriptor> { CoplayUnityMcp };
+            var known = new List<ArchitectorAgentIntegrationDescriptor> { CoplayUnityMcp, IvanMurzakUnityMcp };
             foreach (var probe in Probes())
             {
                 var descriptor = probe.Descriptor;

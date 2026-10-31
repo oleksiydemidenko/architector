@@ -1,0 +1,33 @@
+{
+  "name": "Architector.Mcp.Murzak.Editor",
+  "rootNamespace": "Architector.Editor.Mcp.Murzak",
+  "references": [
+    "Architector.Editor",
+    "Architector.Agents.Editor",
+    "com.IvanMurzak.Unity.MCP.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": true,
+  "precompiledReferences": [
+    "McpPlugin.dll",
+    "McpPlugin.Common.dll",
+    "ReflectorNet.dll"
+  ],
+  "autoReferenced": true,
+  "defineConstraints": [
+    "ARCHITECTOR_MURZAK_UNITY_MCP",
+    "UNITY_MCP_READY"
+  ],
+  "versionDefines": [
+    {
+      "name": "com.ivanmurzak.unity.mcp",
+      "expression": "1.6.0",
+      "define": "ARCHITECTOR_MURZAK_UNITY_MCP"
+    }
+  ],
+  "noEngineReferences": false
+}

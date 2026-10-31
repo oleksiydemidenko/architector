@@ -4,7 +4,14 @@
 
 **File access works with every agent that has a shell.** Nothing to install beyond the .NET SDK. The agent reads the digest and runs `context_route`.
 
-**Editor access adds graph editing.** Install [MCP for Unity by Coplay](https://github.com/CoplayDev/unity-mcp) and connect your agent to it. Architector detects the package and registers `architector_query` and `architector_edit`. Check the state in **Window > Architector > Settings > AI Integration**.
+**Editor access adds graph editing.** Install one of the supported MCP servers and connect your agent to it:
+
+- [MCP for Unity by Coplay](https://github.com/CoplayDev/unity-mcp): tools `architector_query` and `architector_edit`.
+- [Unity MCP by Ivan Murzak](https://github.com/IvanMurzak/Unity-MCP) 1.6.0 or later: tools `architector-query` and `architector-edit`. Both take one `parameters` string with a JSON object, for example `{"action":"project_summary"}`.
+
+Architector detects the package and registers its tools. Check the state in **Window > Architector > Settings > AI Integration**.
+
+Keep **Run In Background** on in Player settings, or the Editor stops answering while its window has no focus.
 
 Another MCP server needs a small adapter: see [Adding an Agent Integration](AddingAgentIntegration.md).
 

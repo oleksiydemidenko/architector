@@ -106,16 +106,22 @@ public static class Program
             return owner[0] == layerId ? owner[1] : (Layers.FirstOrDefault(layer => layer.Id == owner[0])?.Path ?? "?") + "/" + owner[1];
         }
 
+        private static string[] JsonFiles(string architector, string folder)
+        {
+            var path = Path.Combine(architector, folder);
+            return Directory.Exists(path) ? Directory.GetFiles(path, "*.json") : Array.Empty<string>();
+        }
+
         public static Model Load(string root)
         {
             var model = new Model();
             var architector = Path.Combine(root, "Architector");
-            var groups = Directory.GetFiles(Path.Combine(architector, "Groups"), "*.json")
+            var groups = JsonFiles(architector, "Groups")
                 .Select(file => JsonNode.Parse(File.ReadAllText(file))!)
                 .ToDictionary(node => (string)node["id"]!, node => (Name: (string)node["name"]!, Parent: (string?)node["parentGroupId"] ?? ""));
             string GroupPath(string id) => groups.TryGetValue(id, out var group) ? (group.Parent.Length > 0 ? GroupPath(group.Parent) + "/" : "") + group.Name : "";
 
-            foreach (var file in Directory.GetFiles(Path.Combine(architector, "Layers"), "*.json"))
+            foreach (var file in JsonFiles(architector, "Layers"))
             {
                 var node = JsonNode.Parse(File.ReadAllText(file))!;
                 var layer = new Layer
@@ -148,7 +154,7 @@ public static class Program
                 model.Layers.Add(layer);
             }
 
-            foreach (var file in Directory.GetFiles(Path.Combine(architector, "Links"), "*.json"))
+            foreach (var file in JsonFiles(architector, "Links"))
             {
                 var ids = JsonNode.Parse(File.ReadAllText(file))!["endpoints"]?.AsArray().Select(endpoint => (string)endpoint!["layerId"]!).ToArray() ?? Array.Empty<string>();
                 foreach (var layer in model.Layers.Where(layer => ids.Contains(layer.Id)))
