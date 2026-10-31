@@ -66,7 +66,7 @@ Keep **Project Settings > Player > Run In Background** on when agents talk to th
 
 ## Status
 
-Version 0.1. Tested on Unity 6000.3.16f1 on Linux, on one commercial project. The tool works in production use there, but it has not yet been used by other teams. Expect rough edges and report them.
+Architector is in development. Expect changes and rough edges, and please report them. Developed on Unity 6000.3.16f1 on Linux.
 
 ## Contributing
 
