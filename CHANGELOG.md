@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.3
 
 - Added **Relationship Merging** under Settings > Optimization > Canvas: Off (default), 3 or more, 2 or more, and Maximum. Incoming relationships of one type and target side grow a shared route tree by short added connections. Long runs are shared; junction dots mark real merges rather than a terminal rail before the node. Different networks occupy separate tracks, and ordinary crossings keep their bridges. All enabled modes combine parallel relationships with matching type and preferred sides into a thicker arrow, preserving their identities; Maximum uses the same threshold as 2 or more.
 - Shared strokes draw once, retain branch selection, cycle member relationships on repeated trunk clicks, and list members in the Relationship Inspector. Node highlighting, background routing, drag previews and Arrange use the shared geometry.
