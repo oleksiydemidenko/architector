@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Settings opens only AI Integration and Utilities after a recompile.
+
 ## 0.2.1
 
 - Fixed semantic plans failing with "Layer Portal pair must contain exactly two endpoints" when they delete the last relationship between two layers.
