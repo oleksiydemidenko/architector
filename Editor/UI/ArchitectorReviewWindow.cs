@@ -31,6 +31,7 @@ namespace Architector.Editor
         private readonly HashSet<string> strokeRows = new(StringComparer.Ordinal);
         private readonly Dictionary<string, int> errorCounts = new(StringComparer.Ordinal);
         private readonly HashSet<string> selected = new(StringComparer.Ordinal);
+        private HashSet<string> visibleLayers = new(StringComparer.Ordinal);
         private readonly List<string> rows = new();
         private readonly List<Rect> rowRects = new();
 
@@ -52,7 +53,6 @@ namespace Architector.Editor
         private void OnEnable()
         {
             titleContent = new GUIContent(Title);
-            wantsMouseMove = false;
             if (!ArchitectorSession.TryGet(out var session, out loadError))
                 return;
             repository = session.Repository;
@@ -100,8 +100,13 @@ namespace Architector.Editor
             HandleRowInput();
             EditorGUILayout.EndScrollView();
 
+            visibleLayers = visible;
             DrawBottomBar(visible);
-            HandleKeys(visible);
+            if (Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Escape)
+            {
+                ClearSelection();
+                Event.current.Use();
+            }
         }
 
         private IEnumerable<ArchitectorLayerRecord> LayersInExplorerOrder()
@@ -287,21 +292,16 @@ namespace Architector.Editor
             }
         }
 
-        private void HandleKeys(IReadOnlyCollection<string> visible)
+        public void SelectAll()
         {
-            var current = Event.current;
-            if (current.type != EventType.KeyDown)
-                return;
-            if (current.keyCode == KeyCode.A && (current.control || current.command))
-            {
-                selected.UnionWith(visible);
-                current.Use();
-            }
-            else if (current.keyCode == KeyCode.Escape)
-            {
-                selected.Clear();
-                current.Use();
-            }
+            selected.UnionWith(visibleLayers);
+            Repaint();
+        }
+
+        public void ClearSelection()
+        {
+            selected.Clear();
+            Repaint();
         }
 
         private void RefreshErrors()

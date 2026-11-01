@@ -47,6 +47,9 @@ namespace Architector.Editor
         private Vector2 pan = new(48f, 48f);
         private float zoom = 1f;
         private Vector2 canvasSize;
+        private Vector2 lastPointer;
+        private bool pointerOverCanvas;
+        private string pendingCommand;
         private bool draggingNode;
         private Vector2 dragStartMouse;
         private readonly Dictionary<string, Vector2> dragStartWorldByNode = new(StringComparer.Ordinal);
@@ -80,6 +83,12 @@ namespace Architector.Editor
         }
 
         public string SelectedNodeId => selectedNodeIds.Count == 1 ? selectedNodeIds.First() : string.Empty;
+        public bool HasPointer => pointerOverCanvas;
+
+        public void SendCommand(string command)
+        {
+            pendingCommand = command;
+        }
         public string SelectedEdgeId => selectedEdgeId;
         public int SelectionCount => selectedNodeIds.Count;
         public bool IsBoxSelecting => boxSelecting;
@@ -203,6 +212,21 @@ namespace Architector.Editor
         {
             var current = Event.current;
             var mouse = current.mousePosition;
+            if (current.isMouse || current.type == EventType.ScrollWheel)
+            {
+                pointerOverCanvas = canvasRect.Contains(mouse);
+                lastPointer = mouse;
+            }
+            else if (current.type == EventType.MouseLeaveWindow)
+            {
+                pointerOverCanvas = false;
+            }
+            if (current.type == EventType.Layout && pendingCommand != null)
+            {
+                var command = pendingCommand;
+                pendingCommand = null;
+                RunCommand(command, documents, repository, typeIndex, userState, execute, requestRepaint, openLayer);
+            }
             var boxSelectionControlId = GUIUtility.GetControlID(BoxSelectionControlHint, FocusType.Passive);
             var panControlId = GUIUtility.GetControlID(PanControlHint, FocusType.Passive);
             if (panning && current.rawType == EventType.MouseUp && current.button == 2)
@@ -283,12 +307,20 @@ namespace Architector.Editor
             if (!canvasRect.Contains(mouse))
                 return;
 
-            if (current.type == EventType.KeyDown
-                && !EditorGUIUtility.editingTextField
-                && HandleHotkey(current, mouse, documents, repository, typeIndex, userState, execute, requestRepaint, openLayer))
+            if (current.type == EventType.KeyDown && !EditorGUIUtility.editingTextField)
             {
-                current.Use();
-                return;
+                var reservedCommand = current.keyCode switch
+                {
+                    KeyCode.Escape => ArchitectorShortcuts.ClearSelection,
+                    KeyCode.Return or KeyCode.KeypadEnter => ArchitectorShortcuts.OpenPortal,
+                    _ => null
+                };
+                if (reservedCommand != null)
+                {
+                    RunCommand(reservedCommand, documents, repository, typeIndex, userState, execute, requestRepaint, openLayer);
+                    current.Use();
+                    return;
+                }
             }
 
             if (current.type == EventType.KeyDown && (current.control || current.command))
@@ -712,9 +744,8 @@ namespace Architector.Editor
                 });
         }
 
-        private bool HandleHotkey(
-            Event current,
-            Vector2 mouse,
+        private void RunCommand(
+            string command,
             ArchitectorLayerDocuments documents,
             ArchitectorRepository repository,
             ArchitectorTypeIndex typeIndex,
@@ -726,97 +757,84 @@ namespace Architector.Editor
             var selected = selectedNodeIds.ToArray();
             var allNodes = documents.semantic.nodes.Select(node => node.id).ToArray();
             var single = selected.Length == 1 ? documents.semantic.nodes.FirstOrDefault(node => node.id == selected[0]) : null;
-            if (current.control || current.command)
+            var editable = single != null && !IsPortal(single);
+            switch (command)
             {
-                if (current.keyCode != KeyCode.A)
-                    return false;
-                selectedNodeIds.Clear();
-                selectedNodeIds.UnionWith(allNodes);
-                requestRepaint?.Invoke();
-                return true;
-            }
-            if (current.alt)
-                return false;
-
-            switch (current.keyCode)
-            {
-                case KeyCode.F:
-                    FocusView(repository, current.shift || selected.Length == 0 ? allNodes : selected, userState, requestRepaint);
-                    return true;
-                case KeyCode.A when current.shift:
-                    if (selected.Length > 0)
-                        ArrangeAndFocus(repository, userState, execute, requestRepaint, allNodes, selected);
-                    return true;
-                case KeyCode.A:
+                case ArchitectorShortcuts.FocusView:
+                    FocusView(repository, selected.Length == 0 ? allNodes : selected, userState, requestRepaint);
+                    break;
+                case ArchitectorShortcuts.FocusLayer:
+                    FocusView(repository, allNodes, userState, requestRepaint);
+                    break;
+                case ArchitectorShortcuts.Arrange:
                     ArrangeSelection(repository, documents, userState, execute, requestRepaint, selected);
-                    return true;
-                case KeyCode.Escape:
+                    break;
+                case ArchitectorShortcuts.ArrangeAsCenters when selected.Length > 0:
+                    ArrangeAndFocus(repository, userState, execute, requestRepaint, allNodes, selected);
+                    break;
+                case ArchitectorShortcuts.SelectAll:
+                    selectedNodeIds.Clear();
+                    selectedNodeIds.UnionWith(allNodes);
+                    break;
+                case ArchitectorShortcuts.ClearSelection:
                     selectedNodeIds.Clear();
                     selectedEdgeId = string.Empty;
-                    requestRepaint?.Invoke();
-                    return true;
-                case KeyCode.Alpha1:
-                case KeyCode.Keypad1:
+                    break;
+                case ArchitectorShortcuts.ActualSize:
                 {
                     var center = canvasSize * 0.5f;
                     var worldAtCenter = ScreenToWorld(center);
                     zoom = 1f;
                     pan = center - worldAtCenter;
                     userState.SaveLayerView(viewId, layerId, pan.x, pan.y, zoom);
-                    requestRepaint?.Invoke();
-                    return true;
+                    break;
                 }
-                case KeyCode.N:
+                case ArchitectorShortcuts.NewNode:
                 {
-                    var requested = ScreenToWorld(mouse) - new Vector2(140f, 60f);
+                    var requested = ScreenToWorld(lastPointer) - new Vector2(140f, 60f);
                     execute(() =>
                     {
                         selectedNodeIds.Clear();
                         selectedNodeIds.Add(repository.CreateEmptyNode(layerId, requested.x, requested.y));
                     });
-                    return true;
+                    break;
                 }
-                case KeyCode.R when single != null && !IsPortal(single):
+                case ArchitectorShortcuts.Rename when editable:
                     ArchitectorNodeInspector.TitleFocusRequested = true;
-                    requestRepaint?.Invoke();
-                    return true;
-                case KeyCode.L when single != null && !IsPortal(single):
+                    break;
+                case ArchitectorShortcuts.LinkType when editable:
                 {
-                    var screenPosition = GUIUtility.GUIToScreenPoint(mouse);
+                    var screenPosition = GUIUtility.GUIToScreenPoint(lastPointer);
                     if (string.Equals(single.type?.mode, "linked", StringComparison.Ordinal))
                         OpenRelinkPicker(single, documents, repository, typeIndex, execute, screenPosition);
                     else if (string.Equals(single.type?.mode, "none", StringComparison.Ordinal))
                         OpenLinkPicker(single, documents, repository, typeIndex, execute, screenPosition);
-                    return true;
+                    break;
                 }
-                case KeyCode.Return:
-                case KeyCode.KeypadEnter:
-                    if (single == null || !IsPortal(single))
-                        return false;
+                case ArchitectorShortcuts.OpenPortal when single != null && IsPortal(single):
                     openLayer?.Invoke(single.portal.targetLayerId);
-                    return true;
-                case KeyCode.LeftArrow:
-                    return SelectNeighbour(documents, single, Vector2.left, requestRepaint);
-                case KeyCode.RightArrow:
-                    return SelectNeighbour(documents, single, Vector2.right, requestRepaint);
-                case KeyCode.UpArrow:
-                    return SelectNeighbour(documents, single, Vector2.down, requestRepaint);
-                case KeyCode.DownArrow:
-                    return SelectNeighbour(documents, single, Vector2.up, requestRepaint);
-                default:
-                    return false;
+                    break;
+                case ArchitectorShortcuts.NeighbourLeft:
+                    SelectNeighbour(documents, single, Vector2.left);
+                    break;
+                case ArchitectorShortcuts.NeighbourRight:
+                    SelectNeighbour(documents, single, Vector2.right);
+                    break;
+                case ArchitectorShortcuts.NeighbourUp:
+                    SelectNeighbour(documents, single, Vector2.down);
+                    break;
+                case ArchitectorShortcuts.NeighbourDown:
+                    SelectNeighbour(documents, single, Vector2.up);
+                    break;
             }
+            requestRepaint?.Invoke();
         }
 
-        private bool SelectNeighbour(
-            ArchitectorLayerDocuments documents,
-            ArchitectorNodeRecord node,
-            Vector2 direction,
-            Action requestRepaint)
+        private void SelectNeighbour(ArchitectorLayerDocuments documents, ArchitectorNodeRecord node, Vector2 direction)
         {
             const float minimumAlignment = 0.5f;
             if (node == null)
-                return false;
+                return;
             var layouts = documents.layout.nodes.ToDictionary(item => item.nodeId, StringComparer.Ordinal);
             var origin = GetWorldNodeRect(layouts[node.id]).center;
             var neighbour = documents.semantic.edges
@@ -831,11 +849,7 @@ namespace Architector.Editor
                 .Select(item => item.id)
                 .FirstOrDefault();
             if (neighbour != null)
-            {
                 SelectOnly(neighbour);
-                requestRepaint?.Invoke();
-            }
-            return true;
         }
 
         private void FocusView(

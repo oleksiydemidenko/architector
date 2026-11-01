@@ -16,7 +16,7 @@
 - Settings groups are foldout boxes.
 - Optional workflow modes are listed in **Agent Workflow** even when they are not installed, and **Integrations** installs, turns on and removes them.
 - Added **Focus View** to the canvas context menu; Arrange also focuses its result.
-- Added canvas hotkeys, listed by the **?** button in the window header.
+- Added hotkeys through the Unity Shortcuts Manager. The **?** button in the window header lists the current keys, marks unassigned or repeated ones, and opens **Edit > Shortcuts**.
 - Added the `node`, `relationships`, `dependency_path` and `setup_check` queries, `detail=summary` for `layer_graph`, and `offset` with `next_offset` for long results. `truncated` is replaced by `next_offset` in `find`, `type_search` and `type_contract`.
 - Added the `arrange_layer` and `relink_node` actions. A failed plan names the failing `operation`, and an unknown or ambiguous layer returns candidates. The MCP server lists its actions and parameters in its tool schemas.
 - Added **Relink Type** to the node context menu, a **Setup Check** in **Integrations** and **Window > Architector > Review** for approving layers in bulk.

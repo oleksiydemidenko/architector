@@ -116,6 +116,19 @@ namespace Architector.Editor
         private string currentDrawDataError = string.Empty;
 
         public bool IsMasterWindow => windowMode == WindowMode.Master;
+        public bool CanvasHasPointer => layerCanvas?.HasPointer == true;
+
+        public void SendCanvasCommand(string command)
+        {
+            layerCanvas?.SendCommand(command);
+            Repaint();
+        }
+
+        public void NavigateHistory(int direction)
+        {
+            NavigateLayerHistory(direction);
+            Repaint();
+        }
 
         [MenuItem("Window/Architector/Window")]
         public static void Open()
@@ -169,6 +182,7 @@ namespace Architector.Editor
             repository.ExternalChangesReloaded += OnExternalChangesReloaded;
             aiWork.Changed += OnAiWorkChanged;
             wantsMouseMove = true;
+            wantsMouseEnterLeaveWindow = true;
             wantsLessLayoutEvents = true;
             EnsureSelectionExists();
             EnsureLayerNavigationState();
@@ -269,7 +283,6 @@ namespace Architector.Editor
             else
             {
                 HandleUndoRedoShortcut();
-            HandleLayerHistoryShortcut();
                 HandleExplorerDeleteShortcut();
             }
             if (Event.current.type == EventType.MouseMove)
@@ -2437,23 +2450,6 @@ namespace Architector.Editor
                 GUI.FocusControl(null);
             }
             Repaint();
-        }
-
-        private void HandleLayerHistoryShortcut()
-        {
-            var current = Event.current;
-            if (current.type != EventType.KeyDown || !current.alt || EditorGUIUtility.editingTextField)
-                return;
-            if (current.keyCode == KeyCode.LeftArrow)
-            {
-                NavigateLayerHistory(-1);
-                current.Use();
-            }
-            else if (current.keyCode == KeyCode.RightArrow)
-            {
-                NavigateLayerHistory(1);
-                current.Use();
-            }
         }
 
         private void HandleUndoRedoShortcut()
