@@ -203,13 +203,13 @@ namespace Architector.Editor.Agents
             {
                 using var process = Process.Start(start);
                 var error = process.StandardError.ReadToEndAsync();
-                var output = process.StandardOutput.ReadToEnd();
+                var output = process.StandardOutput.ReadToEndAsync();
                 if (!process.WaitForExit(CliTimeoutMilliseconds))
                 {
                     process.Kill();
                     return (false, $"'{cli}' did not finish in time.");
                 }
-                return (process.ExitCode == 0, (output + error.Result).Trim());
+                return (process.ExitCode == 0, (output.Result + error.Result).Trim());
             }
             catch (Exception exception) when (exception is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
             {

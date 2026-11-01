@@ -10,6 +10,7 @@
 - `approve_layers`, `revoke_approvals` and `revert_to_approved` from an agent now need the user's confirmation in the Editor.
 - Workflow modes can be added by another package. A mode can let the agent approve, shows a notice in the window header, and the baseline records that the agent approved the layer.
 - Moving a node, or changing relationship visibility, no longer rewrites and rechecks the whole architecture.
+- An agent request that times out before the Editor starts it is cancelled instead of running later.
 - Context menus open at the cursor when another Editor window was drawn last.
 - Replaced **Window > Architector > MCP Server** with **Window > Architector > Integrations**, a tab next to the Architector window. It installs the server, connects Claude Code and Codex with one button and lists the optional bridges. Other Unity MCP packages now need **Add Connection**.
 - Settings groups are foldout boxes.

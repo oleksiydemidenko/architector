@@ -104,10 +104,17 @@ namespace Architector.Editor.Agents
             var tool = (string)request["tool"];
             var parameters = request["parameters"] as JObject ?? new JObject();
             var completion = new TaskCompletionSource<string>();
-            Pending.Enqueue(() => completion.SetResult(Run(tool, parameters)));
-            return completion.Task.Wait(RequestTimeoutMilliseconds)
-                ? completion.Task.Result
-                : ArchitectorAgentResult.Fail("editor_timeout", new { message = "The Unity Editor did not answer. It may be compiling, showing a dialog, or paused without Run In Background." }).ToJson();
+            var claimed = 0;
+            Pending.Enqueue(() =>
+            {
+                if (Interlocked.Exchange(ref claimed, 1) == 0)
+                    completion.SetResult(Run(tool, parameters));
+            });
+            if (completion.Task.Wait(RequestTimeoutMilliseconds))
+                return completion.Task.Result;
+            if (Interlocked.Exchange(ref claimed, 1) == 0)
+                return ArchitectorAgentResult.Fail("editor_timeout", new { message = "The Unity Editor did not start this request, and it was cancelled. It may be compiling or paused without Run In Background." }).ToJson();
+            return completion.Task.Result;
         }
 
         private static string Run(string tool, JObject parameters)

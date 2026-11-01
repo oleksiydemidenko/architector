@@ -30,8 +30,8 @@ https://github.com/oleksiydemidenko/architector.git
 ## Getting Started
 
 1. Open **Window > Architector > Window**.
-2. Create a group and a layer, then add a node and link it to a type from your project.
-3. Open **Window > Architector > Settings** and set the source roots to index, for example `Assets/Scripts`.
+2. Open **Window > Architector > Settings** and set the source roots to index, for example `Assets/Scripts`.
+3. Create a group and a layer, then add a node and link it to a type from your project.
 4. Commit the `Architector/` folder. It belongs in version control.
 5. Open **Window > Architector > Integrations**, press **Install Server** and connect your agent. See [Agent Setup](Documentation~/AgentSetup.md) for the details.
 
