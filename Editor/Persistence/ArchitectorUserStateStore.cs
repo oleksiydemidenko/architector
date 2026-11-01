@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 
@@ -8,6 +9,7 @@ namespace Architector.Editor
     {
         private readonly ArchitectorPaths paths;
         private ArchitectorUserStateDocument document;
+        private bool layerViewsDirty;
 
         public ArchitectorUserStateStore(ArchitectorPaths paths)
         {
@@ -38,6 +40,21 @@ namespace Architector.Editor
             state.panY = panY;
             state.zoom = zoom;
             Save();
+        }
+
+        public void SetLayerView(string viewId, string layerId, float panX, float panY, float zoom)
+        {
+            var state = GetLayerView(viewId, layerId);
+            state.panX = panX;
+            state.panY = panY;
+            state.zoom = zoom;
+            layerViewsDirty = true;
+        }
+
+        public void FlushLayerViews()
+        {
+            if (layerViewsDirty)
+                Save();
         }
 
         public bool GetConformanceExpanded(string viewId, string layerId)
@@ -72,11 +89,40 @@ namespace Architector.Editor
 
         public void SaveMasterNavigation(ArchitectorWindowNavigationRecord navigation)
         {
-            if (navigation == null
-                || string.Equals(ArchitectorJson.Serialize(navigation), ArchitectorJson.Serialize(document.masterNavigation), StringComparison.Ordinal))
+            if (navigation == null)
                 return;
             document.masterNavigation = ArchitectorJson.Clone(navigation);
             Save();
+        }
+
+        public bool MatchesMasterNavigation(
+            string currentGroupId,
+            string activeLayerId,
+            IReadOnlyList<string> openLayerIds,
+            IReadOnlyList<string> layerVisitHistory,
+            int layerVisitHistoryIndex,
+            float layerTabsScroll)
+        {
+            var saved = document.masterNavigation;
+            return string.Equals(saved.currentGroupId, currentGroupId, StringComparison.Ordinal)
+                   && string.Equals(saved.activeLayerId, activeLayerId, StringComparison.Ordinal)
+                   && saved.layerVisitHistoryIndex == layerVisitHistoryIndex
+                   && saved.layerTabsScroll.Equals(layerTabsScroll)
+                   && SameIds(saved.openLayerIds, openLayerIds)
+                   && SameIds(saved.layerVisitHistory, layerVisitHistory);
+        }
+
+        private static bool SameIds(IReadOnlyList<string> saved, IReadOnlyList<string> current)
+        {
+            var count = current?.Count ?? 0;
+            if ((saved?.Count ?? 0) != count)
+                return false;
+            for (var index = 0; index < count; index++)
+            {
+                if (!string.Equals(saved[index], current[index], StringComparison.Ordinal))
+                    return false;
+            }
+            return true;
         }
 
         private void Load()
@@ -120,6 +166,7 @@ namespace Architector.Editor
                 return viewComparison != 0 ? viewComparison : string.CompareOrdinal(left.layerId, right.layerId);
             });
             ArchitectorJson.WriteAtomic(paths.UserStatePath, document);
+            layerViewsDirty = false;
         }
     }
 }

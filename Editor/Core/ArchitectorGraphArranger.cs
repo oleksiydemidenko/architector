@@ -44,6 +44,9 @@ namespace Architector.Editor
         private const int MinimumHubDegree = 4;
         private const int SwapSweeps = 8;
         private const int CrossingEdgeLimit = 40;
+        private const int RouteEvaluations = 80;
+        private const float RouteCrossingCost = 64f;
+        private const float RouteBendCost = 64f;
 
         public static Dictionary<string, ArchitectorPoint> Arrange(
             IReadOnlyList<ArchitectorArrangeNode> nodes,
@@ -61,9 +64,136 @@ namespace Architector.Editor
             var groups = centers != null && centers.Count > 0
                 ? GroupAroundCenters(graph, centers)
                 : GroupByLimit(graph, maxGroupRelationships);
-            var blocks = OrderGroups(groups, graph).Select(group => LayOut(group, graph, gap, grid)).ToList();
-            Pack(blocks, nodes, gap, grid, result);
+            var placements = OrderGroups(groups, graph).Select(group => LayOut(group, graph, gap, grid)).ToList();
+            ImproveByRoutes(placements, graph, nodes, edges, gap, grid);
+            Pack(placements.Select(placement => ToBlock(placement.Cells, graph, gap, grid)).ToList(), nodes, gap, grid, result);
             return result;
+        }
+
+        private static void ImproveByRoutes(
+            IReadOnlyList<Placement> placements,
+            Graph graph,
+            IReadOnlyList<ArchitectorArrangeNode> nodes,
+            IReadOnlyList<ArchitectorArrangeEdge> edges,
+            float gap,
+            float grid)
+        {
+            var requests = edges
+                .Where(edge => edge.SourceNodeId != edge.TargetNodeId
+                               && graph.Nodes.ContainsKey(edge.SourceNodeId)
+                               && graph.Nodes.ContainsKey(edge.TargetNodeId))
+                .GroupBy(edge => (edge.SourceNodeId, edge.TargetNodeId))
+                .OrderBy(group => group.Key.SourceNodeId, StringComparer.Ordinal)
+                .ThenBy(group => group.Key.TargetNodeId, StringComparer.Ordinal)
+                .SelectMany(group => group.Select((edge, index) => new ArchitectorRouteRequest(
+                    $"{edge.SourceNodeId}>{edge.TargetNodeId}#{index}",
+                    edge.SourceNodeId,
+                    edge.TargetNodeId,
+                    "auto",
+                    "auto")))
+                .ToArray();
+            if (requests.Length < 2)
+                return;
+
+            var router = new ArchitectorEdgeRouter();
+            var cost = RouteCost(router, placements, graph, nodes, requests, gap, grid, out var busy);
+            var evaluations = 0;
+            var improved = true;
+            while (improved && evaluations < RouteEvaluations)
+            {
+                improved = false;
+                foreach (var pair in SwapCandidates(placements, graph, busy))
+                {
+                    if (evaluations >= RouteEvaluations)
+                        break;
+                    var cells = pair.placement.Cells;
+                    var occupants = pair.placement.Occupants();
+                    occupants.TryGetValue(pair.first, out var firstId);
+                    occupants.TryGetValue(pair.second, out var secondId);
+                    if (firstId == null && secondId == null)
+                        continue;
+
+                    Place(cells, occupants, pair.first, secondId);
+                    Place(cells, occupants, pair.second, firstId);
+                    evaluations++;
+                    var nextCost = RouteCost(router, placements, graph, nodes, requests, gap, grid, out var nextBusy);
+                    if (nextCost < cost - 0.001f)
+                    {
+                        cost = nextCost;
+                        busy = nextBusy;
+                        improved = true;
+                        break;
+                    }
+                    Place(cells, occupants, pair.first, firstId);
+                    Place(cells, occupants, pair.second, secondId);
+                }
+            }
+        }
+
+        private static IEnumerable<(Placement placement, Vector2Int first, Vector2Int second)> SwapCandidates(
+            IReadOnlyList<Placement> placements,
+            Graph graph,
+            IReadOnlyDictionary<string, int> busy)
+        {
+            var candidates = new List<(Placement placement, Vector2Int first, Vector2Int second, int busy, int distance)>();
+            foreach (var placement in placements)
+            {
+                var occupants = placement.Occupants();
+                foreach (var first in placement.FreeCells)
+                {
+                    if (!occupants.TryGetValue(first, out var id) || !busy.TryGetValue(id, out var crossings) || crossings == 0)
+                        continue;
+                    foreach (var second in placement.FreeCells.Where(second => second != first))
+                        candidates.Add((placement, first, second, crossings * 1000 + graph.Order.Count - graph.Rank[id], Mathf.Abs(first.x - second.x) + Mathf.Abs(first.y - second.y)));
+                }
+            }
+            return candidates
+                .OrderByDescending(candidate => candidate.busy)
+                .ThenBy(candidate => candidate.distance)
+                .ThenBy(candidate => candidate.second.x)
+                .ThenBy(candidate => candidate.second.y)
+                .Select(candidate => (candidate.placement, candidate.first, candidate.second));
+        }
+
+        private static float RouteCost(
+            ArchitectorEdgeRouter router,
+            IReadOnlyList<Placement> placements,
+            Graph graph,
+            IReadOnlyList<ArchitectorArrangeNode> nodes,
+            IReadOnlyList<ArchitectorRouteRequest> requests,
+            float gap,
+            float grid,
+            out Dictionary<string, int> busy)
+        {
+            var positions = new Dictionary<string, ArchitectorPoint>(StringComparer.Ordinal);
+            Pack(placements.Select(placement => ToBlock(placement.Cells, graph, gap, grid)).ToList(), nodes, gap, grid, positions);
+            var rects = positions.ToDictionary(
+                pair => pair.Key,
+                pair => new Rect(pair.Value.x, pair.Value.y, graph.Nodes[pair.Key].Width, graph.Nodes[pair.Key].Height),
+                StringComparer.Ordinal);
+            var routes = router.Route(rects, requests, false);
+            var crossings = ArchitectorEdgeRouter.CrossingCounts(routes);
+            busy = new Dictionary<string, int>(StringComparer.Ordinal);
+            var cost = 0f;
+            foreach (var request in requests)
+            {
+                var route = routes[request.Id];
+                var count = crossings[request.Id];
+                cost += count * RouteCrossingCost * 0.5f + (route.Count - 2) * RouteBendCost;
+                for (var index = 1; index < route.Count; index++)
+                    cost += Mathf.Abs(route[index].x - route[index - 1].x) + Mathf.Abs(route[index].y - route[index - 1].y);
+                busy[request.SourceNodeId] = busy.GetValueOrDefault(request.SourceNodeId) + count;
+                busy[request.TargetNodeId] = busy.GetValueOrDefault(request.TargetNodeId) + count;
+            }
+            return cost + Balance(placements) * gap;
+        }
+
+        private static int Balance(IEnumerable<Placement> placements)
+        {
+            var total = 0;
+            foreach (var placement in placements.Where(placement => placement.FreeCells.Count > 0))
+                total += Mathf.Abs(placement.Cells.Values.Sum(cell => Math.Sign(cell.x)));
+            return total;
         }
 
         private static List<Group> GroupByLimit(Graph graph, int limit)
@@ -204,10 +334,10 @@ namespace Architector.Editor
             return placed.Concat(groups.Where(group => group.Center == null));
         }
 
-        private static Block LayOut(Group group, Graph graph, float gap, float grid)
+        private static Placement LayOut(Group group, Graph graph, float gap, float grid)
         {
             if (group.Center == null)
-                return LayOutLoose(group, graph, gap, grid);
+                return LayOutLoose(group, graph);
 
             var members = new HashSet<string>(group.Members, StringComparer.Ordinal);
             var cells = new Dictionary<string, Vector2Int>(StringComparer.Ordinal);
@@ -225,7 +355,7 @@ namespace Architector.Editor
             var cellWidth = group.Members.Max(id => graph.Nodes[id].Width) + gap;
             var cellHeight = group.Members.Max(id => graph.Nodes[id].Height) + gap;
             ImprovePlacement(group, graph, cells, freeCells, cellWidth, cellHeight);
-            return ToBlock(cells, graph, gap, grid);
+            return new Placement(cells, freeCells);
         }
 
         private static IEnumerable<(string id, int row)> BuildColumn(string center, Graph graph, ISet<string> members)
@@ -464,13 +594,13 @@ namespace Architector.Editor
             return slots;
         }
 
-        private static Block LayOutLoose(Group group, Graph graph, float gap, float grid)
+        private static Placement LayOutLoose(Group group, Graph graph)
         {
             var columns = Mathf.Max(1, Mathf.CeilToInt(Mathf.Sqrt(group.Members.Count)));
             var cells = new Dictionary<string, Vector2Int>(StringComparer.Ordinal);
             for (var index = 0; index < group.Members.Count; index++)
                 cells[group.Members[index]] = new Vector2Int(index % columns, index / columns);
-            return ToBlock(cells, graph, gap, grid);
+            return new Placement(cells, Array.Empty<Vector2Int>());
         }
 
         private static void Pack(
@@ -525,6 +655,26 @@ namespace Architector.Editor
 
             public string Center { get; }
             public List<string> Members { get; } = new();
+        }
+
+        private sealed class Placement
+        {
+            public Placement(Dictionary<string, Vector2Int> cells, IReadOnlyList<Vector2Int> freeCells)
+            {
+                Cells = cells;
+                FreeCells = freeCells;
+            }
+
+            public Dictionary<string, Vector2Int> Cells { get; }
+            public IReadOnlyList<Vector2Int> FreeCells { get; }
+
+            public Dictionary<Vector2Int, string> Occupants()
+            {
+                var occupants = new Dictionary<Vector2Int, string>();
+                foreach (var pair in Cells)
+                    occupants[pair.Value] = pair.Key;
+                return occupants;
+            }
         }
 
         private sealed class Block

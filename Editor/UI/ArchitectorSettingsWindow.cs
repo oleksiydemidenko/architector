@@ -224,6 +224,13 @@ namespace Architector.Editor
                 optimization.includeFrameworkMembers = EditorGUILayout.Toggle(
                     new GUIContent("Include Framework API", "Allows members declared by Unity and system/framework types to be offered by the member picker."),
                     optimization.includeFrameworkMembers);
+                GUILayout.Label("Canvas", EditorStyles.boldLabel);
+                optimization.hideRoutesWhileDragging = EditorGUILayout.Toggle(
+                    new GUIContent("Hide Routes While Dragging", "Relationships of a dragged node are hidden and appear again when they are routed after the drop. Other relationships stay. Turn off to reroute them on every drag step, which is slower on large layers."),
+                    optimization.hideRoutesWhileDragging);
+                optimization.routeInBackground = EditorGUILayout.Toggle(
+                    new GUIContent("Route In Background", "Calculates relationships on a background thread after a change, so the window stays responsive. They appear a moment later. A new change replaces a calculation that is still running."),
+                    optimization.routeInBackground);
             }
         }
 

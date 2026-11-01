@@ -18,6 +18,9 @@ namespace Architector.Editor
         public const string CommandEventName = "ArchitectorCanvasCommand";
         private const float RightButtonPanThresholdSquared = 16f;
         private const float EdgeCornerRadius = 8f;
+        private const float EdgeBridgeRadius = 5f;
+        private const int FittedTextLimit = 4000;
+        private const double ViewStateSaveDelay = 0.5d;
         private const int EdgeTierUnrelated = 0;
         private const int EdgeTierIncoming = 1;
         private const int EdgeTierOutgoing = 2;
@@ -34,12 +37,26 @@ namespace Architector.Editor
         private List<string> lastEdgeCycleIds = new();
         private int lastEdgeCycleIndex = -1;
         private readonly ArchitectorEdgeRouter edgeRouter = new();
-        private readonly Dictionary<string, List<Vector2>> edgeWorldRoutes = new(StringComparer.Ordinal);
+        private Dictionary<string, List<Vector2>> edgeWorldRoutes = new(StringComparer.Ordinal);
+        private Dictionary<string, List<Vector2>> edgeBaseRoutes = new(StringComparer.Ordinal);
         private readonly Dictionary<string, List<Vector2>> edgeRouteCache = new(StringComparer.Ordinal);
         private readonly List<(ArchitectorEdgeRecord edge, List<Vector2> route)> edgesInTier = new();
         private Vector3[] routeBuffer = new Vector3[64];
         private readonly Vector3[] dashBuffer = new Vector3[2];
+        private Rect edgeViewRect;
+        private Vector3[] gridBuffer = Array.Empty<Vector3>();
+        private readonly Dictionary<string, ArchitectorNodeRecord> nodesById = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string[]> nodeRows = new(StringComparer.Ordinal);
+        private readonly Dictionary<(string value, int width, GUIStyle style), string> fittedText = new();
+        private double viewStateSaveAt;
         private bool edgeRoutesDragged;
+        private bool hideRoutesWhileDragging = true;
+        private readonly HashSet<string> hiddenRouteNodeIds = new(StringComparer.Ordinal);
+        private bool routeInBackground = true;
+        private bool routeJobFailed;
+        private bool watchingRouteJob;
+        private ArchitectorRouteJob routeJob;
+        private Action repaintCanvas;
         private Vector2 edgeRouteDragDelta;
         private int edgeRouteCacheRevision = -1;
         private Vector2 edgeRouteCachePan;
@@ -124,13 +141,18 @@ namespace Architector.Editor
                 ResetForLayer(layer.id, userState);
 
             currentRepositoryRevision = repository.Revision;
+            hideRoutesWhileDragging = repository.Settings.optimization.hideRoutesWhileDragging;
+            routeInBackground = repository.Settings.optimization.routeInBackground;
+            repaintCanvas = requestRepaint;
             if (!hasCachedDocuments || cachedDocumentsRevision != currentRepositoryRevision)
             {
                 cachedDocuments = repository.LoadLayerView(layer.id);
                 hasCachedDocuments = true;
                 cachedDocumentsRevision = currentRepositoryRevision;
+                IndexDocuments(cachedDocuments);
             }
             var documents = cachedDocuments;
+            FlushViewStateWhenDue(userState);
             if (cachedPortalRelationshipRowsRevision != currentRepositoryRevision)
             {
                 cachedPortalRelationshipRows = repository.GetLayerPortalRelationshipRows(layer.id);
@@ -139,8 +161,7 @@ namespace Architector.Editor
             var palette = EditorGUIUtility.isProSkin
                 ? repository.Settings.palette.dark
                 : repository.Settings.palette.light;
-            var validNodeIds = new HashSet<string>(documents.semantic.nodes.Select(node => node.id), StringComparer.Ordinal);
-            selectedNodeIds.RemoveWhere(nodeId => !validNodeIds.Contains(nodeId));
+            selectedNodeIds.RemoveWhere(nodeId => !nodesById.ContainsKey(nodeId));
             if (!string.IsNullOrEmpty(selectedEdgeId) && documents.semantic.edges.All(edge => edge.id != selectedEdgeId))
             {
                 selectedEdgeId = string.Empty;
@@ -171,7 +192,7 @@ namespace Architector.Editor
                 EditorGUI.DrawRect(localRect, palette.workspace.ToColor());
                 DrawGrid(localRect, repository.Settings.geometry.gridSize, palette.grid.ToColor());
                 DrawEdges(documents, palette, localRect);
-                DrawNodes(documents, palette, repository);
+                DrawNodes(documents, palette, repository, localRect);
                 DrawConnectionAffordance(documents);
                 DrawSelectedEdgeAction(documents);
                 DrawSelectionMarquee(palette.selection.ToColor());
@@ -365,7 +386,8 @@ namespace Architector.Editor
                 var worldAtMouse = ScreenToWorld(mouse);
                 zoom = Mathf.Clamp(zoom * (1f - current.delta.y * 0.03f), MinimumZoom, MaximumZoom);
                 pan = mouse - worldAtMouse * zoom;
-                userState.SaveLayerView(viewId, layerId, pan.x, pan.y, zoom);
+                userState.SetLayerView(viewId, layerId, pan.x, pan.y, zoom);
+                viewStateSaveAt = EditorApplication.timeSinceStartup + ViewStateSaveDelay;
                 current.Use();
                 return;
             }
@@ -1063,6 +1085,7 @@ namespace Architector.Editor
         private void DrawEdges(ArchitectorLayerDocuments documents, ArchitectorThemePaletteSettings palette, Rect viewRect)
         {
             EnsureEdgeRouteCache(documents);
+            edgeViewRect = viewRect;
             var casing = palette.workspace.ToColor();
             var hasSelection = selectedNodeIds.Count > 0 || !string.IsNullOrEmpty(selectedEdgeId);
             Handles.BeginGUI();
@@ -1071,7 +1094,7 @@ namespace Architector.Editor
                 edgesInTier.Clear();
                 foreach (var edge in documents.semantic.edges)
                 {
-                    if (EdgeTier(edge) != tier)
+                    if (EdgeTier(edge) != tier || IsRouteHidden(edge))
                         continue;
                     var route = GetEdgeRoute(edge, documents);
                     if (route.Count >= 2 && RouteIsVisible(route, viewRect))
@@ -1204,7 +1227,7 @@ namespace Architector.Editor
                 {
                     var step = Mathf.Min(segmentRemaining, patternRemaining);
                     var next = cursor + direction * step;
-                    if (drawing)
+                    if (drawing && (edgeViewRect.Contains(cursor) || edgeViewRect.Contains(next)))
                     {
                         dashBuffer[0] = cursor;
                         dashBuffer[1] = next;
@@ -1250,9 +1273,20 @@ namespace Architector.Editor
 
         private bool HasDragMovement => draggingNode && dragPreviewDelta.sqrMagnitude > DragMovementThresholdSquared;
 
+        private bool RoutesFollowDrag => HasDragMovement && !hideRoutesWhileDragging;
+
+        private bool IsRouteHidden(ArchitectorEdgeRecord edge)
+        {
+            return hiddenRouteNodeIds.Count > 0
+                   && (hiddenRouteNodeIds.Contains(edge.sourceNodeId) || hiddenRouteNodeIds.Contains(edge.targetNodeId));
+        }
+
         private void EnsureEdgeRouteCache(ArchitectorLayerDocuments documents)
         {
-            var dragged = HasDragMovement;
+            var routesArrived = TakeFinishedRouteJob();
+            if (hideRoutesWhileDragging && HasDragMovement)
+                hiddenRouteNodeIds.UnionWith(dragStartWorldByNode.Keys);
+            var dragged = RoutesFollowDrag;
             var layoutChanged = edgeRouteCacheRevision != currentRepositoryRevision
                                 || edgeRoutesDragged != dragged
                                 || dragged && edgeRouteDragDelta != dragPreviewDelta;
@@ -1263,10 +1297,10 @@ namespace Architector.Editor
                 edgeRoutesDragged = dragged;
                 edgeRouteDragDelta = dragPreviewDelta;
             }
-            else if (Mathf.Approximately(edgeRouteCacheZoom, zoom) && (edgeRouteCachePan - pan).sqrMagnitude < 0.001f)
-            {
+            if (routeJob == null && !HasDragMovement)
+                hiddenRouteNodeIds.Clear();
+            if (!layoutChanged && !routesArrived && Mathf.Approximately(edgeRouteCacheZoom, zoom) && (edgeRouteCachePan - pan).sqrMagnitude < 0.001f)
                 return;
-            }
 
             foreach (var pair in edgeWorldRoutes)
             {
@@ -1303,10 +1337,80 @@ namespace Architector.Editor
                     edgeLayout?.preferredTargetSide));
             }
 
-            edgeWorldRoutes.Clear();
+            if (!RoutesFollowDrag && routeInBackground && !routeJobFailed)
+            {
+                StartRouteJob(rects, requests);
+                return;
+            }
+
+            CancelRouting();
+            Dictionary<string, List<Vector2>> routes;
+            if (RoutesFollowDrag)
+            {
+                routes = edgeRouter.RouteMoved(rects, requests, dragStartWorldByNode.Keys, edgeBaseRoutes, dragPreviewDelta);
+            }
+            else
+            {
+                routes = edgeRouter.Route(rects, requests);
+                edgeBaseRoutes = routes;
+            }
+
+            edgeWorldRoutes = ArchitectorEdgeRouter.Decorate(routes, EdgeCornerRadius, EdgeBridgeRadius);
             edgeRouteCache.Clear();
-            foreach (var route in edgeRouter.Route(rects, requests))
-                edgeWorldRoutes[route.Key] = ArchitectorEdgeRouter.RoundCorners(route.Value, EdgeCornerRadius);
+        }
+
+        private void StartRouteJob(Dictionary<string, Rect> rects, List<ArchitectorRouteRequest> requests)
+        {
+            routeJob?.Cancel();
+            routeJob = new ArchitectorRouteJob(rects, requests, EdgeCornerRadius, EdgeBridgeRadius);
+            if (watchingRouteJob)
+                return;
+            watchingRouteJob = true;
+            EditorApplication.update += WatchRouteJob;
+        }
+
+        private void WatchRouteJob()
+        {
+            if (routeJob != null && !routeJob.IsCompleted)
+                return;
+            StopWatchingRouteJob();
+            repaintCanvas?.Invoke();
+        }
+
+        private void StopWatchingRouteJob()
+        {
+            if (!watchingRouteJob)
+                return;
+            watchingRouteJob = false;
+            EditorApplication.update -= WatchRouteJob;
+        }
+
+        private bool TakeFinishedRouteJob()
+        {
+            if (routeJob == null || !routeJob.IsCompleted)
+                return false;
+            var job = routeJob;
+            routeJob = null;
+            if (job.Failure != null)
+            {
+                Debug.LogException(job.Failure);
+                routeJobFailed = true;
+                edgeRouteCacheRevision = -1;
+                return false;
+            }
+            if (!job.Succeeded || RoutesFollowDrag)
+                return false;
+            edgeBaseRoutes = job.Routes;
+            edgeWorldRoutes = job.DrawnRoutes;
+            edgeRouteCache.Clear();
+            return true;
+        }
+
+        public void CancelRouting()
+        {
+            routeJob?.Cancel();
+            routeJob = null;
+            StopWatchingRouteJob();
         }
 
         private string HitTestEdge(Vector2 mouse, ArchitectorLayerDocuments documents)
@@ -1315,6 +1419,8 @@ namespace Architector.Editor
             for (var edgeIndex = documents.semantic.edges.Count - 1; edgeIndex >= 0; edgeIndex--)
             {
                 var edge = documents.semantic.edges[edgeIndex];
+                if (IsRouteHidden(edge))
+                    continue;
                 var route = GetEdgeRoute(edge, documents);
                 var bestDistance = float.MaxValue;
                 for (var index = 1; index < route.Count; index++)
@@ -1351,10 +1457,7 @@ namespace Architector.Editor
                 return string.Empty;
             foreach (var nodeLayout in documents.layout.nodes)
             {
-                var portal = documents.semantic.nodes.FirstOrDefault(node => node.id == nodeLayout.nodeId && IsPortal(node));
-                if (portal == null)
-                    continue;
-                if (!cachedPortalRelationshipRows.TryGetValue(portal.id, out var rows))
+                if (!cachedPortalRelationshipRows.TryGetValue(nodeLayout.nodeId, out var rows))
                     continue;
                 var rect = GetScreenNodeRect(nodeLayout);
                 var firstRowY = rect.y + 10f + EditorGUIUtility.singleLineHeight;
@@ -1376,7 +1479,7 @@ namespace Architector.Editor
             if (selectedNodeIds.Count != 1 || draggingNode || boxSelecting)
                 return default;
             var sourceNodeId = SelectedNodeId;
-            if (documents.semantic.nodes.Any(node => node.id == sourceNodeId && IsPortal(node)))
+            if (nodesById.TryGetValue(sourceNodeId, out var sourceNode) && IsPortal(sourceNode))
                 return default;
             var best = default(ConnectionAffordance);
             var bestDistance = float.MaxValue;
@@ -1527,22 +1630,70 @@ namespace Architector.Editor
             return Vector2.Distance(point, start + segment * t);
         }
 
+        private void IndexDocuments(ArchitectorLayerDocuments documents)
+        {
+            nodesById.Clear();
+            foreach (var node in documents.semantic.nodes)
+                nodesById[node.id] = node;
+            nodeRows.Clear();
+            fittedText.Clear();
+        }
+
+        private void FlushViewStateWhenDue(ArchitectorUserStateStore userState)
+        {
+            if (viewStateSaveAt <= 0d || EditorApplication.timeSinceStartup < viewStateSaveAt)
+                return;
+            viewStateSaveAt = 0d;
+            userState.FlushLayerViews();
+        }
+
+        private string[] NodeRows(ArchitectorNodeRecord node)
+        {
+            if (nodeRows.TryGetValue(node.id, out var rows))
+                return rows;
+            var values = new List<string>();
+            if (node.type?.baseType != null)
+                values.Add($"base · {ArchitectorTypeReference.FullName(node.type.baseType)}");
+            values.AddRange((node.type?.interfaces ?? new List<ArchitectorTypeReferenceRecord>())
+                .Select(reference => $"interface · {ArchitectorTypeReference.FullName(reference)}"));
+            values.AddRange(ArchitectorMemberOrder.SortStable(node.members).Select(member => member.declaration));
+            rows = values.ToArray();
+            nodeRows[node.id] = rows;
+            return rows;
+        }
+
+        private string Fit(string value, float availableWidth, GUIStyle style)
+        {
+            if (string.IsNullOrEmpty(value))
+                return string.Empty;
+            var key = (value, Mathf.RoundToInt(availableWidth), style);
+            if (fittedText.TryGetValue(key, out var fitted))
+                return fitted;
+            if (fittedText.Count >= FittedTextLimit)
+                fittedText.Clear();
+            fitted = FitText(value, availableWidth, style);
+            fittedText[key] = fitted;
+            return fitted;
+        }
+
         private void DrawNodes(
             ArchitectorLayerDocuments documents,
             ArchitectorThemePaletteSettings palette,
-            ArchitectorRepository repository)
+            ArchitectorRepository repository,
+            Rect viewRect)
         {
             EnsureNodeStyles();
             foreach (var nodeLayout in documents.layout.nodes)
             {
-                var node = documents.semantic.nodes.FirstOrDefault(candidate => candidate.id == nodeLayout.nodeId);
-                if (node == null)
+                if (!nodesById.TryGetValue(nodeLayout.nodeId, out var node))
                     continue;
 
                 var worldPosition = draggingNode && dragStartWorldByNode.TryGetValue(node.id, out var dragStart)
                     ? dragStart + dragPreviewDelta
                     : new Vector2(nodeLayout.x, nodeLayout.y);
                 var rect = WorldToScreen(new Rect(worldPosition.x, worldPosition.y, nodeLayout.width, nodeLayout.height));
+                if (!rect.Overlaps(viewRect))
+                    continue;
                 var membersVisible = zoom >= MemberVisibilityZoom;
                 EditorGUI.DrawRect(rect, palette.node.ToColor());
                 var headerBackgroundRect = membersVisible
@@ -1576,7 +1727,7 @@ namespace Architector.Editor
                 GUI.contentColor = palette.titleText.ToColor();
                 var titleStyle = zoom < CompactTitleZoom ? centeredMiniBoldLabel : centeredBoldLabel;
                 var title = TitleCaption(node, zoom < CompactTitleZoom, repository);
-                GUI.Label(headerRect, new GUIContent(FitText(title, headerRect.width, titleStyle), node.responsibility ?? string.Empty), titleStyle);
+                GUI.Label(headerRect, new GUIContent(Fit(title, headerRect.width, titleStyle), node.responsibility ?? string.Empty), titleStyle);
                 GUI.contentColor = palette.typeText.ToColor();
                 if (!membersVisible)
                 {
@@ -1604,7 +1755,7 @@ namespace Architector.Editor
                             selectionColor.a = 0.28f;
                             EditorGUI.DrawRect(rowRect, selectionColor);
                         }
-                        GUI.Label(rowRect, FitText(row.Caption, rowRect.width, EditorStyles.miniLabel), EditorStyles.miniLabel);
+                        GUI.Label(rowRect, Fit(row.Caption, rowRect.width, EditorStyles.miniLabel), EditorStyles.miniLabel);
                     }
                     if (rows.Count == 0)
                         GUI.Label(new Rect(rect.x + 8f, memberY, rect.width - 16f, EditorGUIUtility.singleLineHeight),
@@ -1619,26 +1770,18 @@ namespace Architector.Editor
                     responsibilityStyle ??= new GUIStyle(EditorStyles.miniLabel) { fontStyle = FontStyle.Italic };
                     GUI.Label(
                         responsibilityRect,
-                        new GUIContent(FitText(node.responsibility, responsibilityRect.width, responsibilityStyle), node.responsibility),
+                        new GUIContent(Fit(node.responsibility, responsibilityRect.width, responsibilityStyle), node.responsibility),
                         responsibilityStyle);
                     memberY += EditorGUIUtility.singleLineHeight;
                 }
                 var availableRows = Mathf.Max(0, Mathf.FloorToInt((rect.yMax - memberY - 5f) / EditorGUIUtility.singleLineHeight));
-                var typeFacts = new List<string>();
-                if (node.type?.baseType != null)
-                    typeFacts.Add($"base · {ArchitectorTypeReference.FullName(node.type.baseType)}");
-                typeFacts.AddRange((node.type?.interfaces ?? new List<ArchitectorTypeReferenceRecord>())
-                    .Select(reference => $"interface · {ArchitectorTypeReference.FullName(reference)}"));
-                var orderedMembers = ArchitectorMemberOrder.SortStable(node.members);
-                var totalRows = typeFacts.Count + orderedMembers.Count;
+                var values = NodeRows(node);
+                var totalRows = values.Length;
                 var displayedCount = Mathf.Min(totalRows, availableRows);
                 for (var index = 0; index < displayedCount; index++)
                 {
                     var memberRect = new Rect(rect.x + 8f, memberY + index * EditorGUIUtility.singleLineHeight, rect.width - 16f, EditorGUIUtility.singleLineHeight);
-                    var value = index < typeFacts.Count
-                        ? typeFacts[index]
-                        : orderedMembers[index - typeFacts.Count].declaration;
-                    var declaration = FitText(value, memberRect.width, EditorStyles.miniLabel);
+                    var declaration = Fit(values[index], memberRect.width, EditorStyles.miniLabel);
                     GUI.Label(memberRect, declaration, EditorStyles.miniLabel);
                 }
                 if (totalRows > displayedCount && availableRows > 0)
@@ -1653,14 +1796,29 @@ namespace Architector.Editor
         private void DrawGrid(Rect rect, float configuredGridSize, Color color)
         {
             var spacing = Mathf.Max(8f, configuredGridSize * zoom);
-            Handles.BeginGUI();
-            Handles.color = color;
             var offsetX = Mathf.Repeat(pan.x, spacing);
             var offsetY = Mathf.Repeat(pan.y, spacing);
-            for (var x = offsetX; x < rect.width; x += spacing)
-                Handles.DrawLine(new Vector3(x, 0f), new Vector3(x, rect.height));
-            for (var y = offsetY; y < rect.height; y += spacing)
-                Handles.DrawLine(new Vector3(0f, y), new Vector3(rect.width, y));
+            var columns = Mathf.Max(0, Mathf.CeilToInt((rect.width - offsetX) / spacing));
+            var rows = Mathf.Max(0, Mathf.CeilToInt((rect.height - offsetY) / spacing));
+            var points = (columns + rows) * 2;
+            if (gridBuffer.Length != points)
+                gridBuffer = new Vector3[points];
+            var index = 0;
+            for (var column = 0; column < columns; column++)
+            {
+                var x = offsetX + column * spacing;
+                gridBuffer[index++] = new Vector3(x, 0f);
+                gridBuffer[index++] = new Vector3(x, rect.height);
+            }
+            for (var row = 0; row < rows; row++)
+            {
+                var y = offsetY + row * spacing;
+                gridBuffer[index++] = new Vector3(0f, y);
+                gridBuffer[index++] = new Vector3(rect.width, y);
+            }
+            Handles.BeginGUI();
+            Handles.color = color;
+            Handles.DrawLines(gridBuffer);
             Handles.color = Color.white;
             Handles.EndGUI();
         }
@@ -1781,6 +1939,8 @@ namespace Architector.Editor
 
         private void ResetForLayer(string newLayerId, ArchitectorUserStateStore userState)
         {
+            CancelRouting();
+            hiddenRouteNodeIds.Clear();
             layerId = newLayerId;
             selectedNodeIds.Clear();
             selectedEdgeId = string.Empty;

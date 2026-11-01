@@ -128,6 +128,8 @@ namespace Architector.Editor
         public int memberParentDepth;
         public bool includeInterfaceMembers;
         public bool includeFrameworkMembers;
+        public bool hideRoutesWhileDragging = true;
+        public bool routeInBackground = true;
     }
 
     [Serializable]

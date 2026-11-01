@@ -1,8 +1,17 @@
 # Changelog
 
-## Unreleased
+## 0.2.2
 
 - Settings opens only AI Integration and Utilities after a recompile.
+- Relationship routes no longer make small loops next to a node. A route may turn into its port from any direction, ports are part of the routing grid, and separating parallel lines keeps every segment's direction.
+- Routes choose among the node sides that face each other, and facing nodes connect with straight lines where their sides overlap. On a 59-layer graph this removes all loops, 39% of turns and 48% of crossings.
+- A full routing pass takes about three times as long, 66 ms on the densest layer of that graph, measured in Mono. It runs when a node is dropped or the graph changes, not during a drag.
+- Lines now bridge each other where they cross. Usually the horizontal line hops; next to a corner the corner shrinks or the vertical line hops instead, and crossings close together share one bridge.
+- Neighbouring ports swap when that removes a crossing or two lines sharing one track, which also undoes small knots on large nodes.
+- The canvas does less on every repaint: nodes outside the view are skipped, member rows, fitted text and icons are cached, navigation state is compared without JSON, and the mouse wheel no longer writes a file on every step.
+- Added **Route In Background** to Optimization, on by default: relationships are calculated on a background thread after a change and appear a moment later, without stalling the window. A new change replaces a calculation that is still running.
+- Added **Hide Routes While Dragging** to Optimization, on by default: the relationships of a dragged node are hidden and appear again once routed after the drop. With it off, only the relationships of moved nodes are routed on each step.
+- Arrange checks its layouts with the real router, which leaves 39% fewer crossings on the same graph. The densest layer takes about a second.
 
 ## 0.2.1
 

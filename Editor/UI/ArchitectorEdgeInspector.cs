@@ -9,23 +9,26 @@ namespace Architector.Editor
     {
         private static readonly string[] Kinds = ArchitectorEdgeKinds.All.ToArray();
         private static readonly string[] KindNames = Kinds.Select(ArchitectorEdgeKinds.DisplayName).ToArray();
+        private string cachedEdgeId = string.Empty;
+        private int cachedRevision = -1;
+        private ArchitectorEdgeRecord edge;
+        private string sourceCaption = string.Empty;
+        private string targetCaption = string.Empty;
+
         public void Draw(string layerId, string edgeId, ArchitectorRepository repository, Action<Action> execute)
         {
-            var edge = repository.FindRelationship(edgeId);
+            if (cachedEdgeId != edgeId || cachedRevision != repository.Revision)
+                LoadEdge(edgeId, repository);
             if (edge == null)
                 return;
-            var sourceLayer = repository.FindLayer(edge.sourceLayerId);
-            var targetLayer = repository.FindLayer(edge.targetLayerId);
-            var source = repository.LoadLayer(edge.sourceLayerId).semantic.nodes.FirstOrDefault(node => node.id == edge.sourceNodeId);
-            var target = repository.LoadLayer(edge.targetLayerId).semantic.nodes.FirstOrDefault(node => node.id == edge.targetNodeId);
 
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox, GUILayout.Width(ArchitectorNodeInspector.Width), GUILayout.ExpandHeight(true)))
             {
                 GUILayout.Label("Relationship Inspector", EditorStyles.boldLabel);
                 using (new EditorGUI.DisabledScope(true))
                 {
-                    EditorGUILayout.TextField("Source", $"{sourceLayer?.name} / {source?.title ?? edge.sourceNodeId}");
-                    EditorGUILayout.TextField("Target", $"{targetLayer?.name} / {target?.title ?? edge.targetNodeId}");
+                    EditorGUILayout.TextField("Source", sourceCaption);
+                    EditorGUILayout.TextField("Target", targetCaption);
                 }
                 var currentIndex = Mathf.Max(0, Array.IndexOf(Kinds, edge.kind));
                 EditorGUI.BeginChangeCheck();
@@ -41,6 +44,24 @@ namespace Architector.Editor
                         : "Runtime relationships may be reversed or cyclic.",
                     MessageType.None);
             }
+        }
+
+        private void LoadEdge(string edgeId, ArchitectorRepository repository)
+        {
+            cachedEdgeId = edgeId;
+            cachedRevision = repository.Revision;
+            edge = repository.FindRelationship(edgeId);
+            if (edge == null)
+                return;
+            sourceCaption = Caption(edge.sourceLayerId, edge.sourceNodeId, repository);
+            targetCaption = Caption(edge.targetLayerId, edge.targetNodeId, repository);
+        }
+
+        private static string Caption(string layerId, string nodeId, ArchitectorRepository repository)
+        {
+            var layer = repository.FindLayer(layerId);
+            var node = repository.LoadLayer(layerId).semantic.nodes.FirstOrDefault(candidate => candidate.id == nodeId);
+            return $"{layer?.name} / {node?.title ?? nodeId}";
         }
     }
 }

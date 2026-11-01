@@ -193,6 +193,7 @@ namespace Architector.Editor
 
         private void OnDisable()
         {
+            layerCanvas?.CancelRouting();
             CommitRename();
             PersistNavigation();
             if (repository != null)
@@ -322,6 +323,14 @@ namespace Architector.Editor
         private void PersistNavigation()
         {
             if (windowMode != WindowMode.Master || userState == null)
+                return;
+            if (userState.MatchesMasterNavigation(
+                    currentGroupId ?? string.Empty,
+                    activeLayerId ?? string.Empty,
+                    openLayerIds,
+                    layerVisitHistory,
+                    layerVisitHistoryIndex,
+                    layerTabsScroll))
                 return;
             userState.SaveMasterNavigation(new ArchitectorWindowNavigationRecord
             {
@@ -510,14 +519,14 @@ namespace Architector.Editor
                 right -= 18f;
                 GUI.Label(
                     new Rect(right, rect.center.y - 8f, 16f, 16f),
-                    new GUIContent(EditorGUIUtility.IconContent("console.warnicon.sml").image, $"Changes since approval {scope}."));
+                    new GUIContent(ArchitectorIcons.Get("console.warnicon.sml").image, $"Changes since approval {scope}."));
             }
             if ((status & ArchitectorExplorerEntryStatus.Error) != 0)
             {
                 right -= 18f;
                 GUI.Label(
                     new Rect(right, rect.center.y - 8f, 16f, 16f),
-                    new GUIContent(EditorGUIUtility.IconContent("console.erroricon.sml").image, $"Conformance errors or an invalid layer document {scope}."));
+                    new GUIContent(ArchitectorIcons.Get("console.erroricon.sml").image, $"Conformance errors or an invalid layer document {scope}."));
             }
             return right;
         }
@@ -556,7 +565,7 @@ namespace Architector.Editor
                 settingsSize);
             using (new EditorGUI.DisabledScope(aiWork?.WorkspacesLocked == true))
             {
-                if (GUI.Button(settingsRect, EditorGUIUtility.IconContent("Settings"), GUI.skin.button))
+                if (GUI.Button(settingsRect, ArchitectorIcons.Get("Settings"), GUI.skin.button))
                     ArchitectorSettingsWindow.Open();
             }
             var helpRect = new Rect(settingsRect.x - settingsSize - 4f, settingsRect.y, settingsSize, settingsSize);
@@ -777,13 +786,13 @@ namespace Architector.Editor
 
             if (isGroup)
             {
-                var icon = EditorGUIUtility.IconContent("Folder Icon");
+                var icon = ArchitectorIcons.Get("Folder Icon");
                 GUI.Label(rect, new GUIContent(name, icon.image), selected ? EditorStyles.whiteLabel : EditorStyles.label);
                 var right = rect.xMax - 2f;
                 if (repository.IsGroupLocked(id))
                 {
                     var unlocked = repository.IsGroupUnlockedForSession(id);
-                    var lockIcon = EditorGUIUtility.IconContent(unlocked ? "LockIcon" : "LockIcon-On").image;
+                    var lockIcon = ArchitectorIcons.Get(unlocked ? "LockIcon" : "LockIcon-On").image;
                     right -= 18f;
                     GUI.Label(
                         new Rect(right, rect.center.y - 8f, 16f, 16f),
@@ -1233,7 +1242,7 @@ namespace Architector.Editor
             var newWorkspaceRect = new Rect(forwardRect.xMax + 4f, backRect.y, navigationButtonWidth, backRect.height);
             if (GUI.Button(newWorkspaceRect, new GUIContent(string.Empty, "Open an empty Architector Workspace Window"), layerTabNavigationStyle))
                 OpenEmptyWorkspaceWindow();
-            var newWorkspaceIcon = EditorGUIUtility.IconContent("layout@2x").image;
+            var newWorkspaceIcon = ArchitectorIcons.Get("layout@2x").image;
             if (newWorkspaceIcon != null && Event.current.type == EventType.Repaint)
             {
                 const float workspaceIconSize = 20f;
@@ -1249,7 +1258,7 @@ namespace Architector.Editor
             var clearRect = new Rect(newWorkspaceRect.xMax + 2f, backRect.y, clearButtonWidth, backRect.height);
             using (new EditorGUI.DisabledScope(openLayerIds.Count <= 1 || string.IsNullOrEmpty(activeLayerId)))
             {
-                var trashIcon = EditorGUIUtility.IconContent("TreeEditor.Trash");
+                var trashIcon = ArchitectorIcons.Get("TreeEditor.Trash");
                 var content = new GUIContent(trashIcon.image, "Close all tabs except the active layer");
                 if (GUI.Button(clearRect, content, layerTabNavigationStyle))
                     ConfirmClearOtherLayerTabs();
@@ -1345,9 +1354,9 @@ namespace Architector.Editor
                 var iconRect = new Rect(tabRect.x + 5f, tabRect.center.y - 8f, 16f, 16f);
                 var status = GetExplorerStatus(layer.id);
                 if ((status & ArchitectorExplorerEntryStatus.Error) != 0)
-                    GUI.Label(iconRect, new GUIContent(EditorGUIUtility.IconContent("console.erroricon.sml").image, "Conformance errors or an invalid layer document in this layer."));
+                    GUI.Label(iconRect, new GUIContent(ArchitectorIcons.Get("console.erroricon.sml").image, "Conformance errors or an invalid layer document in this layer."));
                 else if ((status & ArchitectorExplorerEntryStatus.Changed) != 0)
-                    GUI.Label(iconRect, new GUIContent(EditorGUIUtility.IconContent("console.warnicon.sml").image, "Changes since approval in this layer."));
+                    GUI.Label(iconRect, new GUIContent(ArchitectorIcons.Get("console.warnicon.sml").image, "Changes since approval in this layer."));
                 else
                     DrawLayerIconAsset(iconRect, active ? EditorStyles.boldLabel.normal.textColor : EditorStyles.label.normal.textColor);
                 var labelRect = new Rect(iconRect.xMax + 4f, tabRect.y, tabRect.width - 48f, tabRect.height);

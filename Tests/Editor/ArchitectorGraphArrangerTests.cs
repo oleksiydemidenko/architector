@@ -108,6 +108,25 @@ namespace Architector.Editor.Tests
         }
 
         [Test]
+        public void ADenseGroupStaysValidAndDeterministicWhenRoutesScoreIt()
+        {
+            var nodes = Enumerable.Range(0, 14).Select(index => Node($"n{index:00}")).ToList();
+            var edges = new List<ArchitectorArrangeEdge>();
+            for (var index = 1; index < 14; index++)
+            {
+                edges.Add(Edge("n00", $"n{index:00}"));
+                edges.Add(Edge($"n{index:00}", $"n{index % 13 + 1:00}"));
+            }
+
+            var first = ArchitectorGraphArranger.Arrange(nodes, edges, Gap, Grid, 64);
+            var second = ArchitectorGraphArranger.Arrange(nodes, edges, Gap, Grid, 64);
+
+            AssertNoOverlap(nodes, first);
+            foreach (var pair in first)
+                Assert.That(second[pair.Key], Is.EqualTo(pair.Value));
+        }
+
+        [Test]
         public void ArrangementKeepsItsPlaceAndIsDeterministic()
         {
             var (nodes, edges) = Star("hub", 9);
