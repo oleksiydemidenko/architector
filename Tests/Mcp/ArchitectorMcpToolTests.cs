@@ -422,6 +422,64 @@ namespace Architector.Editor.Mcp.Tests
         }
 
         [Test]
+        public void NarrowQueriesAnswerWithoutTheWholeLayer()
+        {
+            var first = repository.CreateLayer(string.Empty, "First");
+            var second = repository.CreateLayer(string.Empty, "Second");
+            var third = repository.CreateLayer(string.Empty, "Third");
+            var a = repository.CreateEmptyNode(first, 0f, 0f);
+            var b = repository.CreateEmptyNode(second, 0f, 0f);
+            var c = repository.CreateEmptyNode(third, 0f, 0f);
+            repository.CreateCrossLayerEdge(first, a, second, b, ArchitectorEdgeKinds.Dependency);
+            repository.CreateCrossLayerEdge(second, b, third, c, ArchitectorEdgeKinds.Dependency);
+            JObject Query(JObject request)
+            {
+                var result = ArchitectorMcpQueryTool.HandleCommand(repository, new ArchitectorAiWorkCoordinator(), request) as SuccessResponse;
+                Assert.That(result, Is.Not.Null, request.ToString());
+                return JObject.FromObject(result.Data);
+            }
+
+            var node = Query(new JObject { ["action"] = "node", ["target"] = "Second", ["node"] = b });
+            Assert.That(node["incoming"], Has.Count.EqualTo(1));
+            Assert.That(node["outgoing"], Has.Count.EqualTo(1));
+
+            var outgoing = Query(new JObject { ["action"] = "relationships", ["target"] = "Second", ["direction"] = "out", ["limit"] = 1 });
+            Assert.That(outgoing["total"]?.Value<int>(), Is.EqualTo(1));
+
+            var path = Query(new JObject { ["action"] = "dependency_path", ["target"] = "First", ["to"] = "Third" });
+            Assert.That(path["connected"]?.Value<bool>(), Is.True);
+            Assert.That(path["steps"], Has.Count.EqualTo(2));
+            var reverse = Query(new JObject { ["action"] = "dependency_path", ["target"] = "Third", ["to"] = "First" });
+            Assert.That(reverse["connected"]?.Value<bool>(), Is.False);
+
+            var missing = ArchitectorMcpQueryTool.HandleCommand(repository, new ArchitectorAiWorkCoordinator(), new JObject { ["action"] = "layer_graph", ["target"] = "Sec" }) as ErrorResponse;
+            Assert.That(missing?.Code, Is.EqualTo("layer_not_found"));
+            Assert.That(JObject.FromObject(missing.Data)["candidates"]?.Values<string>(), Does.Contain("Second"));
+        }
+
+        [Test]
+        public void FailedPlanNamesTheOperation()
+        {
+            var aiWork = new ArchitectorAiWorkCoordinator();
+            var request = new JObject
+            {
+                ["action"] = "dry_run_plan",
+                ["plan"] = new JObject
+                {
+                    ["layers"] = new JArray(new JObject { ["reference"] = "first", ["name"] = "First" }),
+                    ["nodes"] = new JArray(
+                        new JObject { ["reference"] = "good", ["layer"] = "first", ["title"] = "Good" },
+                        new JObject { ["reference"] = "bad", ["layer"] = "missing", ["title"] = "Bad" })
+                }
+            };
+
+            var failed = ArchitectorMcpEditTool.HandleCommand(repository, aiWork, request) as ErrorResponse;
+
+            Assert.That(failed?.Code, Is.EqualTo("validation_failed"));
+            Assert.That(JObject.FromObject(failed.Data)["operation"]?.Value<string>(), Is.EqualTo("nodes[1]"));
+        }
+
+        [Test]
         public void AgentApprovalWaitsForTheUserUnlessTheModeAllowsIt()
         {
             var layerId = repository.CreateLayer(string.Empty, "Draft");

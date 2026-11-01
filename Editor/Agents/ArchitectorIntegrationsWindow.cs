@@ -20,6 +20,9 @@ namespace Architector.Editor.Agents
         private bool installing;
         private string installError;
         private bool manualSetupExpanded;
+        private bool setupExpanded = true;
+        private IReadOnlyList<ArchitectorSetupItem> setupItems;
+        private ArchitectorTypeIndex typeIndex;
         private Request packageRequest;
         private string packageError;
         private readonly Dictionary<string, bool> expanded = new(StringComparer.Ordinal);
@@ -51,6 +54,7 @@ namespace Architector.Editor.Agents
                 return;
             repository = session.Repository;
             aiWork = session.AiWork;
+            typeIndex = session.TypeIndex;
             repository.Changed += OnChanged;
             foreach (var client in ArchitectorMcpClient.All)
                 RefreshClient(client);
@@ -66,6 +70,7 @@ namespace Architector.Editor.Agents
         private void OnChanged()
         {
             probes.Clear();
+            setupItems = null;
             Repaint();
         }
 
@@ -107,6 +112,7 @@ namespace Architector.Editor.Agents
                 if (!string.IsNullOrEmpty(packageError))
                     EditorGUILayout.HelpBox(packageError, MessageType.Error);
                 EditorGUILayout.Space(6f);
+                DrawSetupCheck();
                 foreach (var descriptor in ArchitectorAgentIntegrationRegistry.Descriptors)
                 {
                     var open = !expanded.TryGetValue(descriptor.id, out var known) || known;
@@ -126,6 +132,25 @@ namespace Architector.Editor.Agents
                 }
             }
             EditorGUILayout.EndScrollView();
+        }
+
+        private void DrawSetupCheck()
+        {
+            using var box = new ArchitectorFoldoutBox("Setup Check", ref setupExpanded);
+            if (!box.Expanded)
+                return;
+            setupItems ??= ArchitectorSetupCheck.Run(repository, typeIndex);
+            foreach (var item in setupItems)
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    var icon = EditorGUIUtility.IconContent(item.Passed ? "TestPassed" : "console.warnicon.sml").image;
+                    GUILayout.Label(new GUIContent(item.Name, icon), GUILayout.Width(170f), GUILayout.Height(18f));
+                    GUILayout.Label(item.Details, EditorStyles.wordWrappedMiniLabel);
+                }
+            }
+            if (GUILayout.Button("Check Again", EditorStyles.miniButton, GUILayout.Width(100f)))
+                setupItems = null;
         }
 
         private void DrawOptionalModes()

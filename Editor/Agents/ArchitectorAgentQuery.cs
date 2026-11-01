@@ -7,6 +7,8 @@ namespace Architector.Editor.Agents
 {
     public static class ArchitectorAgentQuery
     {
+        private const int MaxCandidates = 5;
+
         private sealed class Parameters
         {
             public string action { get; set; }
@@ -18,6 +20,16 @@ namespace Architector.Editor.Agents
             public int? limit { get; set; }
 
             public bool? include_layout { get; set; }
+
+            public string node { get; set; }
+
+            public string to { get; set; }
+
+            public string direction { get; set; }
+
+            public string detail { get; set; }
+
+            public int? offset { get; set; }
         }
 
         public static ArchitectorAgentResult Handle(
@@ -54,7 +66,15 @@ namespace Architector.Editor.Agents
                     case "group_contents":
                         return GroupContents(repository, parameters.target);
                     case "layer_graph":
-                        return LayerGraph(repository, parameters.target, parameters.include_layout == true);
+                        return LayerGraph(repository, parameters.target, parameters.include_layout == true, parameters.detail);
+                    case "node":
+                        return NodeDetails(repository, parameters.target, parameters.node);
+                    case "relationships":
+                        return Relationships(repository, parameters.target, parameters.node, parameters.direction, parameters.limit ?? 50, parameters.offset ?? 0);
+                    case "dependency_path":
+                        return DependencyPath(repository, parameters.target, parameters.to);
+                    case "setup_check":
+                        return WithTypeIndex(repository, typeIndex, index => SetupCheck(repository, index));
                     case "approval_status":
                         return ApprovalStatus(repository, parameters.target, parameters.limit ?? 100);
                     case "baseline_diff":
@@ -62,17 +82,17 @@ namespace Architector.Editor.Agents
                     case "conformance":
                         return WithTypeIndex(repository, typeIndex, index => Conformance(repository, index, parameters.target, parameters.limit ?? 20));
                     case "find":
-                        return Find(repository, parameters.query, parameters.limit ?? 20);
+                        return Find(repository, parameters.query, parameters.limit ?? 20, parameters.offset ?? 0);
                     case "type_search":
-                        return WithTypeIndex(repository, typeIndex, index => TypeSearch(repository, index, parameters.query, parameters.limit ?? 20));
+                        return WithTypeIndex(repository, typeIndex, index => TypeSearch(repository, index, parameters.query, parameters.limit ?? 20, parameters.offset ?? 0));
                     case "type_contract":
-                        return WithTypeIndex(repository, typeIndex, index => TypeContract(repository, index, parameters.target, parameters.query, parameters.limit ?? 100));
+                        return WithTypeIndex(repository, typeIndex, index => TypeContract(repository, index, parameters.target, parameters.query, parameters.limit ?? 100, parameters.offset ?? 0));
                     case "validate":
                         return Validation(repository);
                     default:
                         return ArchitectorAgentResult.Fail("unsupported_action", new
                         {
-                            message = "Valid actions: capabilities, work_status, project_summary, group_contents, layer_graph, approval_status, baseline_diff, conformance, find, type_search, type_contract, validate."
+                            message = "Valid actions: capabilities, work_status, project_summary, group_contents, layer_graph, node, relationships, dependency_path, setup_check, approval_status, baseline_diff, conformance, find, type_search, type_contract, validate."
                         });
                 }
             }
@@ -117,8 +137,8 @@ namespace Architector.Editor.Agents
                 workflow_rule = ArchitectorAgentPreferences.Current.Mode.AgentRule,
                 agent_may_approve = ArchitectorAgentPreferences.Current.Mode.AgentMayApprove,
                 window_locking = ArchitectorAgentPreferences.Current.LockWindowsDuringAgentWork,
-                query_actions = new[] { "capabilities", "work_status", "project_summary", "group_contents", "layer_graph", "approval_status", "baseline_diff", "conformance", "find", "type_search", "type_contract", "validate" },
-                edit_actions = new[] { "begin_work", "resume_work", "end_work", "approve_layers", "revoke_approvals", "revert_to_approved", "dry_run", "apply", "dry_run_plan", "apply_plan", "validate_external", "reload_external" },
+                query_actions = new[] { "capabilities", "work_status", "project_summary", "group_contents", "layer_graph", "node", "relationships", "dependency_path", "setup_check", "approval_status", "baseline_diff", "conformance", "find", "type_search", "type_contract", "validate" },
+                edit_actions = new[] { "begin_work", "resume_work", "end_work", "approve_layers", "revoke_approvals", "revert_to_approved", "dry_run", "apply", "dry_run_plan", "apply_plan", "arrange_layer", "relink_node", "validate_external", "reload_external" },
                 relationship_kinds = ArchitectorEdgeKinds.All,
                 semantic_plan = new
                 {
@@ -152,6 +172,10 @@ namespace Architector.Editor.Agents
                         "type_contract hides framework members and interface declarations the type implements itself; pass query to filter members by declaration text, which also includes framework members.",
                         "Fill a node responsibility (one line, at most 240 characters) when its role is not obvious from the name; it explains the node and does not affect approval.",
                         "Raw dry_run/apply documents use the storage layout: architector.project.json, Groups/<id>.group.json, Layers/<id>.layer.json (header, own nodes and intra-layer edges), Layouts/<id>.layout.json and Links/<pair-id>.link.json (both Portal endpoints and cross-layer relationships). Prefer semantic plans.",
+                        "Prefer narrow reads: layer_graph with detail=summary omits members, node takes target (layer) and node (ID or title), relationships takes target, optional node and direction=in|out|both, dependency_path takes target and to (layers). find, type_search, type_contract and relationships take offset and report next_offset when more results exist.",
+                        "arrange_layer takes target and optional nodes and centers (node IDs). relink_node takes target, node and type_key, keeps the node ID and relationships, and reports dropped_members. Both need expected_revision and work_token.",
+                        "setup_check reports whether source roots, indexed types, the server, the bridge and Run In Background are ready.",
+                        "A failed semantic plan reports operation, for example edges[3], when the failure belongs to one plan item. An unknown or ambiguous layer returns candidates.",
                         "Parent groups must exist or appear before their children.",
                         "A cross-layer edge creates the Portal pair between its layers when it is missing, and deleting the last relationship between two layers removes the pair. portals is optional: it only sets the position of a pair, new or existing, and a pair left without relationships is removed.",
                         "Nodes and portals are placed with normal grid and collision rules.",
@@ -203,11 +227,188 @@ namespace Architector.Editor.Agents
             });
         }
 
-        private static object LayerGraph(ArchitectorRepository repository, string target, bool includeLayout)
+        private static object NodeDetails(ArchitectorRepository repository, string target, string nodeReference)
         {
             var layer = ResolveLayer(repository, target);
             if (layer == null)
-                return ArchitectorAgentResult.Fail("layer_not_found", new { target });
+                return LayerFailure(repository, target);
+            var documents = repository.LoadLayer(layer.id);
+            var node = FindNode(documents, nodeReference);
+            if (node == null)
+                return NodeFailure(documents, target, nodeReference);
+            var edges = repository.GetRelationshipsForLayer(layer.id)
+                .Where(edge => edge.sourceNodeId == node.id || edge.targetNodeId == node.id)
+                .ToArray();
+            return ArchitectorAgentResult.Ok("Architector node.", new
+            {
+                revision = repository.Revision,
+                layer = new { layer.id, layer.name },
+                node = new
+                {
+                    node.id,
+                    node.title,
+                    node.responsibility,
+                    node.kind,
+                    type_mode = node.type?.mode ?? "none",
+                    type_name = FullTypeName(node.type),
+                    base_type = TypeReference(node.type?.baseType),
+                    interfaces = (node.type?.interfaces ?? new List<ArchitectorTypeReferenceRecord>()).Select(TypeReference).ToArray(),
+                    members = node.members.Select(member => new { member.id, member.kind, member.declaration }).ToArray()
+                },
+                incoming = edges.Where(edge => edge.targetNodeId == node.id).Select(edge => EdgeView(repository, edge)).ToArray(),
+                outgoing = edges.Where(edge => edge.sourceNodeId == node.id).Select(edge => EdgeView(repository, edge)).ToArray()
+            });
+        }
+
+        private static object Relationships(
+            ArchitectorRepository repository,
+            string target,
+            string nodeReference,
+            string direction,
+            int requestedLimit,
+            int requestedOffset)
+        {
+            var layer = ResolveLayer(repository, target);
+            if (layer == null)
+                return LayerFailure(repository, target);
+            var documents = repository.LoadLayer(layer.id);
+            var node = string.IsNullOrWhiteSpace(nodeReference) ? null : FindNode(documents, nodeReference);
+            if (!string.IsNullOrWhiteSpace(nodeReference) && node == null)
+                return NodeFailure(documents, target, nodeReference);
+            var mode = direction?.Trim().ToLowerInvariant() ?? "both";
+            var edges = repository.GetRelationshipsForLayer(layer.id).Where(edge =>
+            {
+                var outgoing = node != null ? edge.sourceNodeId == node.id : edge.sourceLayerId == layer.id;
+                var incoming = node != null ? edge.targetNodeId == node.id : edge.targetLayerId == layer.id;
+                return mode == "out" ? outgoing : mode == "in" ? incoming : outgoing || incoming;
+            }).ToArray();
+            var limit = Math.Max(1, Math.Min(200, requestedLimit));
+            var offset = Math.Max(0, requestedOffset);
+            return ArchitectorAgentResult.Ok("Architector relationships.", new
+            {
+                revision = repository.Revision,
+                total = edges.Length,
+                relationships = edges.Skip(offset).Take(limit).Select(edge => EdgeView(repository, edge)).ToArray(),
+                next_offset = offset + limit < edges.Length ? offset + limit : (int?)null
+            });
+        }
+
+        private static object DependencyPath(ArchitectorRepository repository, string target, string to)
+        {
+            var source = ResolveLayer(repository, target);
+            if (source == null)
+                return LayerFailure(repository, target);
+            var destination = ResolveLayer(repository, to);
+            if (destination == null)
+                return LayerFailure(repository, to);
+            var edges = repository.Project.layers
+                .SelectMany(layer => repository.LoadLayer(layer.id).semantic.edges)
+                .Where(edge => edge.kind == ArchitectorEdgeKinds.Dependency && edge.sourceLayerId != edge.targetLayerId)
+                .ToLookup(edge => edge.sourceLayerId, StringComparer.Ordinal);
+            var previous = new Dictionary<string, ArchitectorEdgeRecord>(StringComparer.Ordinal);
+            var visited = new HashSet<string>(StringComparer.Ordinal) { source.id };
+            var pending = new Queue<string>();
+            pending.Enqueue(source.id);
+            while (pending.Count > 0 && !visited.Contains(destination.id))
+            {
+                foreach (var edge in edges[pending.Dequeue()])
+                {
+                    if (!visited.Add(edge.targetLayerId))
+                        continue;
+                    previous[edge.targetLayerId] = edge;
+                    pending.Enqueue(edge.targetLayerId);
+                }
+            }
+            if (!visited.Contains(destination.id))
+                return ArchitectorAgentResult.Ok("No dependency path exists between these layers.", new
+                {
+                    revision = repository.Revision,
+                    connected = false
+                });
+
+            var path = new List<ArchitectorEdgeRecord>();
+            for (var current = destination.id; current != source.id; current = previous[current].sourceLayerId)
+                path.Add(previous[current]);
+            path.Reverse();
+            return ArchitectorAgentResult.Ok("Dependency path between layers.", new
+            {
+                revision = repository.Revision,
+                connected = true,
+                steps = path.Select(edge => EdgeView(repository, edge)).ToArray()
+            });
+        }
+
+        private static object SetupCheck(ArchitectorRepository repository, ArchitectorTypeIndex typeIndex)
+        {
+            var items = ArchitectorSetupCheck.Run(repository, typeIndex);
+            return ArchitectorAgentResult.Ok("Architector setup check.", new
+            {
+                ready = items.All(item => item.Passed),
+                items = items.Select(item => new { name = item.Name, passed = item.Passed, details = item.Details }).ToArray()
+            });
+        }
+
+        private static object EdgeView(ArchitectorRepository repository, ArchitectorEdgeRecord edge)
+        {
+            return new
+            {
+                edge.id,
+                edge.kind,
+                edge.label,
+                source_layer = repository.GetEntryPath(edge.sourceLayerId),
+                source = repository.LoadLayer(edge.sourceLayerId).semantic.nodes.First(node => node.id == edge.sourceNodeId).title,
+                target_layer = repository.GetEntryPath(edge.targetLayerId),
+                target = repository.LoadLayer(edge.targetLayerId).semantic.nodes.First(node => node.id == edge.targetNodeId).title
+            };
+        }
+
+        private static ArchitectorNodeRecord FindNode(ArchitectorLayerDocuments documents, string reference)
+        {
+            var nodes = documents.semantic.nodes;
+            return nodes.FirstOrDefault(node => node.id == reference)
+                   ?? SingleOrNull(nodes.Where(node => string.Equals(node.title, reference, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        private static object NodeFailure(ArchitectorLayerDocuments documents, string target, string reference)
+        {
+            return ArchitectorAgentResult.Fail("node_not_found", new
+            {
+                target,
+                node = reference,
+                candidates = documents.semantic.nodes
+                    .Where(node => !string.IsNullOrEmpty(reference) && node.title.IndexOf(reference, StringComparison.OrdinalIgnoreCase) >= 0)
+                    .Select(node => new { node.id, node.title })
+                    .Take(MaxCandidates)
+                    .ToArray()
+            });
+        }
+
+        internal static ArchitectorAgentResult LayerFailure(ArchitectorRepository repository, string target)
+        {
+            var text = target?.Trim() ?? string.Empty;
+            var exact = repository.Project.layers
+                .Where(layer => string.Equals(layer.name, text, StringComparison.OrdinalIgnoreCase))
+                .Select(layer => repository.GetEntryPath(layer.id))
+                .ToArray();
+            if (exact.Length > 1)
+                return ArchitectorAgentResult.Fail("layer_ambiguous", new { target, candidates = exact });
+            return ArchitectorAgentResult.Fail("layer_not_found", new
+            {
+                target,
+                candidates = repository.Project.layers
+                    .Where(layer => text.Length > 0 && layer.name.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0)
+                    .Select(layer => repository.GetEntryPath(layer.id))
+                    .Take(MaxCandidates)
+                    .ToArray()
+            });
+        }
+
+        private static object LayerGraph(ArchitectorRepository repository, string target, bool includeLayout, string detail)
+        {
+            var layer = ResolveLayer(repository, target);
+            if (layer == null)
+                return LayerFailure(repository, target);
+            var summary = string.Equals(detail?.Trim(), "summary", StringComparison.OrdinalIgnoreCase);
             var documents = repository.LoadLayer(layer.id);
             var approval = repository.GetLayerApprovalStatus(layer.id);
             var layouts = documents.layout.nodes.ToDictionary(node => node.nodeId, StringComparer.Ordinal);
@@ -229,7 +430,8 @@ namespace Architector.Editor.Agents
                 base_type = TypeReference(node.type?.baseType),
                 interfaces = (node.type?.interfaces ?? new System.Collections.Generic.List<ArchitectorTypeReferenceRecord>())
                     .Select(TypeReference).ToArray(),
-                members = node.members.Select(member => new
+                member_count = node.members.Count,
+                members = summary ? null : node.members.Select(member => new
                 {
                     member.id,
                     member.kind,
@@ -287,7 +489,7 @@ namespace Architector.Editor.Agents
         {
             var layer = ResolveLayer(repository, target);
             if (layer == null)
-                return ArchitectorAgentResult.Fail("layer_not_found", new { target });
+                return LayerFailure(repository, target);
             var status = repository.GetLayerApprovalStatus(layer.id);
             return ArchitectorAgentResult.Ok("Changes since the approved baseline.", new
             {
@@ -458,11 +660,13 @@ namespace Architector.Editor.Agents
             return ids;
         }
 
-        private static object Find(ArchitectorRepository repository, string query, int requestedLimit)
+        private static object Find(ArchitectorRepository repository, string query, int requestedLimit, int requestedOffset)
         {
             if (string.IsNullOrWhiteSpace(query))
                 return ArchitectorAgentResult.Fail("query_required");
             var limit = Math.Max(1, Math.Min(100, requestedLimit));
+            var offset = Math.Max(0, requestedOffset);
+            var wanted = offset + limit + 1;
             var matches = new List<object>();
             bool Matches(string value) => value?.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
 
@@ -487,7 +691,7 @@ namespace Architector.Editor.Agents
                         layer.purpose,
                         matched_node_types = matchingNodes.SelectMany(NodeTypeNames).Distinct().ToArray()
                     });
-                if (matches.Count >= limit)
+                if (matches.Count >= wanted)
                     break;
                 foreach (var node in semantic.nodes.Where(node => Matches(node.title)))
                 {
@@ -500,10 +704,10 @@ namespace Architector.Editor.Agents
                         layer_id = layer.id,
                         layer_name = layer.name
                     });
-                    if (matches.Count >= limit)
+                    if (matches.Count >= wanted)
                         break;
                 }
-                if (matches.Count >= limit)
+                if (matches.Count >= wanted)
                     break;
             }
 
@@ -512,8 +716,8 @@ namespace Architector.Editor.Agents
                 revision = repository.Revision,
                 query,
                 limit,
-                results = matches.Take(limit).ToArray(),
-                truncated = matches.Count >= limit
+                results = matches.Skip(offset).Take(limit).ToArray(),
+                next_offset = matches.Count > offset + limit ? offset + limit : (int?)null
             });
         }
 
@@ -521,12 +725,14 @@ namespace Architector.Editor.Agents
             ArchitectorRepository repository,
             ArchitectorTypeIndex typeIndex,
             string query,
-            int requestedLimit)
+            int requestedLimit,
+            int requestedOffset)
         {
             if (string.IsNullOrWhiteSpace(query))
                 return ArchitectorAgentResult.Fail("query_required");
             var text = query.Trim();
             var limit = Math.Max(1, Math.Min(100, requestedLimit));
+            var offset = Math.Max(0, requestedOffset);
             var occurrences = new Dictionary<string, List<object>>(StringComparer.Ordinal);
             foreach (var layer in repository.Project.layers)
             {
@@ -547,6 +753,7 @@ namespace Architector.Editor.Agents
                 .OrderBy(item => item.rank)
                 .ThenBy(item => IsToolingAssembly(item.type.AssemblyName) ? 1 : 0)
                 .ThenBy(item => item.type.FullDisplayName, StringComparer.OrdinalIgnoreCase)
+                .Skip(offset)
                 .Take(limit + 1)
                 .ToArray();
             var results = ranked
@@ -565,7 +772,7 @@ namespace Architector.Editor.Agents
                 query = text,
                 limit,
                 results,
-                truncated = ranked.Length > limit
+                next_offset = ranked.Length > limit ? offset + limit : (int?)null
             });
         }
 
@@ -586,7 +793,8 @@ namespace Architector.Editor.Agents
             ArchitectorTypeIndex typeIndex,
             string target,
             string memberQuery,
-            int requestedLimit)
+            int requestedLimit,
+            int requestedOffset)
         {
             if (string.IsNullOrWhiteSpace(target))
                 return ArchitectorAgentResult.Fail("target_required");
@@ -622,7 +830,8 @@ namespace Architector.Editor.Agents
                                      && !(member.IsInterfaceMember && ownSignatures.Contains(MemberSignature(member))))
                     .ToArray();
             }
-            var members = visible.Take(limit).Select(member => new
+            var offset = Math.Max(0, requestedOffset);
+            var members = visible.Skip(offset).Take(limit).Select(member => new
             {
                 symbol_key = member.SymbolKey,
                 kind = member.Kind,
@@ -641,7 +850,7 @@ namespace Architector.Editor.Agents
                 members,
                 total_member_count = allMembers.Count,
                 hidden_member_count = allMembers.Count - visible.Count,
-                truncated = visible.Count > members.Length
+                next_offset = visible.Count > offset + members.Length ? offset + members.Length : (int?)null
             });
         }
 
@@ -727,7 +936,7 @@ namespace Architector.Editor.Agents
                        string.Equals(group.name, target, StringComparison.OrdinalIgnoreCase)));
         }
 
-        private static ArchitectorLayerRecord ResolveLayer(ArchitectorRepository repository, string target)
+        internal static ArchitectorLayerRecord ResolveLayer(ArchitectorRepository repository, string target)
         {
             if (string.IsNullOrWhiteSpace(target))
                 return null;

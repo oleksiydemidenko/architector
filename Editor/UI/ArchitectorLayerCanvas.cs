@@ -46,6 +46,7 @@ namespace Architector.Editor
         private int currentRepositoryRevision;
         private Vector2 pan = new(48f, 48f);
         private float zoom = 1f;
+        private Vector2 canvasSize;
         private bool draggingNode;
         private Vector2 dragStartMouse;
         private readonly Dictionary<string, Vector2> dragStartWorldByNode = new(StringComparer.Ordinal);
@@ -107,6 +108,7 @@ namespace Architector.Editor
         {
             if (layer == null || rect.width <= 1f || rect.height <= 1f)
                 return;
+            canvasSize = rect.size;
             if (layerId != layer.id)
                 ResetForLayer(layer.id, userState);
 
@@ -524,7 +526,24 @@ namespace Architector.Editor
                 menu.AddItem(new GUIContent(selectedForDelete.Length == 1 ? "Clear Relationships" : $"Clear Relationships ({selectedForDelete.Length})"), false,
                     () => execute(() => repository.ClearNodeEdges(layerId, selectedForDelete)));
                 menu.AddSeparator(string.Empty);
-                AddArrangeItems(menu, repository, documents, execute, selectedForDelete);
+                AddArrangeItems(menu, repository, documents, userState, execute, requestRepaint, selectedForDelete);
+                if (selectedForDelete.Length == 1)
+                {
+                    var relinkNode = documents.semantic.nodes.First(node => node.id == selectedForDelete[0]);
+                    if (string.Equals(relinkNode.type?.mode, "linked", StringComparison.Ordinal))
+                    {
+                        menu.AddItem(new GUIContent("Relink Type"), false, () =>
+                        {
+                            var available = AvailableTypes(typeIndex, documents.semantic);
+                            EditorApplication.delayCall += () =>
+                                ArchitectorTypePickerWindow.Show(pickerScreenPosition, available, indexedType =>
+                                {
+                                    var record = new ArchitectorTypeRecord { mode = "linked", assemblyName = indexedType.AssemblyName, metadataName = indexedType.MetadataName };
+                                    execute(() => repository.RelinkNode(layerId, relinkNode.id, indexedType, typeIndex.GetMembers(record).ToArray()));
+                                });
+                        });
+                    }
+                }
                 menu.AddSeparator(string.Empty);
                 if (selectedForDelete.Length == 1)
                 {
@@ -573,7 +592,7 @@ namespace Architector.Editor
             else
             {
                 selectedEdgeId = string.Empty;
-                AddArrangeItems(menu, repository, documents, execute, selectedNodeIds.ToArray());
+                AddArrangeItems(menu, repository, documents, userState, execute, requestRepaint, selectedNodeIds.ToArray());
                 menu.AddSeparator(string.Empty);
                 var worldAtMouse = ScreenToWorld(mouse);
                 if (clipboard.HasContent)
@@ -618,14 +637,23 @@ namespace Architector.Editor
             GenericMenu menu,
             ArchitectorRepository repository,
             ArchitectorLayerDocuments documents,
+            ArchitectorUserStateStore userState,
             Action<Action> execute,
+            Action requestRepaint,
             IReadOnlyCollection<string> selected)
         {
             var allNodes = documents.semantic.nodes.Select(node => node.id).ToArray();
+            menu.AddItem(new GUIContent("Focus View"), false,
+                () => FocusView(repository, selected.Count > 0 ? selected : allNodes, userState, requestRepaint));
+            void Arrange(IReadOnlyCollection<string> nodes, IReadOnlyCollection<string> centers)
+            {
+                execute(() => repository.ArrangeNodes(layerId, nodes, centers));
+                FocusView(repository, nodes, userState, requestRepaint);
+            }
+
             if (selected.Count == 0)
             {
-                menu.AddItem(new GUIContent("Arrange"), false,
-                    () => ArrangeNodes(repository, documents, execute, allNodes, null));
+                menu.AddItem(new GUIContent("Arrange"), false, () => Arrange(allNodes, null));
                 return;
             }
 
@@ -633,37 +661,33 @@ namespace Architector.Editor
                 .Where(edge => selected.Contains(edge.sourceNodeId) || selected.Contains(edge.targetNodeId))
                 .SelectMany(edge => new[] { edge.sourceNodeId, edge.targetNodeId });
             var arranged = selected.Count == 1 ? selected.Concat(neighbours).Distinct().ToArray() : selected.ToArray();
-            menu.AddItem(new GUIContent("Arrange"), false,
-                () => ArrangeNodes(repository, documents, execute, arranged, selected.Count == 1 ? selected : null));
-            menu.AddItem(new GUIContent("Arrange As Centers"), false,
-                () => ArrangeNodes(repository, documents, execute, allNodes, selected));
+            menu.AddItem(new GUIContent("Arrange"), false, () => Arrange(arranged, selected.Count == 1 ? selected : null));
+            menu.AddItem(new GUIContent("Arrange As Centers"), false, () => Arrange(allNodes, selected));
         }
 
-        private void ArrangeNodes(
+        private void FocusView(
             ArchitectorRepository repository,
-            ArchitectorLayerDocuments documents,
-            Action<Action> execute,
             IReadOnlyCollection<string> nodeIds,
-            IReadOnlyCollection<string> centers)
+            ArchitectorUserStateStore userState,
+            Action requestRepaint)
         {
-            var arranged = new HashSet<string>(nodeIds, StringComparer.Ordinal);
-            var portals = new HashSet<string>(documents.semantic.nodes.Where(IsPortal).Select(node => node.id), StringComparer.Ordinal);
-            var nodes = documents.layout.nodes
-                .Where(node => arranged.Contains(node.nodeId))
-                .Select(node => new ArchitectorArrangeNode(node.nodeId, node.x, node.y, node.width, node.height, portals.Contains(node.nodeId)))
-                .ToArray();
-            var edges = documents.semantic.edges
-                .Select(edge => new ArchitectorArrangeEdge(edge.sourceNodeId, edge.targetNodeId))
-                .ToArray();
-            var geometry = repository.Settings.geometry;
-            var positions = ArchitectorGraphArranger.Arrange(
-                nodes,
-                edges,
-                geometry.minimumNodeGap,
-                geometry.snapToGrid ? geometry.gridSize : 1f,
-                repository.Settings.arrange.maxGroupRelationships,
-                centers);
-            execute(() => repository.MoveNodes(layerId, positions, "Arrange Nodes"));
+            const float margin = 48f;
+            var ids = new HashSet<string>(nodeIds, StringComparer.Ordinal);
+            var nodes = repository.LoadLayer(layerId).layout.nodes.Where(node => ids.Contains(node.nodeId)).ToArray();
+            if (nodes.Length == 0)
+                return;
+            var bounds = Rect.MinMaxRect(
+                nodes.Min(node => node.x),
+                nodes.Min(node => node.y),
+                nodes.Max(node => node.x + node.width),
+                nodes.Max(node => node.y + node.height));
+            var fit = Mathf.Min(
+                (canvasSize.x - margin * 2f) / bounds.width,
+                (canvasSize.y - margin * 2f) / bounds.height);
+            zoom = Mathf.Clamp(Mathf.Min(fit, 1f), MinimumZoom, MaximumZoom);
+            pan = canvasSize * 0.5f - bounds.center * zoom;
+            userState.SaveLayerView(viewId, layerId, pan.x, pan.y, zoom);
+            requestRepaint?.Invoke();
         }
 
         private static IReadOnlyList<ArchitectorIndexedType> AvailableTypes(

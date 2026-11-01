@@ -283,6 +283,8 @@ namespace Architector.Editor
                 return;
             if (GUILayout.Button("Open Architector Integrations"))
                 OpenIntegrations();
+            if (GUILayout.Button("Open Architector Review"))
+                EditorApplication.delayCall += ArchitectorReviewWindow.Open;
             if (GUILayout.Button("Reveal Settings JSON"))
                 EditorUtility.RevealInFinder(repository.Paths.SettingsPath);
         }

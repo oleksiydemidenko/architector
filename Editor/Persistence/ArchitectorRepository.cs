@@ -751,6 +751,65 @@ namespace Architector.Editor
             });
         }
 
+        public void ArrangeNodes(
+            string layerId,
+            IReadOnlyCollection<string> nodeIds = null,
+            IReadOnlyCollection<string> centers = null)
+        {
+            var view = LoadLayerView(layerId);
+            var arranged = nodeIds == null ? null : new HashSet<string>(nodeIds, StringComparer.Ordinal);
+            var portals = view.semantic.nodes.Where(IsPortal).Select(node => node.id).ToHashSet(StringComparer.Ordinal);
+            var nodes = view.layout.nodes
+                .Where(node => arranged == null || arranged.Contains(node.nodeId))
+                .Select(node => new ArchitectorArrangeNode(node.nodeId, node.x, node.y, node.width, node.height, portals.Contains(node.nodeId)))
+                .ToArray();
+            if (nodes.Length == 0)
+                return;
+            var edges = view.semantic.edges
+                .Select(edge => new ArchitectorArrangeEdge(edge.sourceNodeId, edge.targetNodeId))
+                .ToArray();
+            var positions = ArchitectorGraphArranger.Arrange(
+                nodes,
+                edges,
+                Settings.geometry.minimumNodeGap,
+                Settings.geometry.snapToGrid ? Settings.geometry.gridSize : 1f,
+                Settings.arrange.maxGroupRelationships,
+                centers);
+            MoveNodes(layerId, positions, "Arrange Nodes");
+        }
+
+        public int RelinkNode(
+            string layerId,
+            string nodeId,
+            ArchitectorIndexedType indexedType,
+            IReadOnlyCollection<ArchitectorIndexedMember> availableMembers)
+        {
+            if (indexedType == null)
+                throw new ArgumentNullException(nameof(indexedType));
+            var layer = FindLayer(layerId) ?? throw new ArchitectorDataException($"Layer '{layerId}' does not exist.");
+            var dropped = 0;
+            ExecuteLayerChange("Relink Type", layer, (semantic, _) =>
+            {
+                var node = semantic.nodes.FirstOrDefault(candidate => candidate.id == nodeId)
+                           ?? throw new ArchitectorDataException($"Node '{nodeId}' does not exist in layer '{layer.name}'.");
+                if (!string.Equals(node.type?.mode, "linked", StringComparison.Ordinal))
+                    throw new ArchitectorDataException("Only a Linked Type node can be relinked.");
+                EnsureLinkedTypeIsUnique(semantic, indexedType, nodeId);
+                node.type = CreateLinkedNodeRecord(nodeId, node.title, indexedType).type;
+                var members = (node.members ?? new List<ArchitectorMemberRecord>())
+                    .Select(member => (member, match: availableMembers.FirstOrDefault(candidate =>
+                        string.Equals(candidate.Declaration, member.declaration, StringComparison.Ordinal))))
+                    .ToArray();
+                dropped = members.Count(pair => pair.match == null);
+                node.members = members.Where(pair => pair.match != null).Select(pair =>
+                {
+                    pair.member.symbolKey = pair.match.SymbolKey;
+                    return pair.member;
+                }).ToList();
+            });
+            return dropped;
+        }
+
         public void DeleteNode(string layerId, string nodeId)
         {
             DeleteNodes(layerId, new[] { nodeId });

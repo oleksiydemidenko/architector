@@ -103,8 +103,36 @@ public static class McpServer
                 }, "queries")),
             Tool("architector_digest", "Read the approved architecture. Without layer it lists the approved layers; with layer it returns that layer's section. Works without Unity.",
                 Schema(new JsonObject { ["layer"] = new JsonObject { ["type"] = "string", ["description"] = "Layer path, for example Core/Player/Movement." } })),
-            Tool("architector_query", "Read Architector data from the open Unity Editor. Pass action and its parameters. Actions: capabilities, work_status, project_summary, group_contents, layer_graph, approval_status, baseline_diff, conformance, find, type_search, type_contract, validate. Parameters: target, query, limit, include_layout.", Open()),
-            Tool("architector_edit", "Change the architecture in the open Unity Editor. Pass action and its parameters. Actions: begin_work, resume_work, end_work, approve_layers, revoke_approvals, revert_to_approved, dry_run, apply, dry_run_plan, apply_plan, validate_external, reload_external. Call architector_query with action capabilities for the contract.", Open()));
+            Tool("architector_query", "Read Architector data from the open Unity Editor. Prefer the narrow actions node, relationships and dependency_path, or layer_graph with detail=summary, over a full layer_graph.", ActionSchema(
+                new[] { "capabilities", "work_status", "project_summary", "group_contents", "layer_graph", "node", "relationships", "dependency_path", "setup_check", "approval_status", "baseline_diff", "conformance", "find", "type_search", "type_contract", "validate" },
+                new JsonObject
+                {
+                    ["target"] = TextParameter("Layer or group ID or path; a type for type_contract."),
+                    ["node"] = TextParameter("Node ID or title in the target layer."),
+                    ["to"] = TextParameter("Destination layer for dependency_path."),
+                    ["query"] = TextParameter("Search text."),
+                    ["direction"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("in", "out", "both") },
+                    ["detail"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("full", "summary") },
+                    ["limit"] = new JsonObject { ["type"] = "integer" },
+                    ["offset"] = new JsonObject { ["type"] = "integer", ["description"] = "Use next_offset from the previous result." },
+                    ["include_layout"] = new JsonObject { ["type"] = "boolean" }
+                })),
+            Tool("architector_edit", "Change the architecture in the open Unity Editor. Call architector_query with action capabilities for the plan format and rules.", ActionSchema(
+                new[] { "begin_work", "resume_work", "end_work", "approve_layers", "revoke_approvals", "revert_to_approved", "dry_run", "apply", "dry_run_plan", "apply_plan", "arrange_layer", "relink_node", "validate_external", "reload_external" },
+                new JsonObject
+                {
+                    ["expected_revision"] = new JsonObject { ["type"] = "integer" },
+                    ["work_token"] = TextParameter("Token returned by begin_work."),
+                    ["work_label"] = TextParameter("What this work session does."),
+                    ["plan"] = new JsonObject { ["type"] = "object", ["description"] = "A semantic plan, or {\"plan_token\": \"...\"} from dry_run_plan." },
+                    ["layers"] = new JsonObject { ["type"] = "array", ["items"] = TextParameter("Layer ID.") },
+                    ["approve_changes"] = new JsonObject { ["type"] = "boolean" },
+                    ["target"] = TextParameter("Layer ID or path for arrange_layer and relink_node."),
+                    ["node"] = TextParameter("Node ID for relink_node."),
+                    ["type_key"] = TextParameter("Indexed type key for relink_node."),
+                    ["nodes"] = new JsonObject { ["type"] = "array", ["items"] = TextParameter("Node ID.") },
+                    ["centers"] = new JsonObject { ["type"] = "array", ["items"] = TextParameter("Node ID.") }
+                })));
     }
 
     private static JsonObject Tool(string name, string description, JsonObject schema)
@@ -120,11 +148,21 @@ public static class McpServer
         return schema;
     }
 
-    private static JsonObject Open()
+    private static JsonObject ActionSchema(string[] actions, JsonObject properties)
     {
-        var schema = Schema(new JsonObject { ["action"] = new JsonObject { ["type"] = "string" } }, "action");
+        properties["action"] = new JsonObject
+        {
+            ["type"] = "string",
+            ["enum"] = new JsonArray(actions.Select(action => (JsonNode?)JsonValue.Create(action)).ToArray())
+        };
+        var schema = Schema(properties, "action");
         schema["additionalProperties"] = true;
         return schema;
+    }
+
+    private static JsonObject TextParameter(string description)
+    {
+        return new JsonObject { ["type"] = "string", ["description"] = description };
     }
 
     private static JsonNode Call(string name, JsonNode? arguments)

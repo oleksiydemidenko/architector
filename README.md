@@ -33,7 +33,7 @@ https://github.com/oleksiydemidenko/architector.git
 2. Open **Window > Architector > Settings** and set the source roots to index, for example `Assets/Scripts`.
 3. Create a group and a layer, then add a node and link it to a type from your project.
 4. Commit the `Architector/` folder. It belongs in version control.
-5. Open **Window > Architector > Integrations**, press **Install Server** and connect your agent. See [Agent Setup](Documentation~/AgentSetup.md) for the details.
+5. Open **Window > Architector > Integrations**, check **Setup Check**, press **Install Server** and connect your agent. See [Agent Setup](Documentation~/AgentSetup.md) for the details.
 
 ## Working Without Unity
 

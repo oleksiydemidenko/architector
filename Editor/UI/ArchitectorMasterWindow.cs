@@ -1491,6 +1491,18 @@ namespace Architector.Editor
             layerTabsScroll = Mathf.Clamp(layerTabsScroll, 0f, maximumScroll);
         }
 
+        public static void OpenLayerInMaster(string layerId)
+        {
+            Open();
+            var window = Resources.FindObjectsOfTypeAll<ArchitectorMasterWindow>()
+                .FirstOrDefault(candidate => candidate.windowMode == WindowMode.Master);
+            if (window == null)
+                return;
+            window.Focus();
+            window.OpenLayer(layerId);
+            window.Repaint();
+        }
+
         private void OpenLayer(string layerId, bool recordVisit = true, bool revealTab = true)
         {
             if (repository?.FindLayer(layerId) == null)

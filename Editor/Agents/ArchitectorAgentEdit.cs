@@ -124,6 +124,48 @@ namespace Architector.Editor.Agents
                         next_undo = repository.NextUndoName
                     });
                 }
+                if (action == "arrange_layer")
+                {
+                    var stale = CheckRevision(repository, parameters.expected_revision, true);
+                    if (stale != null)
+                        return stale;
+                    aiWork.RequireMutationToken(parameters.work_token);
+                    var layer = ArchitectorAgentQuery.ResolveLayer(repository, @params["target"]?.Value<string>());
+                    if (layer == null)
+                        return ArchitectorAgentQuery.LayerFailure(repository, @params["target"]?.Value<string>());
+                    var nodes = @params["nodes"]?.Values<string>().ToArray();
+                    var centers = @params["centers"]?.Values<string>().ToArray();
+                    repository.ArrangeNodes(layer.id, nodes, centers);
+                    return ArchitectorAgentResult.Ok("Architector layer arranged.", new { revision = repository.Revision, layer = layer.id });
+                }
+                if (action == "relink_node")
+                {
+                    var stale = CheckRevision(repository, parameters.expected_revision, true);
+                    if (stale != null)
+                        return stale;
+                    aiWork.RequireMutationToken(parameters.work_token);
+                    var layer = ArchitectorAgentQuery.ResolveLayer(repository, @params["target"]?.Value<string>());
+                    if (layer == null)
+                        return ArchitectorAgentQuery.LayerFailure(repository, @params["target"]?.Value<string>());
+                    var nodeId = @params["node"]?.Value<string>();
+                    var typeKey = @params["type_key"]?.Value<string>();
+                    var ownsRelinkIndex = typeIndex == null;
+                    typeIndex ??= new ArchitectorTypeIndex(repository);
+                    try
+                    {
+                        var indexed = typeIndex.Types.FirstOrDefault(type => string.Equals(type.Key, typeKey, StringComparison.Ordinal));
+                        if (indexed == null)
+                            return ArchitectorAgentResult.Fail("type_not_found", new { type_key = typeKey });
+                        var members = typeIndex.GetMembers(new ArchitectorTypeRecord { mode = "linked", assemblyName = indexed.AssemblyName, metadataName = indexed.MetadataName });
+                        var dropped = repository.RelinkNode(layer.id, nodeId, indexed, members.ToArray());
+                        return ArchitectorAgentResult.Ok("Architector node relinked.", new { revision = repository.Revision, dropped_members = dropped });
+                    }
+                    finally
+                    {
+                        if (ownsRelinkIndex)
+                            typeIndex.Dispose();
+                    }
+                }
                 if (action == "validate_external")
                     return Success("External Architector documents are valid.", repository, repository.ValidateExternalChanges());
                 if (action == "reload_external")
@@ -189,7 +231,7 @@ namespace Architector.Editor.Agents
                 {
                     return ArchitectorAgentResult.Fail("unsupported_action", new
                     {
-                        message = "Valid actions: begin_work, resume_work, end_work, approve_layers, revoke_approvals, revert_to_approved, dry_run, apply, dry_run_plan, apply_plan, validate_external, reload_external."
+                        message = "Valid actions: begin_work, resume_work, end_work, approve_layers, revoke_approvals, revert_to_approved, dry_run, apply, dry_run_plan, apply_plan, arrange_layer, relink_node, validate_external, reload_external."
                     });
                 }
 
@@ -223,7 +265,12 @@ namespace Architector.Editor.Agents
             }
             catch (ArchitectorDataException exception)
             {
-                return ArchitectorAgentResult.Fail("validation_failed", new { message = exception.Message, revision = repository.Revision });
+                return ArchitectorAgentResult.Fail("validation_failed", new
+                {
+                    message = exception.Message,
+                    operation = exception.Data[ArchitectorRepository.PlanOperationKey] as string,
+                    revision = repository.Revision
+                });
             }
             catch (Exception exception)
             {

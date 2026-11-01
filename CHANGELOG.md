@@ -15,6 +15,10 @@
 - Replaced **Window > Architector > MCP Server** with **Window > Architector > Integrations**, a tab next to the Architector window. It installs the server, connects Claude Code and Codex with one button and lists the optional bridges. Other Unity MCP packages now need **Add Connection**.
 - Settings groups are foldout boxes.
 - Optional workflow modes are listed in **Agent Workflow** even when they are not installed, and **Integrations** installs, turns on and removes them.
+- Added **Focus View** to the canvas context menu; Arrange also focuses its result.
+- Added the `node`, `relationships`, `dependency_path` and `setup_check` queries, `detail=summary` for `layer_graph`, and `offset` with `next_offset` for long results. `truncated` is replaced by `next_offset` in `find`, `type_search` and `type_contract`.
+- Added the `arrange_layer` and `relink_node` actions. A failed plan names the failing `operation`, and an unknown or ambiguous layer returns candidates. The MCP server lists its actions and parameters in its tool schemas.
+- Added **Relink Type** to the node context menu, a **Setup Check** in **Integrations** and **Window > Architector > Review** for approving layers in bulk.
 - Added **Arrange** to the canvas context menu: it lays a layer or the selected nodes around their most connected nodes, in groups limited by **Settings > Arrange**. **Arrange As Centers** uses the selected nodes as the centers.
 - A new relationship router: every relationship gets its own port, parallel routes run on separate tracks, corners are rounded, and routes are also rebuilt while dragging. Selected relationships are drawn above the others. The Grid Routing and High Quality Drag Routing settings are removed.
 

@@ -190,12 +190,15 @@ namespace Architector.Editor
 
     public sealed partial class ArchitectorRepository
     {
+        public const string PlanOperationKey = "plan_operation";
+        private string planOperation = string.Empty;
+
         public ArchitectorSemanticPlanResult DryRunSemanticPlan(
             ArchitectorSemanticPlan plan,
             string actionName = "Apply Semantic Plan",
             ArchitectorTypeIndex typeIndex = null)
         {
-            var candidate = BuildSemanticPlan(plan, typeIndex);
+            var candidate = BuildLocatedSemanticPlan(plan, typeIndex);
             return new ArchitectorSemanticPlanResult(CommitSemanticPlan(candidate, actionName, true), candidate.references);
         }
 
@@ -204,7 +207,7 @@ namespace Architector.Editor
             string actionName = "Apply Semantic Plan",
             ArchitectorTypeIndex typeIndex = null)
         {
-            var candidate = BuildSemanticPlan(plan, typeIndex);
+            var candidate = BuildLocatedSemanticPlan(plan, typeIndex);
             return new ArchitectorSemanticPlanResult(CommitSemanticPlan(candidate, actionName, false), candidate.references);
         }
 
@@ -225,6 +228,30 @@ namespace Architector.Editor
                 dryRun);
         }
 
+        private SemanticPlanCandidate BuildLocatedSemanticPlan(ArchitectorSemanticPlan plan, ArchitectorTypeIndex typeIndex)
+        {
+            planOperation = string.Empty;
+            try
+            {
+                return BuildSemanticPlan(plan, typeIndex);
+            }
+            catch (ArchitectorDataException exception)
+            {
+                exception.Data[PlanOperationKey] = planOperation;
+                throw;
+            }
+        }
+
+        private IEnumerable<T> Track<T>(IEnumerable<T> items, string section)
+        {
+            var index = 0;
+            foreach (var item in items ?? Array.Empty<T>())
+            {
+                planOperation = $"{section}[{index++}]";
+                yield return item;
+            }
+        }
+
         private SemanticPlanCandidate BuildSemanticPlan(
             ArchitectorSemanticPlan plan,
             ArchitectorTypeIndex typeIndex)
@@ -236,7 +263,7 @@ namespace Architector.Editor
             var references = new Dictionary<string, string>(StringComparer.Ordinal);
             var documents = new Dictionary<string, ArchitectorLayerDocuments>(StringComparer.Ordinal);
 
-            foreach (var item in plan.groups ?? new List<ArchitectorPlanGroup>())
+            foreach (var item in Track(plan.groups, "groups"))
             {
                 var reference = AddReference(references, item?.reference, "group");
                 var parentId = ResolveGroupReference(project, references, item?.parent);
@@ -251,7 +278,7 @@ namespace Architector.Editor
                 references[reference] = id;
             }
 
-            foreach (var item in plan.layers ?? new List<ArchitectorPlanLayer>())
+            foreach (var item in Track(plan.layers, "layers"))
             {
                 var reference = AddReference(references, item?.reference, "layer");
                 var parentId = ResolveGroupReference(project, references, item?.parent);
@@ -272,7 +299,7 @@ namespace Architector.Editor
                 references[reference] = id;
             }
 
-            foreach (var item in plan.nodes ?? new List<ArchitectorPlanNode>())
+            foreach (var item in Track(plan.nodes, "nodes"))
             {
                 var reference = AddReference(references, item?.reference, "node");
                 var layerId = ResolveLayerReference(project, references, item?.layer);
@@ -295,13 +322,13 @@ namespace Architector.Editor
                 references[reference] = nodeId;
             }
 
-            foreach (var item in plan.layerPurposes ?? new List<ArchitectorPlanLayerPurpose>())
+            foreach (var item in Track(plan.layerPurposes, "layerPurposes"))
             {
                 var layerId = ResolveLayerReference(project, references, item?.layer);
                 project.layers.First(layer => layer.id == layerId).purpose = item?.purpose?.Trim() ?? string.Empty;
             }
 
-            foreach (var item in plan.layerScopes ?? new List<ArchitectorPlanLayerScope>())
+            foreach (var item in Track(plan.layerScopes, "layerScopes"))
             {
                 var layerId = ResolveLayerReference(project, references, item?.layer);
                 project.layers.First(layer => layer.id == layerId).scope = new ArchitectorLayerScopeRecord
@@ -311,10 +338,10 @@ namespace Architector.Editor
                 };
             }
 
-            foreach (var item in plan.nodeContracts ?? new List<ArchitectorPlanNodeContract>())
+            foreach (var item in Track(plan.nodeContracts, "nodeContracts"))
                 ApplyPlannedNodeContract(project, references, documents, item, typeIndex);
 
-            foreach (var item in plan.portals ?? new List<ArchitectorPlanPortal>())
+            foreach (var item in Track(plan.portals, "portals"))
             {
                 var exitReference = AddReference(references, item?.exitReference, "portal exit node");
                 var entryReference = AddReference(references, item?.entryReference, "portal entry node");
@@ -335,7 +362,7 @@ namespace Architector.Editor
                 references[entryReference] = entryNodeId;
             }
 
-            foreach (var item in plan.edges ?? new List<ArchitectorPlanEdge>())
+            foreach (var item in Track(plan.edges, "edges"))
             {
                 var edgeReference = string.IsNullOrWhiteSpace(item?.reference)
                     ? string.Empty
@@ -376,11 +403,13 @@ namespace Architector.Editor
                     references[edgeReference] = edgeId;
             }
 
-            ApplyPlanRenames(project, documents, references, plan.renames);
-            ApplyPlanEntryMoves(project, references, plan.entryMoves);
-            ApplyPlanMoves(project, documents, references, plan.moves);
-            ApplyPlanEdgeChanges(project, documents, references, plan.edgeChanges);
+            ApplyPlanRenames(project, documents, references, Track(plan.renames, "renames"));
+            ApplyPlanEntryMoves(project, references, Track(plan.entryMoves, "entryMoves"));
+            ApplyPlanMoves(project, documents, references, Track(plan.moves, "moves"));
+            ApplyPlanEdgeChanges(project, documents, references, Track(plan.edgeChanges, "edgeChanges"));
+            planOperation = "deletions";
             ApplyPlanDeletions(project, documents, references, plan.deletions);
+            planOperation = string.Empty;
             return new SemanticPlanCandidate(project, documents, references);
         }
 

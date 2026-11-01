@@ -29,10 +29,10 @@ The graph describes structure, contracts, ownership and dependency direction. Ra
 ## Apply Through The Tools
 
 1. `begin_work` with the current revision.
-2. Find type keys with `type_search` (`Assembly:MetadataName`, generics as ``List`1``).
+2. Read narrowly: `node`, `relationships`, `dependency_path` or `layer_graph` with `detail=summary`. Find type keys with `type_search` (`Assembly:MetadataName`, generics as ``List`1``).
 3. Member symbol keys follow `kind|Assembly:Type|Name|genericArity|parameters`. Take them from `type_contract`.
-4. Write one semantic plan (groups, layers, `layerScopes`, nodes with `responsibility`, edges). Run `dry_run_plan`, fix the reported errors, then `apply_plan` with `plan={"plan_token": "<token from the dry run>"}` instead of resending the plan.
-5. Run `conformance` for the group and `DependencyEvidence` from the repository root. Fix the graph or report the gap.
+4. Write one semantic plan (groups, layers, `layerScopes`, nodes with `responsibility`, edges). Run `dry_run_plan`, fix the reported errors (`operation` names the plan item), then `apply_plan` with `plan={"plan_token": "<token from the dry run>"}` instead of resending the plan.
+5. Run `arrange_layer` for new or heavily changed layers. Run `conformance` for the group and `DependencyEvidence` from the repository root. Fix the graph or report the gap.
 6. `end_work`, then report the layers, conformance counts, dependency evidence and open questions to the user. Approve only when the user asks, unless `capabilities` reports `agent_may_approve`. Otherwise Architector asks the user to confirm in the Editor.
 
 ## Designing New Systems
