@@ -4,19 +4,6 @@ using UnityEngine;
 
 namespace Architector.Editor
 {
-    public sealed class ArchitectorCanvasShortcutContext : IShortcutContext
-    {
-        public bool active => !EditorGUIUtility.editingTextField
-                              && EditorWindow.focusedWindow is ArchitectorMasterWindow { CanvasHasPointer: true };
-    }
-
-    public sealed class ArchitectorWindowShortcutContext : IShortcutContext
-    {
-        public bool active => !EditorGUIUtility.editingTextField
-                              && EditorWindow.focusedWindow is ArchitectorMasterWindow;
-    }
-
-    [InitializeOnLoad]
     public static class ArchitectorShortcuts
     {
         public const string FocusView = "Architector/Canvas/Focus View";
@@ -38,62 +25,63 @@ namespace Architector.Editor
         public const string NextLayer = "Architector/Window/Next Layer";
         public const string ReviewSelectAll = "Architector/Review/Select All";
 
-        static ArchitectorShortcuts()
+        private static void Send(ShortcutArguments arguments, string command)
         {
-            ShortcutManager.RegisterContext(new ArchitectorCanvasShortcutContext());
-            ShortcutManager.RegisterContext(new ArchitectorWindowShortcutContext());
-        }
-
-        private static void Send(string command)
-        {
-            if (EditorWindow.focusedWindow is ArchitectorMasterWindow window)
+            if (arguments.context is ArchitectorMasterWindow { CanvasHasPointer: true } window
+                && !EditorGUIUtility.editingTextField)
                 window.SendCanvasCommand(command);
         }
 
-        [Shortcut(FocusView, typeof(ArchitectorCanvasShortcutContext), KeyCode.F)]
-        private static void OnFocusView() => Send(FocusView);
+        private static void Navigate(ShortcutArguments arguments, int direction)
+        {
+            if (arguments.context is ArchitectorMasterWindow window && !EditorGUIUtility.editingTextField)
+                window.NavigateHistory(direction);
+        }
 
-        [Shortcut(FocusLayer, typeof(ArchitectorCanvasShortcutContext), KeyCode.F, ShortcutModifiers.Shift)]
-        private static void OnFocusLayer() => Send(FocusLayer);
+        [Shortcut(FocusView, typeof(ArchitectorMasterWindow), KeyCode.F)]
+        private static void OnFocusView(ShortcutArguments arguments) => Send(arguments, FocusView);
 
-        [Shortcut(Arrange, typeof(ArchitectorCanvasShortcutContext), KeyCode.A)]
-        private static void OnArrange() => Send(Arrange);
+        [Shortcut(FocusLayer, typeof(ArchitectorMasterWindow), KeyCode.F, ShortcutModifiers.Shift)]
+        private static void OnFocusLayer(ShortcutArguments arguments) => Send(arguments, FocusLayer);
 
-        [Shortcut(ArrangeAsCenters, typeof(ArchitectorCanvasShortcutContext), KeyCode.A, ShortcutModifiers.Shift)]
-        private static void OnArrangeAsCenters() => Send(ArrangeAsCenters);
+        [Shortcut(Arrange, typeof(ArchitectorMasterWindow), KeyCode.A)]
+        private static void OnArrange(ShortcutArguments arguments) => Send(arguments, Arrange);
 
-        [Shortcut(SelectAll, typeof(ArchitectorCanvasShortcutContext), KeyCode.A, ShortcutModifiers.Action)]
-        private static void OnSelectAll() => Send(SelectAll);
+        [Shortcut(ArrangeAsCenters, typeof(ArchitectorMasterWindow), KeyCode.A, ShortcutModifiers.Shift)]
+        private static void OnArrangeAsCenters(ShortcutArguments arguments) => Send(arguments, ArrangeAsCenters);
 
-        [Shortcut(ActualSize, typeof(ArchitectorCanvasShortcutContext), KeyCode.Alpha1)]
-        private static void OnActualSize() => Send(ActualSize);
+        [Shortcut(SelectAll, typeof(ArchitectorMasterWindow), KeyCode.A, ShortcutModifiers.Action)]
+        private static void OnSelectAll(ShortcutArguments arguments) => Send(arguments, SelectAll);
 
-        [Shortcut(NewNode, typeof(ArchitectorCanvasShortcutContext), KeyCode.N)]
-        private static void OnNewNode() => Send(NewNode);
+        [Shortcut(ActualSize, typeof(ArchitectorMasterWindow), KeyCode.Alpha1)]
+        private static void OnActualSize(ShortcutArguments arguments) => Send(arguments, ActualSize);
 
-        [Shortcut(Rename, typeof(ArchitectorCanvasShortcutContext), KeyCode.R)]
-        private static void OnRename() => Send(Rename);
+        [Shortcut(NewNode, typeof(ArchitectorMasterWindow), KeyCode.N)]
+        private static void OnNewNode(ShortcutArguments arguments) => Send(arguments, NewNode);
 
-        [Shortcut(LinkType, typeof(ArchitectorCanvasShortcutContext), KeyCode.L)]
-        private static void OnLinkType() => Send(LinkType);
+        [Shortcut(Rename, typeof(ArchitectorMasterWindow), KeyCode.R)]
+        private static void OnRename(ShortcutArguments arguments) => Send(arguments, Rename);
 
-        [Shortcut(NeighbourLeft, typeof(ArchitectorCanvasShortcutContext), KeyCode.LeftArrow)]
-        private static void OnNeighbourLeft() => Send(NeighbourLeft);
+        [Shortcut(LinkType, typeof(ArchitectorMasterWindow), KeyCode.L)]
+        private static void OnLinkType(ShortcutArguments arguments) => Send(arguments, LinkType);
 
-        [Shortcut(NeighbourRight, typeof(ArchitectorCanvasShortcutContext), KeyCode.RightArrow)]
-        private static void OnNeighbourRight() => Send(NeighbourRight);
+        [Shortcut(NeighbourLeft, typeof(ArchitectorMasterWindow), KeyCode.LeftArrow)]
+        private static void OnNeighbourLeft(ShortcutArguments arguments) => Send(arguments, NeighbourLeft);
 
-        [Shortcut(NeighbourUp, typeof(ArchitectorCanvasShortcutContext), KeyCode.UpArrow)]
-        private static void OnNeighbourUp() => Send(NeighbourUp);
+        [Shortcut(NeighbourRight, typeof(ArchitectorMasterWindow), KeyCode.RightArrow)]
+        private static void OnNeighbourRight(ShortcutArguments arguments) => Send(arguments, NeighbourRight);
 
-        [Shortcut(NeighbourDown, typeof(ArchitectorCanvasShortcutContext), KeyCode.DownArrow)]
-        private static void OnNeighbourDown() => Send(NeighbourDown);
+        [Shortcut(NeighbourUp, typeof(ArchitectorMasterWindow), KeyCode.UpArrow)]
+        private static void OnNeighbourUp(ShortcutArguments arguments) => Send(arguments, NeighbourUp);
 
-        [Shortcut(PreviousLayer, typeof(ArchitectorWindowShortcutContext), KeyCode.LeftArrow, ShortcutModifiers.Alt)]
-        private static void OnPreviousLayer() => (EditorWindow.focusedWindow as ArchitectorMasterWindow)?.NavigateHistory(-1);
+        [Shortcut(NeighbourDown, typeof(ArchitectorMasterWindow), KeyCode.DownArrow)]
+        private static void OnNeighbourDown(ShortcutArguments arguments) => Send(arguments, NeighbourDown);
 
-        [Shortcut(NextLayer, typeof(ArchitectorWindowShortcutContext), KeyCode.RightArrow, ShortcutModifiers.Alt)]
-        private static void OnNextLayer() => (EditorWindow.focusedWindow as ArchitectorMasterWindow)?.NavigateHistory(1);
+        [Shortcut(PreviousLayer, typeof(ArchitectorMasterWindow), KeyCode.LeftArrow, ShortcutModifiers.Alt)]
+        private static void OnPreviousLayer(ShortcutArguments arguments) => Navigate(arguments, -1);
+
+        [Shortcut(NextLayer, typeof(ArchitectorMasterWindow), KeyCode.RightArrow, ShortcutModifiers.Alt)]
+        private static void OnNextLayer(ShortcutArguments arguments) => Navigate(arguments, 1);
 
         [Shortcut(ReviewSelectAll, typeof(ArchitectorReviewWindow), KeyCode.A, ShortcutModifiers.Action)]
         private static void OnReviewSelectAll(ShortcutArguments arguments) => (arguments.context as ArchitectorReviewWindow)?.SelectAll();

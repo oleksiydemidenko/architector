@@ -9,14 +9,17 @@ namespace Architector.Editor
 {
     public sealed class ArchitectorHotkeysPopup : PopupWindowContent
     {
-        private const float KeyColumnWidth = 130f;
+        private const float WindowWidth = 460f;
+        private const float Padding = 12f;
+        private const float KeyColumnWidth = 140f;
         private const float RowHeight = 18f;
-        private const float SectionSpacing = 6f;
+        private const float TitleHeight = 22f;
+        private const float SectionSpacing = 8f;
         private const float ButtonHeight = 24f;
 
         private static readonly (string title, string conflictGroup, (string shortcut, string keys, string action)[] rows)[] Sections =
         {
-            ("Canvas (pointer over the canvas)", "main", new[]
+            ("Canvas", "main", new[]
             {
                 (ArchitectorShortcuts.FocusView, null, "Focus the selection, or the whole layer"),
                 (ArchitectorShortcuts.FocusLayer, null, "Focus the whole layer"),
@@ -56,6 +59,10 @@ namespace Architector.Editor
 
         private readonly Dictionary<string, string> keys = new(StringComparer.Ordinal);
         private readonly Dictionary<string, string> problems = new(StringComparer.Ordinal);
+        private GUIStyle titleStyle;
+        private GUIStyle keyStyle;
+        private GUIStyle actionStyle;
+        private GUIStyle problemStyle;
 
         public override void OnOpen()
         {
@@ -86,28 +93,34 @@ namespace Architector.Editor
 
         public override Vector2 GetWindowSize()
         {
-            var height = 16f + ButtonHeight;
+            var height = Padding * 2f + ButtonHeight;
             foreach (var section in Sections)
-                height += RowHeight + SectionSpacing + section.rows.Length * RowHeight;
-            return new Vector2(440f, height);
+                height += TitleHeight + section.rows.Length * RowHeight + SectionSpacing;
+            return new Vector2(WindowWidth, height);
         }
 
         public override void OnGUI(Rect rect)
         {
-            GUILayout.Space(4f);
+            EnsureStyles();
+            var width = rect.width - Padding * 2f;
+            var y = Padding;
             foreach (var (title, _, rows) in Sections)
             {
-                GUILayout.Label(title, EditorStyles.boldLabel, GUILayout.Height(RowHeight));
+                GUI.Label(new Rect(Padding, y, width, TitleHeight), title, titleStyle);
+                y += TitleHeight;
                 foreach (var (shortcut, fixedKeys, action) in rows)
-                    DrawRow(shortcut, fixedKeys, action);
-                GUILayout.Space(SectionSpacing);
+                {
+                    DrawRow(new Rect(Padding, y, width, RowHeight), shortcut, fixedKeys, action);
+                    y += RowHeight;
+                }
+                y += SectionSpacing;
             }
-            if (GUILayout.Button("Open Shortcuts", GUILayout.Height(ButtonHeight))
+            if (GUI.Button(new Rect(Padding, y, width, ButtonHeight), "Open Shortcuts")
                 && !EditorApplication.ExecuteMenuItem("Edit/Shortcuts..."))
                 EditorApplication.ExecuteMenuItem("Unity/Shortcuts...");
         }
 
-        private void DrawRow(string shortcut, string fixedKeys, string action)
+        private void DrawRow(Rect rect, string shortcut, string fixedKeys, string action)
         {
             var problem = string.Empty;
             var text = fixedKeys;
@@ -116,17 +129,41 @@ namespace Architector.Editor
                 keys.TryGetValue(shortcut, out text);
                 problems.TryGetValue(shortcut, out problem);
             }
-            using (new EditorGUILayout.HorizontalScope(GUILayout.Height(RowHeight)))
+            var hasProblem = !string.IsNullOrEmpty(problem);
+            GUI.Label(
+                new Rect(rect.x, rect.y, KeyColumnWidth, rect.height),
+                string.IsNullOrEmpty(text) ? "—" : text,
+                hasProblem ? problemStyle : keyStyle);
+            GUI.Label(
+                new Rect(rect.x + KeyColumnWidth, rect.y, rect.width - KeyColumnWidth, rect.height),
+                new GUIContent(hasProblem ? $"{action}. {problem}" : action, problem),
+                hasProblem ? problemStyle : actionStyle);
+        }
+
+        private void EnsureStyles()
+        {
+            if (titleStyle != null)
+                return;
+            var title = EditorGUIUtility.isProSkin ? Color.white : Color.black;
+            var row = EditorGUIUtility.isProSkin ? new Color(0.70f, 0.70f, 0.70f) : new Color(0.30f, 0.30f, 0.30f);
+            titleStyle = CreateStyle(FontStyle.Bold, title, 12);
+            keyStyle = CreateStyle(FontStyle.Bold, row, 11);
+            actionStyle = CreateStyle(FontStyle.Normal, row, 11);
+            problemStyle = CreateStyle(FontStyle.Normal, new Color(1f, 0.76f, 0.20f), 11);
+        }
+
+        private static GUIStyle CreateStyle(FontStyle fontStyle, Color color, int fontSize)
+        {
+            return new GUIStyle(EditorStyles.label)
             {
-                var previousColor = GUI.contentColor;
-                if (!string.IsNullOrEmpty(problem))
-                    GUI.contentColor = new Color(1f, 0.76f, 0.20f);
-                GUILayout.Label(string.IsNullOrEmpty(text) ? "—" : text, EditorStyles.miniBoldLabel, GUILayout.Width(KeyColumnWidth));
-                GUILayout.Label(
-                    new GUIContent(string.IsNullOrEmpty(problem) ? action : $"{action}. {problem}", problem),
-                    EditorStyles.miniLabel);
-                GUI.contentColor = previousColor;
-            }
+                fontStyle = fontStyle,
+                fontSize = fontSize,
+                alignment = TextAnchor.MiddleLeft,
+                padding = new RectOffset(0, 0, 0, 0),
+                margin = new RectOffset(0, 0, 0, 0),
+                normal = { textColor = color },
+                hover = { textColor = color }
+            };
         }
     }
 }
