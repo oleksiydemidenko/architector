@@ -1,7 +1,10 @@
 using System;
 using System.IO;
+using System.Reflection;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
+using UnityEditor;
+using UnityEngine;
 
 namespace Architector.Editor.Tests
 {
@@ -110,6 +113,50 @@ namespace Architector.Editor.Tests
             work.Begin("test");
             Assert.That(work.SettingsLocked, Is.False);
             Assert.That(ArchitectorPackageUpdates.InstallBlocker(work), Does.Contain("active agent work session"));
+        }
+
+        [Test]
+        public void PackageRegistrationCompletesUpdatesWithoutAnAssemblyReload()
+        {
+            const BindingFlags flags = BindingFlags.Static | BindingFlags.NonPublic;
+            var paths = typeof(ArchitectorPackagePaths);
+            var updates = typeof(ArchitectorPackageUpdates);
+            var version = paths.GetField("version", flags);
+            var root = paths.GetField("root", flags);
+            var state = updates.GetField("state", flags);
+            var installed = ArchitectorPackagePaths.Version;
+            var previousVersion = version.GetValue(null);
+            var previousRoot = root.GetValue(null);
+            var previousState = state.GetValue(null);
+            var cacheKey = (string)updates.GetProperty("CacheKey", flags).GetValue(null);
+            var hadCache = EditorPrefs.HasKey(cacheKey);
+            var previousCache = EditorPrefs.GetString(cacheKey);
+            try
+            {
+                var pending = new ArchitectorUpdateState { installedVersion = "0.0.1", pendingVersion = installed };
+                EditorPrefs.SetString(cacheKey, JsonUtility.ToJson(pending));
+                state.SetValue(null, pending);
+                version.SetValue(null, "0.0.1");
+                root.SetValue(null, "stale package path");
+                paths.GetMethod("OnPackagesRegistered", flags).Invoke(null, new object[] { null });
+                Assert.That(root.GetValue(null), Is.Null);
+                updates.GetMethod("RefreshPackages", flags).Invoke(null, null);
+                Assert.That(ArchitectorPackagePaths.Version, Is.EqualTo(installed));
+                Assert.That(ArchitectorPackageUpdates.State.installedVersion, Is.EqualTo(installed));
+                Assert.That(ArchitectorPackageUpdates.State.pendingVersion, Is.Null);
+                Assert.That(ArchitectorPackageUpdates.State.availableTag, Is.Null);
+                Assert.That(ArchitectorPackageUpdates.State.notice, Does.Contain("Update installed"));
+            }
+            finally
+            {
+                version.SetValue(null, previousVersion);
+                root.SetValue(null, previousRoot);
+                state.SetValue(null, previousState);
+                if (hadCache)
+                    EditorPrefs.SetString(cacheKey, previousCache);
+                else
+                    EditorPrefs.DeleteKey(cacheKey);
+            }
         }
 
         private static JObject Release() => JObject.Parse(

@@ -26,6 +26,11 @@ namespace Architector.Editor
         private static Request integrationRequest;
         private static bool verifying;
 
+        static ArchitectorPackageUpdates()
+        {
+            Events.registeredPackages += OnPackagesRegistered;
+        }
+
         public static event Action Changed;
 
         public static ArchitectorUpdateState State => state ??= Restore();
@@ -324,6 +329,18 @@ namespace Architector.Editor
 
         private static void Save() => EditorPrefs.SetString(CacheKey, JsonUtility.ToJson(State));
 
+        private static void OnPackagesRegistered(PackageRegistrationEventArgs changes)
+        {
+            EditorApplication.delayCall -= RefreshPackages;
+            EditorApplication.delayCall += RefreshPackages;
+        }
+
+        private static void RefreshPackages()
+        {
+            state = Restore();
+            Changed?.Invoke();
+        }
+
         private static void PollInstall()
         {
             if (!installRequest.IsCompleted)
@@ -337,7 +354,9 @@ namespace Architector.Editor
             }
             else
             {
-                state.notice = "Unity is applying the update and reloading assemblies. Afterward, install the matching server in Integrations and commit the package manifest and lock file.";
+                state = Restore();
+                if (!string.IsNullOrEmpty(state.pendingVersion))
+                    state.notice = "Unity is applying the update. Afterward, install the matching server in Integrations and commit the package manifest and lock file.";
                 Save();
             }
             installRequest = null;

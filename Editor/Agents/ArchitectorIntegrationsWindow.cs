@@ -49,6 +49,7 @@ namespace Architector.Editor.Agents
             titleContent = new GUIContent(Title);
             minSize = new Vector2(560f, 420f);
             ArchitectorAgentPreferences.Changed += OnChanged;
+            ArchitectorPackageUpdates.Changed += OnChanged;
             if (!ArchitectorSession.TryGet(out var session, out loadError))
                 return;
             repository = session.Repository;
@@ -62,6 +63,7 @@ namespace Architector.Editor.Agents
         private void OnDisable()
         {
             ArchitectorAgentPreferences.Changed -= OnChanged;
+            ArchitectorPackageUpdates.Changed -= OnChanged;
             if (repository != null)
                 repository.Changed -= OnChanged;
         }
