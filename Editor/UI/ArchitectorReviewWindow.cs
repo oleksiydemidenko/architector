@@ -9,6 +9,13 @@ namespace Architector.Editor
     public sealed class ArchitectorReviewWindow : EditorWindow
     {
         private const string Title = "Architector Review";
+        private const float RowHeight = 20f;
+        private const float CheckboxWidth = 22f;
+        private const float OpenWidth = 50f;
+        private const float BottomBarHeight = 34f;
+        private const float DragScrollMargin = 24f;
+        private const float DragScrollStep = 12f;
+        private static readonly int RowControlHint = "ArchitectorReviewRows".GetHashCode();
 
         private ArchitectorRepository repository;
         private ArchitectorTypeIndex typeIndex;
@@ -19,8 +26,13 @@ namespace Architector.Editor
         private bool draftExpanded = true;
         private int errorsRevision = -1;
         private int errorsGeneration = -1;
+        private string anchorLayerId = string.Empty;
+        private int dragRow = -1;
+        private bool dragValue;
         private readonly Dictionary<string, int> errorCounts = new(StringComparer.Ordinal);
         private readonly HashSet<string> selected = new(StringComparer.Ordinal);
+        private readonly List<string> rows = new();
+        private readonly List<Rect> rowRects = new();
 
         [MenuItem("Window/Architector/Review")]
         public static void Open()
@@ -40,6 +52,7 @@ namespace Architector.Editor
         private void OnEnable()
         {
             titleContent = new GUIContent(Title);
+            wantsMouseMove = false;
             if (!ArchitectorSession.TryGet(out var session, out loadError))
                 return;
             repository = session.Repository;
@@ -64,14 +77,17 @@ namespace Architector.Editor
             }
 
             RefreshErrors();
-            var statuses = repository.GetLayerApprovalStatuses();
-            var changed = statuses.Where(status => status.State == ArchitectorApprovalStates.Changed).ToArray();
-            var byAgent = statuses.Where(status => status.State == ArchitectorApprovalStates.Approved
-                                                   && repository.FindLayer(status.LayerId).approval?.approvedByAgent == true).ToArray();
-            var drafts = statuses.Where(status => status.State == ArchitectorApprovalStates.Draft).ToArray();
-            var visible = changed.Concat(byAgent).Concat(drafts).Select(status => status.LayerId).ToHashSet(StringComparer.Ordinal);
+            var statuses = repository.GetLayerApprovalStatuses().ToDictionary(status => status.LayerId, StringComparer.Ordinal);
+            var layers = LayersInExplorerOrder().Where(layer => statuses.ContainsKey(layer.id)).ToArray();
+            var changed = layers.Where(layer => statuses[layer.id].State == ArchitectorApprovalStates.Changed).ToArray();
+            var byAgent = layers.Where(layer => statuses[layer.id].State == ArchitectorApprovalStates.Approved
+                                                && layer.approval?.approvedByAgent == true).ToArray();
+            var drafts = layers.Where(layer => statuses[layer.id].State == ArchitectorApprovalStates.Draft).ToArray();
+            var visible = changed.Concat(byAgent).Concat(drafts).Select(layer => layer.id).ToHashSet(StringComparer.Ordinal);
             selected.IntersectWith(visible);
 
+            rows.Clear();
+            rowRects.Clear();
             scroll = EditorGUILayout.BeginScrollView(scroll);
             using (new EditorGUILayout.VerticalScope(ArchitectorFoldoutBox.ContentStyle))
             {
@@ -81,45 +97,218 @@ namespace Architector.Editor
                 if (visible.Count == 0)
                     EditorGUILayout.HelpBox("Every layer is approved.", MessageType.Info);
             }
+            HandleRowInput();
             EditorGUILayout.EndScrollView();
 
-            using (new EditorGUILayout.HorizontalScope())
+            DrawBottomBar(visible);
+            HandleKeys(visible);
+        }
+
+        private IEnumerable<ArchitectorLayerRecord> LayersInExplorerOrder()
+        {
+            var project = repository.Project;
+            foreach (var groupId in project.rootGroupIds)
             {
+                foreach (var layer in LayersInGroup(groupId))
+                    yield return layer;
+            }
+            foreach (var layerId in project.rootLayerIds)
+                yield return repository.FindLayer(layerId);
+        }
+
+        private IEnumerable<ArchitectorLayerRecord> LayersInGroup(string groupId)
+        {
+            var group = repository.FindGroup(groupId);
+            foreach (var childId in group.childGroupIds)
+            {
+                foreach (var layer in LayersInGroup(childId))
+                    yield return layer;
+            }
+            foreach (var layerId in group.layerIds)
+                yield return repository.FindLayer(layerId);
+        }
+
+        private void DrawSection(string title, IReadOnlyList<ArchitectorLayerRecord> layers, ref bool expanded)
+        {
+            if (layers.Count == 0)
+                return;
+            using var box = new ArchitectorFoldoutBox($"{title} ({layers.Count})", ref expanded);
+            if (!box.Expanded)
+                return;
+            foreach (var group in layers.GroupBy(layer => layer.parentGroupId ?? string.Empty))
+            {
+                DrawGroupHeader(group.Key, group.Select(layer => layer.id).ToArray());
+                foreach (var layer in group)
+                    DrawRow(layer);
+                EditorGUILayout.Space(4f);
+            }
+        }
+
+        private void DrawGroupHeader(string groupId, IReadOnlyList<string> layerIds)
+        {
+            var path = string.IsNullOrEmpty(groupId) ? "Root" : repository.GetEntryPath(groupId);
+            var count = layerIds.Count(selected.Contains);
+            var label = count > 0 ? $"{path}  ({count} of {layerIds.Count})" : path;
+            if (!GUILayout.Button(new GUIContent(label, "Select or clear the layers of this group."), EditorStyles.miniBoldLabel))
+                return;
+            if (count == layerIds.Count)
+                selected.ExceptWith(layerIds);
+            else
+                selected.UnionWith(layerIds);
+        }
+
+        private void DrawRow(ArchitectorLayerRecord layer)
+        {
+            var rect = GUILayoutUtility.GetRect(0f, RowHeight, GUILayout.ExpandWidth(true));
+            rows.Add(layer.id);
+            rowRects.Add(rect);
+            var isSelected = selected.Contains(layer.id);
+            var openRect = new Rect(rect.xMax - OpenWidth, rect.y + 1f, OpenWidth, rect.height - 2f);
+            if (Event.current.type == EventType.Repaint)
+            {
+                if (isSelected)
+                    EditorGUI.DrawRect(rect, EditorGUIUtility.isProSkin ? new Color(0.24f, 0.37f, 0.59f, 0.55f) : new Color(0.24f, 0.48f, 0.90f, 0.30f));
+                EditorStyles.toggle.Draw(new Rect(rect.x + 4f, rect.y + 2f, 16f, 16f), false, false, isSelected, false);
+            }
+            var labelRight = openRect.x - 4f;
+            if (errorCounts.TryGetValue(layer.id, out var errors) && errors > 0)
+            {
+                var errorContent = new GUIContent($"{errors} {(errors == 1 ? "error" : "errors")}", EditorGUIUtility.IconContent("console.erroricon.sml").image);
+                var width = EditorStyles.miniLabel.CalcSize(errorContent).x + 4f;
+                GUI.Label(new Rect(labelRight - width, rect.y, width, rect.height), errorContent, EditorStyles.miniLabel);
+                labelRight -= width + 4f;
+            }
+            GUI.Label(new Rect(rect.x + CheckboxWidth, rect.y, Mathf.Max(0f, labelRight - rect.x - CheckboxWidth), rect.height), layer.name);
+            if (GUI.Button(openRect, "Open", EditorStyles.miniButton))
+                ArchitectorMasterWindow.OpenLayerInMaster(layer.id);
+        }
+
+        private void HandleRowInput()
+        {
+            var controlId = GUIUtility.GetControlID(RowControlHint, FocusType.Passive);
+            var current = Event.current;
+            switch (current.GetTypeForControl(controlId))
+            {
+                case EventType.MouseDown when current.button == 0:
+                {
+                    var row = RowAt(current.mousePosition);
+                    if (row < 0)
+                        return;
+                    var overCheckbox = current.mousePosition.x < rowRects[row].x + CheckboxWidth;
+                    var anchor = rows.IndexOf(anchorLayerId);
+                    if (current.shift && anchor >= 0)
+                    {
+                        if (!current.control && !current.command)
+                            selected.Clear();
+                        dragValue = true;
+                        SetRange(anchor, row, true);
+                    }
+                    else
+                    {
+                        if (current.control || current.command || overCheckbox)
+                        {
+                            dragValue = !selected.Contains(rows[row]);
+                        }
+                        else
+                        {
+                            selected.Clear();
+                            dragValue = true;
+                        }
+                        SetRange(row, row, dragValue);
+                        anchorLayerId = rows[row];
+                    }
+                    dragRow = row;
+                    GUIUtility.hotControl = controlId;
+                    current.Use();
+                    break;
+                }
+                case EventType.MouseDrag when GUIUtility.hotControl == controlId:
+                {
+                    var relativeY = current.mousePosition.y - scroll.y;
+                    var viewHeight = position.height - BottomBarHeight;
+                    if (relativeY < DragScrollMargin)
+                        scroll.y = Mathf.Max(0f, scroll.y - DragScrollStep);
+                    else if (relativeY > viewHeight - DragScrollMargin)
+                        scroll.y += DragScrollStep;
+                    var row = NearestRow(current.mousePosition.y);
+                    if (row >= 0 && row != dragRow)
+                    {
+                        SetRange(dragRow, row, dragValue);
+                        dragRow = row;
+                    }
+                    current.Use();
+                    break;
+                }
+                case EventType.MouseUp when GUIUtility.hotControl == controlId:
+                    GUIUtility.hotControl = 0;
+                    current.Use();
+                    break;
+            }
+        }
+
+        private int RowAt(Vector2 point)
+        {
+            return rowRects.FindIndex(rect => rect.Contains(point));
+        }
+
+        private int NearestRow(float y)
+        {
+            if (rowRects.Count == 0)
+                return -1;
+            var row = rowRects.FindIndex(rect => y < rect.yMax);
+            return row >= 0 ? row : rowRects.Count - 1;
+        }
+
+        private void SetRange(int from, int to, bool value)
+        {
+            for (var index = Mathf.Min(from, to); index <= Mathf.Max(from, to); index++)
+            {
+                if (value)
+                    selected.Add(rows[index]);
+                else
+                    selected.Remove(rows[index]);
+            }
+        }
+
+        private void DrawBottomBar(IReadOnlyCollection<string> visible)
+        {
+            using (new EditorGUILayout.HorizontalScope(GUILayout.Height(BottomBarHeight)))
+            {
+                GUILayout.Space(8f);
+                using (new EditorGUI.DisabledScope(visible.Count == 0))
+                {
+                    if (GUILayout.Button("Select All", GUILayout.Height(26f), GUILayout.Width(90f)))
+                        selected.UnionWith(visible);
+                }
+                using (new EditorGUI.DisabledScope(selected.Count == 0))
+                {
+                    if (GUILayout.Button("Clear", GUILayout.Height(26f), GUILayout.Width(70f)))
+                        selected.Clear();
+                }
                 GUILayout.FlexibleSpace();
                 using (new EditorGUI.DisabledScope(selected.Count == 0))
                 {
                     if (GUILayout.Button($"Approve Selected ({selected.Count})", GUILayout.Height(26f), GUILayout.Width(180f)))
                         ApproveSelected();
                 }
+                GUILayout.Space(8f);
             }
         }
 
-        private void DrawSection(string title, IReadOnlyList<ArchitectorLayerApprovalStatus> statuses, ref bool expanded)
+        private void HandleKeys(IReadOnlyCollection<string> visible)
         {
-            if (statuses.Count == 0)
+            var current = Event.current;
+            if (current.type != EventType.KeyDown)
                 return;
-            using var box = new ArchitectorFoldoutBox($"{title} ({statuses.Count})", ref expanded);
-            if (!box.Expanded)
-                return;
-            foreach (var status in statuses)
+            if (current.keyCode == KeyCode.A && (current.control || current.command))
             {
-                using (new EditorGUILayout.HorizontalScope())
-                {
-                    var isSelected = selected.Contains(status.LayerId);
-                    if (EditorGUILayout.Toggle(isSelected, GUILayout.Width(18f)) != isSelected)
-                    {
-                        if (isSelected)
-                            selected.Remove(status.LayerId);
-                        else
-                            selected.Add(status.LayerId);
-                    }
-                    GUILayout.Label(repository.GetEntryPath(status.LayerId));
-                    GUILayout.FlexibleSpace();
-                    if (errorCounts.TryGetValue(status.LayerId, out var errors) && errors > 0)
-                        GUILayout.Label(new GUIContent($"{errors} {(errors == 1 ? "error" : "errors")}", EditorGUIUtility.IconContent("console.erroricon.sml").image), EditorStyles.miniLabel);
-                    if (GUILayout.Button("Open", EditorStyles.miniButton, GUILayout.Width(50f)))
-                        ArchitectorMasterWindow.OpenLayerInMaster(status.LayerId);
-                }
+                selected.UnionWith(visible);
+                current.Use();
+            }
+            else if (current.keyCode == KeyCode.Escape)
+            {
+                selected.Clear();
+                current.Use();
             }
         }
 

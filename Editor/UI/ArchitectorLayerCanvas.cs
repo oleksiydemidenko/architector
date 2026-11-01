@@ -283,6 +283,14 @@ namespace Architector.Editor
             if (!canvasRect.Contains(mouse))
                 return;
 
+            if (current.type == EventType.KeyDown
+                && !EditorGUIUtility.editingTextField
+                && HandleHotkey(current, mouse, documents, repository, typeIndex, userState, execute, requestRepaint, openLayer))
+            {
+                current.Use();
+                return;
+            }
+
             if (current.type == EventType.KeyDown && (current.control || current.command))
             {
                 if (current.keyCode == KeyCode.C && selectedNodeIds.Count > 0)
@@ -531,18 +539,8 @@ namespace Architector.Editor
                 {
                     var relinkNode = documents.semantic.nodes.First(node => node.id == selectedForDelete[0]);
                     if (string.Equals(relinkNode.type?.mode, "linked", StringComparison.Ordinal))
-                    {
-                        menu.AddItem(new GUIContent("Relink Type"), false, () =>
-                        {
-                            var available = AvailableTypes(typeIndex, documents.semantic);
-                            EditorApplication.delayCall += () =>
-                                ArchitectorTypePickerWindow.Show(pickerScreenPosition, available, indexedType =>
-                                {
-                                    var record = new ArchitectorTypeRecord { mode = "linked", assemblyName = indexedType.AssemblyName, metadataName = indexedType.MetadataName };
-                                    execute(() => repository.RelinkNode(layerId, relinkNode.id, indexedType, typeIndex.GetMembers(record).ToArray()));
-                                });
-                        });
-                    }
+                        menu.AddItem(new GUIContent("Relink Type"), false,
+                            () => OpenRelinkPicker(relinkNode, documents, repository, typeIndex, execute, pickerScreenPosition));
                 }
                 menu.AddSeparator(string.Empty);
                 if (selectedForDelete.Length == 1)
@@ -567,18 +565,8 @@ namespace Architector.Editor
                             if (!string.IsNullOrEmpty(replacementId))
                                 SelectOnly(replacementId);
                         });
-                        menu.AddItem(new GUIContent("Link Existing Type"), false, () =>
-                        {
-                            var available = AvailableTypes(typeIndex, documents.semantic);
-                            EditorApplication.delayCall += () =>
-                                ArchitectorTypePickerWindow.Show(pickerScreenPosition, available, indexedType =>
-                                {
-                                    string replacementId = null;
-                                    execute(() => replacementId = repository.ConvertEmptyNodeToLinked(layerId, selectedNode.id, indexedType));
-                                    if (!string.IsNullOrEmpty(replacementId))
-                                        SelectOnly(replacementId);
-                                });
-                        });
+                        menu.AddItem(new GUIContent("Link Existing Type"), false,
+                            () => OpenLinkPicker(selectedNode, documents, repository, typeIndex, execute, pickerScreenPosition));
                         menu.AddSeparator(string.Empty);
                     }
                 }
@@ -645,24 +633,209 @@ namespace Architector.Editor
             var allNodes = documents.semantic.nodes.Select(node => node.id).ToArray();
             menu.AddItem(new GUIContent("Focus View"), false,
                 () => FocusView(repository, selected.Count > 0 ? selected : allNodes, userState, requestRepaint));
-            void Arrange(IReadOnlyCollection<string> nodes, IReadOnlyCollection<string> centers)
-            {
-                execute(() => repository.ArrangeNodes(layerId, nodes, centers));
-                FocusView(repository, nodes, userState, requestRepaint);
-            }
+            menu.AddItem(new GUIContent("Arrange"), false,
+                () => ArrangeSelection(repository, documents, userState, execute, requestRepaint, selected));
+            if (selected.Count > 0)
+                menu.AddItem(new GUIContent("Arrange As Centers"), false,
+                    () => ArrangeAndFocus(repository, userState, execute, requestRepaint, allNodes, selected));
+        }
 
+        private void ArrangeSelection(
+            ArchitectorRepository repository,
+            ArchitectorLayerDocuments documents,
+            ArchitectorUserStateStore userState,
+            Action<Action> execute,
+            Action requestRepaint,
+            IReadOnlyCollection<string> selected)
+        {
             if (selected.Count == 0)
             {
-                menu.AddItem(new GUIContent("Arrange"), false, () => Arrange(allNodes, null));
+                ArrangeAndFocus(repository, userState, execute, requestRepaint, documents.semantic.nodes.Select(node => node.id).ToArray(), null);
                 return;
             }
-
+            if (selected.Count > 1)
+            {
+                ArrangeAndFocus(repository, userState, execute, requestRepaint, selected, null);
+                return;
+            }
             var neighbours = documents.semantic.edges
                 .Where(edge => selected.Contains(edge.sourceNodeId) || selected.Contains(edge.targetNodeId))
                 .SelectMany(edge => new[] { edge.sourceNodeId, edge.targetNodeId });
-            var arranged = selected.Count == 1 ? selected.Concat(neighbours).Distinct().ToArray() : selected.ToArray();
-            menu.AddItem(new GUIContent("Arrange"), false, () => Arrange(arranged, selected.Count == 1 ? selected : null));
-            menu.AddItem(new GUIContent("Arrange As Centers"), false, () => Arrange(allNodes, selected));
+            ArrangeAndFocus(repository, userState, execute, requestRepaint, selected.Concat(neighbours).Distinct().ToArray(), selected);
+        }
+
+        private void ArrangeAndFocus(
+            ArchitectorRepository repository,
+            ArchitectorUserStateStore userState,
+            Action<Action> execute,
+            Action requestRepaint,
+            IReadOnlyCollection<string> nodes,
+            IReadOnlyCollection<string> centers)
+        {
+            execute(() => repository.ArrangeNodes(layerId, nodes, centers));
+            FocusView(repository, nodes, userState, requestRepaint);
+        }
+
+        private void OpenLinkPicker(
+            ArchitectorNodeRecord node,
+            ArchitectorLayerDocuments documents,
+            ArchitectorRepository repository,
+            ArchitectorTypeIndex typeIndex,
+            Action<Action> execute,
+            Vector2 screenPosition)
+        {
+            var available = AvailableTypes(typeIndex, documents.semantic);
+            EditorApplication.delayCall += () =>
+                ArchitectorTypePickerWindow.Show(screenPosition, available, indexedType =>
+                {
+                    string replacementId = null;
+                    execute(() => replacementId = repository.ConvertEmptyNodeToLinked(layerId, node.id, indexedType));
+                    if (!string.IsNullOrEmpty(replacementId))
+                        SelectOnly(replacementId);
+                });
+        }
+
+        private void OpenRelinkPicker(
+            ArchitectorNodeRecord node,
+            ArchitectorLayerDocuments documents,
+            ArchitectorRepository repository,
+            ArchitectorTypeIndex typeIndex,
+            Action<Action> execute,
+            Vector2 screenPosition)
+        {
+            var available = AvailableTypes(typeIndex, documents.semantic);
+            EditorApplication.delayCall += () =>
+                ArchitectorTypePickerWindow.Show(screenPosition, available, indexedType =>
+                {
+                    var record = new ArchitectorTypeRecord { mode = "linked", assemblyName = indexedType.AssemblyName, metadataName = indexedType.MetadataName };
+                    execute(() => repository.RelinkNode(layerId, node.id, indexedType, typeIndex.GetMembers(record).ToArray()));
+                });
+        }
+
+        private bool HandleHotkey(
+            Event current,
+            Vector2 mouse,
+            ArchitectorLayerDocuments documents,
+            ArchitectorRepository repository,
+            ArchitectorTypeIndex typeIndex,
+            ArchitectorUserStateStore userState,
+            Action<Action> execute,
+            Action requestRepaint,
+            Action<string> openLayer)
+        {
+            var selected = selectedNodeIds.ToArray();
+            var allNodes = documents.semantic.nodes.Select(node => node.id).ToArray();
+            var single = selected.Length == 1 ? documents.semantic.nodes.FirstOrDefault(node => node.id == selected[0]) : null;
+            if (current.control || current.command)
+            {
+                if (current.keyCode != KeyCode.A)
+                    return false;
+                selectedNodeIds.Clear();
+                selectedNodeIds.UnionWith(allNodes);
+                requestRepaint?.Invoke();
+                return true;
+            }
+            if (current.alt)
+                return false;
+
+            switch (current.keyCode)
+            {
+                case KeyCode.F:
+                    FocusView(repository, current.shift || selected.Length == 0 ? allNodes : selected, userState, requestRepaint);
+                    return true;
+                case KeyCode.A when current.shift:
+                    if (selected.Length > 0)
+                        ArrangeAndFocus(repository, userState, execute, requestRepaint, allNodes, selected);
+                    return true;
+                case KeyCode.A:
+                    ArrangeSelection(repository, documents, userState, execute, requestRepaint, selected);
+                    return true;
+                case KeyCode.Escape:
+                    selectedNodeIds.Clear();
+                    selectedEdgeId = string.Empty;
+                    requestRepaint?.Invoke();
+                    return true;
+                case KeyCode.Alpha1:
+                case KeyCode.Keypad1:
+                {
+                    var center = canvasSize * 0.5f;
+                    var worldAtCenter = ScreenToWorld(center);
+                    zoom = 1f;
+                    pan = center - worldAtCenter;
+                    userState.SaveLayerView(viewId, layerId, pan.x, pan.y, zoom);
+                    requestRepaint?.Invoke();
+                    return true;
+                }
+                case KeyCode.N:
+                {
+                    var requested = ScreenToWorld(mouse) - new Vector2(140f, 60f);
+                    execute(() =>
+                    {
+                        selectedNodeIds.Clear();
+                        selectedNodeIds.Add(repository.CreateEmptyNode(layerId, requested.x, requested.y));
+                    });
+                    return true;
+                }
+                case KeyCode.R when single != null && !IsPortal(single):
+                    ArchitectorNodeInspector.TitleFocusRequested = true;
+                    requestRepaint?.Invoke();
+                    return true;
+                case KeyCode.L when single != null && !IsPortal(single):
+                {
+                    var screenPosition = GUIUtility.GUIToScreenPoint(mouse);
+                    if (string.Equals(single.type?.mode, "linked", StringComparison.Ordinal))
+                        OpenRelinkPicker(single, documents, repository, typeIndex, execute, screenPosition);
+                    else if (string.Equals(single.type?.mode, "none", StringComparison.Ordinal))
+                        OpenLinkPicker(single, documents, repository, typeIndex, execute, screenPosition);
+                    return true;
+                }
+                case KeyCode.Return:
+                case KeyCode.KeypadEnter:
+                    if (single == null || !IsPortal(single))
+                        return false;
+                    openLayer?.Invoke(single.portal.targetLayerId);
+                    return true;
+                case KeyCode.LeftArrow:
+                    return SelectNeighbour(documents, single, Vector2.left, requestRepaint);
+                case KeyCode.RightArrow:
+                    return SelectNeighbour(documents, single, Vector2.right, requestRepaint);
+                case KeyCode.UpArrow:
+                    return SelectNeighbour(documents, single, Vector2.down, requestRepaint);
+                case KeyCode.DownArrow:
+                    return SelectNeighbour(documents, single, Vector2.up, requestRepaint);
+                default:
+                    return false;
+            }
+        }
+
+        private bool SelectNeighbour(
+            ArchitectorLayerDocuments documents,
+            ArchitectorNodeRecord node,
+            Vector2 direction,
+            Action requestRepaint)
+        {
+            const float minimumAlignment = 0.5f;
+            if (node == null)
+                return false;
+            var layouts = documents.layout.nodes.ToDictionary(item => item.nodeId, StringComparer.Ordinal);
+            var origin = GetWorldNodeRect(layouts[node.id]).center;
+            var neighbour = documents.semantic.edges
+                .Where(edge => edge.sourceNodeId == node.id || edge.targetNodeId == node.id)
+                .Select(edge => edge.sourceNodeId == node.id ? edge.targetNodeId : edge.sourceNodeId)
+                .Where(id => id != node.id && layouts.ContainsKey(id))
+                .Distinct()
+                .Select(id => (id, delta: GetWorldNodeRect(layouts[id]).center - origin))
+                .Where(item => Vector2.Dot(item.delta.normalized, direction) >= minimumAlignment)
+                .OrderBy(item => item.delta.sqrMagnitude)
+                .ThenBy(item => item.id, StringComparer.Ordinal)
+                .Select(item => item.id)
+                .FirstOrDefault();
+            if (neighbour != null)
+            {
+                SelectOnly(neighbour);
+                requestRepaint?.Invoke();
+            }
+            return true;
         }
 
         private void FocusView(

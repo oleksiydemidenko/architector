@@ -269,6 +269,7 @@ namespace Architector.Editor
             else
             {
                 HandleUndoRedoShortcut();
+            HandleLayerHistoryShortcut();
                 HandleExplorerDeleteShortcut();
             }
             if (Event.current.type == EventType.MouseMove)
@@ -544,7 +545,10 @@ namespace Architector.Editor
                 if (GUI.Button(settingsRect, EditorGUIUtility.IconContent("Settings"), GUI.skin.button))
                     ArchitectorSettingsWindow.Open();
             }
-            var noticeRight = settingsRect.x;
+            var helpRect = new Rect(settingsRect.x - settingsSize - 4f, settingsRect.y, settingsSize, settingsSize);
+            if (GUI.Button(helpRect, new GUIContent("?", "Hotkeys"), GUI.skin.button))
+                PopupWindow.Show(helpRect, new ArchitectorHotkeysPopup());
+            var noticeRight = helpRect.x;
             if (aiWork?.IsActive == true)
             {
                 var aiButtonWidth = ArchitectorAiWorkUi.WorkspaceButtonWidth(aiWork);
@@ -2433,6 +2437,23 @@ namespace Architector.Editor
                 GUI.FocusControl(null);
             }
             Repaint();
+        }
+
+        private void HandleLayerHistoryShortcut()
+        {
+            var current = Event.current;
+            if (current.type != EventType.KeyDown || !current.alt || EditorGUIUtility.editingTextField)
+                return;
+            if (current.keyCode == KeyCode.LeftArrow)
+            {
+                NavigateLayerHistory(-1);
+                current.Use();
+            }
+            else if (current.keyCode == KeyCode.RightArrow)
+            {
+                NavigateLayerHistory(1);
+                current.Use();
+            }
         }
 
         private void HandleUndoRedoShortcut()

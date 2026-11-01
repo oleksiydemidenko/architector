@@ -34,6 +34,21 @@ namespace Architector.Editor
         private List<ArchitectorMemberRecord> members = new();
         private Vector2 scroll;
         private bool dirty;
+        public static bool TitleFocusRequested { get; set; }
+
+        private static string DrawTitleField(string title)
+        {
+            const string controlName = "ArchitectorNodeTitle";
+            GUI.SetNextControlName(controlName);
+            var result = EditorGUILayout.TextField("Node Title", title);
+            if (TitleFocusRequested && Event.current.type == EventType.Repaint)
+            {
+                TitleFocusRequested = false;
+                EditorGUI.FocusTextInControl(controlName);
+            }
+            return result;
+        }
+
         private ArchitectorLayerDocuments cachedDocuments;
         private string cachedDocumentsLayerId = string.Empty;
         private int cachedDocumentsRevision = -1;
@@ -102,7 +117,7 @@ namespace Architector.Editor
 
                 EditorGUI.BeginChangeCheck();
                 scroll = EditorGUILayout.BeginScrollView(scroll);
-                nodeTitle = EditorGUILayout.TextField("Node Title", nodeTitle);
+                nodeTitle = DrawTitleField(nodeTitle);
                 var typeKindIndex = Mathf.Max(0, Array.IndexOf(TypeKinds, typeKind));
                 typeKind = TypeKinds[EditorGUILayout.Popup("Type Kind", typeKindIndex, TypeKinds)];
                 typeNamespace = EditorGUILayout.TextField("Namespace", typeNamespace);
@@ -323,7 +338,7 @@ namespace Architector.Editor
             EditorGUILayout.HelpBox(
                 "Empty Node represents a high-level architectural idea without a C# type. It can later become a Manual Type or be linked to an indexed project type.",
                 MessageType.Info);
-            nodeTitle = EditorGUILayout.TextField("Node Title", nodeTitle);
+            nodeTitle = DrawTitleField(nodeTitle);
             EditorGUILayout.EndScrollView();
             if (EditorGUI.EndChangeCheck())
                 dirty = true;
