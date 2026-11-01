@@ -15,6 +15,7 @@ namespace Architector.Editor
         private const float DragMovementThresholdSquared = 0.0001f;
         private static readonly int BoxSelectionControlHint = "ArchitectorBoxSelection".GetHashCode();
         private static readonly int PanControlHint = "ArchitectorPan".GetHashCode();
+        public const string CommandEventName = "ArchitectorCanvasCommand";
         private const float RightButtonPanThresholdSquared = 16f;
         private const float EdgeCornerRadius = 8f;
         private const int EdgeTierUnrelated = 0;
@@ -48,6 +49,7 @@ namespace Architector.Editor
         private float zoom = 1f;
         private Vector2 canvasSize;
         private Vector2 lastPointer;
+        private Vector2 lastPointerScreen;
         private bool pointerOverCanvas;
         private string pendingCommand;
         private bool draggingNode;
@@ -216,16 +218,19 @@ namespace Architector.Editor
             {
                 pointerOverCanvas = canvasRect.Contains(mouse);
                 lastPointer = mouse;
+                lastPointerScreen = GUIUtility.GUIToScreenPoint(mouse);
             }
             else if (current.type == EventType.MouseLeaveWindow)
             {
                 pointerOverCanvas = false;
             }
-            if (current.type == EventType.Layout && pendingCommand != null)
+            if (current.type == EventType.ExecuteCommand && current.commandName == CommandEventName && pendingCommand != null)
             {
                 var command = pendingCommand;
                 pendingCommand = null;
                 RunCommand(command, documents, repository, typeIndex, userState, execute, requestRepaint, openLayer);
+                current.Use();
+                return;
             }
             var boxSelectionControlId = GUIUtility.GetControlID(BoxSelectionControlHint, FocusType.Passive);
             var panControlId = GUIUtility.GetControlID(PanControlHint, FocusType.Passive);
@@ -804,11 +809,10 @@ namespace Architector.Editor
                     break;
                 case ArchitectorShortcuts.LinkType when editable:
                 {
-                    var screenPosition = GUIUtility.GUIToScreenPoint(lastPointer);
                     if (string.Equals(single.type?.mode, "linked", StringComparison.Ordinal))
-                        OpenRelinkPicker(single, documents, repository, typeIndex, execute, screenPosition);
+                        OpenRelinkPicker(single, documents, repository, typeIndex, execute, lastPointerScreen);
                     else if (string.Equals(single.type?.mode, "none", StringComparison.Ordinal))
-                        OpenLinkPicker(single, documents, repository, typeIndex, execute, screenPosition);
+                        OpenLinkPicker(single, documents, repository, typeIndex, execute, lastPointerScreen);
                     break;
                 }
                 case ArchitectorShortcuts.OpenPortal when single != null && IsPortal(single):

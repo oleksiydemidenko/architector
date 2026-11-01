@@ -121,6 +121,7 @@ namespace Architector.Editor
         public void SendCanvasCommand(string command)
         {
             layerCanvas?.SendCommand(command);
+            SendEvent(EditorGUIUtility.CommandEvent(ArchitectorLayerCanvas.CommandEventName));
             Repaint();
         }
 
