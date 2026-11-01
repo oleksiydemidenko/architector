@@ -1,6 +1,6 @@
 {
   "name": "com.oleksiydemidenko.architector-lazy-mode",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "displayName": "Architector Lazy Mode",
   "description": "A workflow mode for Architector: the agent writes and approves layers on its own, and you do not need to open Architector or follow its work. In development.",
   "unity": "6000.3",

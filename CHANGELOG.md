@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.4
 
 - Package version labels and update completion refresh after Package Manager registers a change, even when Unity skips assembly reload because no scripts changed.
 
