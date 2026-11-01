@@ -326,19 +326,11 @@ namespace Architector.Editor
                 var toLayer = project.layers.First(layer => layer.id == toLayerId);
                 var source = GetPlanDocuments(fromLayerId, documents);
                 var target = GetPlanDocuments(toLayerId, documents);
-                if (source.semantic.nodes.Any(node => IsPortalTo(node, toLayerId))
-                    || target.semantic.nodes.Any(node => IsPortalTo(node, fromLayerId)))
-                    throw new ArchitectorDataException(
-                        $"A Layer Portal pair between '{fromLayer.name}' and '{toLayer.name}' already exists.");
-
-                var pairId = NewId("portal-pair");
-                var exitNodeId = NewId("node");
-                var entryNodeId = NewId("node");
-                var size = AlignNodeSizeToGrid(280f, 120f);
-                AddPortalNode(source, exitNodeId, pairId, toLayerId, entryNodeId, ArchitectorPortalRoles.Exit,
-                    MakeUniqueNodeTitle(source.semantic, toLayer.name), item?.exitX ?? 0f, item?.exitY ?? 0f, size);
-                AddPortalNode(target, entryNodeId, pairId, fromLayerId, exitNodeId, ArchitectorPortalRoles.Entry,
-                    MakeUniqueNodeTitle(target.semantic, fromLayer.name), item?.entryX ?? 0f, item?.entryY ?? 0f, size);
+                EnsureLayerPortalPair(source, target, fromLayer, toLayer);
+                var exitNodeId = source.semantic.nodes.First(node => IsPortalTo(node, toLayerId)).id;
+                var entryNodeId = target.semantic.nodes.First(node => IsPortalTo(node, fromLayerId)).id;
+                PlacePlanPortal(source, exitNodeId, item?.exitX ?? 0f, item?.exitY ?? 0f);
+                PlacePlanPortal(target, entryNodeId, item?.entryX ?? 0f, item?.entryY ?? 0f);
                 references[exitReference] = exitNodeId;
                 references[entryReference] = entryNodeId;
             }
@@ -356,6 +348,12 @@ namespace Architector.Editor
                 var targetId = ResolveNodeReference(targetDocuments.semantic, references, item?.target);
                 var kind = NormalizeEdgeKind(item?.kind);
                 var edgeId = NewId("edge");
+                if (sourceLayerId != targetLayerId)
+                    EnsureLayerPortalPair(
+                        sourceDocuments,
+                        targetDocuments,
+                        project.layers.First(layer => layer.id == sourceLayerId),
+                        project.layers.First(layer => layer.id == targetLayerId));
                 sourceDocuments.semantic.edges.Add(new ArchitectorEdgeRecord
                 {
                     id = edgeId,
@@ -384,6 +382,14 @@ namespace Architector.Editor
             ApplyPlanEdgeChanges(project, documents, references, plan.edgeChanges);
             ApplyPlanDeletions(project, documents, references, plan.deletions);
             return new SemanticPlanCandidate(project, documents, references);
+        }
+
+        private void PlacePlanPortal(ArchitectorLayerDocuments documents, string nodeId, float x, float y)
+        {
+            var layout = documents.layout.nodes.First(node => node.nodeId == nodeId);
+            var position = FindAvailablePosition(documents.layout, x, y, new ArchitectorSize(layout.width, layout.height), nodeId);
+            layout.x = position.x;
+            layout.y = position.y;
         }
 
         private void ApplyPlanRenames(

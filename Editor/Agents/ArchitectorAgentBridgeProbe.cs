@@ -7,7 +7,8 @@ namespace Architector.Editor.Agents
             id = ArchitectorAgentBridge.IntegrationId,
             displayName = "Architector MCP server",
             packageName = "com.oleksiydemidenko.architector",
-            documentationUrl = "https://github.com/oleksiydemidenko/architector/blob/main/Documentation~/AgentSetup.md"
+            documentationUrl = "https://github.com/oleksiydemidenko/architector/blob/main/Documentation~/AgentSetup.md",
+            builtIn = true
         };
 
         public ArchitectorAgentIntegrationProbeResult Probe(string packageVersion)
@@ -26,7 +27,7 @@ namespace Architector.Editor.Agents
 
         public void OpenSetup()
         {
-            ArchitectorMcpSetupWindow.Open();
+            ArchitectorIntegrationsWindow.Open();
         }
     }
 }

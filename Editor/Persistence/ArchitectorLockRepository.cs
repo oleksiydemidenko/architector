@@ -162,6 +162,18 @@ namespace Architector.Editor
             }
         }
 
+        private void EnforceLayoutLock(ArchitectorLayerRecord layer)
+        {
+            foreach (var locked in Project.groups.Where(group => IsGroupLockedForEditing(group.id)))
+            {
+                var groupIds = new HashSet<string>(StringComparer.Ordinal);
+                var layerIds = new HashSet<string>(StringComparer.Ordinal);
+                CollectDescendants(Project, locked.id, groupIds, layerIds);
+                if (layerIds.Contains(layer.id))
+                    throw new ArchitectorDataException(LockViolationMessage(locked));
+            }
+        }
+
         private bool AddsOutgoingDependency(
             ISet<string> lockedLayerIds,
             IReadOnlyDictionary<string, ArchitectorLayerDocuments> nextLayers)

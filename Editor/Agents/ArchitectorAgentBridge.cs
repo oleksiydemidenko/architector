@@ -16,7 +16,7 @@ namespace Architector.Editor.Agents
     [InitializeOnLoad]
     public static class ArchitectorAgentBridge
     {
-        public const string IntegrationId = "architector-mcp";
+        public const string IntegrationId = ArchitectorAgentIntegrationRegistry.BuiltInId;
         private const int RequestTimeoutMilliseconds = 120000;
         private static readonly ConcurrentQueue<Action> Pending = new();
         private static TcpListener listener;

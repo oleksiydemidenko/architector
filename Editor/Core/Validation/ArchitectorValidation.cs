@@ -41,6 +41,7 @@ namespace Architector.Editor
             if (settings.sourceIndex == null || settings.geometry == null)
                 throw new ArchitectorDataException("Settings sections are required.");
             settings.optimization ??= new ArchitectorOptimizationSettings();
+            settings.arrange ??= new ArchitectorArrangeSettings();
             settings.palette ??= new ArchitectorPaletteSettings();
             settings.agent ??= new ArchitectorAgentSettings();
             settings.agent.integrations ??= new List<ArchitectorAgentIntegrationRecord>();
@@ -56,6 +57,8 @@ namespace Architector.Editor
                 throw new ArchitectorDataException("Minimum node gap cannot be negative.");
             if (settings.geometry.gridSize <= 0f)
                 throw new ArchitectorDataException("Grid size must be positive.");
+            if (settings.arrange.maxGroupRelationships < 1)
+                throw new ArchitectorDataException("Arrange group relationships must be positive.");
             if (settings.optimization.memberParentDepth is < -1 or > 2)
                 throw new ArchitectorDataException("Member parent depth must be 0, 1, 2 or -1 for all parents.");
             var integrationIds = new HashSet<string>(StringComparer.Ordinal);

@@ -20,6 +20,8 @@ namespace Architector.Editor
         public string displayName = string.Empty;
         public string packageName = string.Empty;
         public string documentationUrl = string.Empty;
+        public string installUrl = string.Empty;
+        public bool builtIn;
     }
 
     public readonly struct ArchitectorAgentIntegrationProbeResult
@@ -51,12 +53,15 @@ namespace Architector.Editor
 
     public static class ArchitectorAgentIntegrationRegistry
     {
+        public const string BuiltInId = "architector-mcp";
+
         public static readonly ArchitectorAgentIntegrationDescriptor CoplayUnityMcp = new()
         {
             id = "coplay-unity-mcp",
             displayName = "MCP for Unity by Coplay",
             packageName = "com.coplaydev.unity-mcp",
-            documentationUrl = "https://github.com/CoplayDev/unity-mcp"
+            documentationUrl = "https://github.com/CoplayDev/unity-mcp",
+            installUrl = "https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#v10.3.0"
         };
 
         public static readonly ArchitectorAgentIntegrationDescriptor IvanMurzakUnityMcp = new()
@@ -71,6 +76,12 @@ namespace Architector.Editor
 
         public static IReadOnlyList<ArchitectorAgentIntegrationDescriptor> Descriptors => descriptors ??= Discover();
 
+        public static bool IsAdded(ArchitectorAgentSettings agent, ArchitectorAgentIntegrationDescriptor descriptor)
+        {
+            return descriptor.builtIn
+                   || agent.integrations.Any(record => string.Equals(record.id, descriptor.id, StringComparison.Ordinal));
+        }
+
         private static IReadOnlyList<ArchitectorAgentIntegrationDescriptor> Discover()
         {
             var known = new List<ArchitectorAgentIntegrationDescriptor> { CoplayUnityMcp, IvanMurzakUnityMcp };
@@ -80,7 +91,7 @@ namespace Architector.Editor
                 if (descriptor != null && known.All(candidate => candidate.id != descriptor.id))
                     known.Add(descriptor);
             }
-            return known;
+            return known.OrderByDescending(descriptor => descriptor.builtIn).ToList();
         }
 
         public static ArchitectorAgentIntegrationProbeResult Probe(

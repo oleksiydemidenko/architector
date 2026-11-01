@@ -7,7 +7,8 @@ It is built around one question: *what governs this piece of code, and what may 
 ## What You Get
 
 - **An architecture graph.** One layer describes one responsibility. Cross-layer links go through Portals, and only dependency relationships must stay acyclic.
-- **Approval.** A layer can be approved as canon. Semantic changes mark it as changed until someone reviews them. Layout changes do not.
+- **Arrange.** One command lays a layer or a selection around its most connected nodes, in a compact grid with short routes.
+- **Approval.** A layer can be approved as canon. Semantic changes mark it as changed until someone reviews them. Layout changes do not. Architector asks you to confirm every approval an agent requests.
 - **A digest.** `Architector/Architecture.digest.md` is a deterministic text summary of the approved architecture, generated with every commit of the graph.
 - **Conformance.** Linked nodes are checked against compiled types and selected members.
 - **Dependency evidence.** A command-line tool compares real code dependencies with the declared ones.
@@ -32,7 +33,7 @@ https://github.com/oleksiydemidenko/architector.git
 2. Create a group and a layer, then add a node and link it to a type from your project.
 3. Open **Window > Architector > Settings** and set the source roots to index, for example `Assets/Scripts`.
 4. Commit the `Architector/` folder. It belongs in version control.
-5. Open **Window > Architector > MCP Server**, press **Install Server** and copy the settings for your agent. See [Agent Setup](Documentation~/AgentSetup.md) for the details.
+5. Open **Window > Architector > Integrations**, press **Install Server** and connect your agent. See [Agent Setup](Documentation~/AgentSetup.md) for the details.
 
 ## Working Without Unity
 

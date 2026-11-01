@@ -12,10 +12,10 @@ namespace Architector.Editor
 
         public ArchitectorLayerApprovalStatus GetLayerApprovalStatus(string layerId)
         {
-            if (approvalStatusCacheRevision != Revision)
+            if (approvalStatusCacheRevision != SemanticRevision)
             {
                 approvalStatusCache.Clear();
-                approvalStatusCacheRevision = Revision;
+                approvalStatusCacheRevision = SemanticRevision;
             }
             if (approvalStatusCache.TryGetValue(layerId, out var cached))
                 return cached;
@@ -42,7 +42,7 @@ namespace Architector.Editor
             return requested.Select(GetLayerApprovalStatus).ToArray();
         }
 
-        public void ApproveLayers(IReadOnlyCollection<string> layerIds)
+        public void ApproveLayers(IReadOnlyCollection<string> layerIds, bool approvedByAgent = false)
         {
             if (layerIds == null || layerIds.Count == 0)
                 throw new ArchitectorDataException("At least one layer is required for approval.");
@@ -64,6 +64,7 @@ namespace Architector.Editor
             {
                 var layer = FindLayer(id);
                 return !string.Equals(layer.approval?.semanticHash, hashes[id], StringComparison.Ordinal)
+                       || layer.approval?.approvedByAgent != approvedByAgent
                        || ArchitectorBaselineDiff.HasChangedResponsibilities(layer.approval?.baseline, layers[id].semantic);
             }).ToHashSet(StringComparer.Ordinal);
             if (stale.Count == 0)
@@ -79,6 +80,7 @@ namespace Architector.Editor
                     layer.approval = new ArchitectorLayerApprovalRecord
                     {
                         semanticHash = hashes[id],
+                        approvedByAgent = approvedByAgent,
                         baseline = ArchitectorBaselineDiff.Capture(Project, layers, id)
                     };
                 }
@@ -273,7 +275,7 @@ namespace Architector.Editor
         {
             var record = Settings.agent?.integrations?.FirstOrDefault(candidate =>
                 string.Equals(candidate.id, integrationId, StringComparison.Ordinal));
-            return record?.enabled ?? true;
+            return record?.enabled ?? string.Equals(integrationId, ArchitectorAgentIntegrationRegistry.BuiltInId, StringComparison.Ordinal);
         }
 
         private Dictionary<string, ArchitectorLayerDocuments> LoadAllLayers()

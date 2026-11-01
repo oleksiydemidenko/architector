@@ -22,7 +22,7 @@ The graph describes structure, contracts, ownership and dependency direction. Ra
 - Select only the members a consumer or extender relies on. Add base types and interfaces only when they matter to the contract.
 - Fill **responsibility** on every node whose role is not obvious from its name: one line, what it owns or is for.
 - **Relationships**: `dependency` A→B means A needs B; draw the direction the rule enforces. Use `event`, `dataFlow` and `callback` for runtime communication. Label a relationship when the reason is not obvious.
-- Cross-layer relationships need a Portal pair (`portals` in the plan, before `edges`).
+- Cross-layer relationships create their Portal pair by themselves. Use `portals` in the plan only to set its position.
 - Set a **code scope** for every layer of agreed architecture (`layerScopes`: folders, single files or namespaces). The most specific entry wins.
 - **Layers follow contract ownership, not role folders.** A shared vocabulary type belongs to the layer that owns the contract, usually the depended-upon layer.
 
@@ -31,9 +31,9 @@ The graph describes structure, contracts, ownership and dependency direction. Ra
 1. `begin_work` with the current revision.
 2. Find type keys with `type_search` (`Assembly:MetadataName`, generics as ``List`1``).
 3. Member symbol keys follow `kind|Assembly:Type|Name|genericArity|parameters`. Take them from `type_contract`.
-4. Write one semantic plan (groups, layers, `layerScopes`, nodes with `responsibility`, portals, edges). Run `dry_run_plan`, fix the reported errors, then `apply_plan` with `plan={"plan_token": "<token from the dry run>"}` instead of resending the plan.
+4. Write one semantic plan (groups, layers, `layerScopes`, nodes with `responsibility`, edges). Run `dry_run_plan`, fix the reported errors, then `apply_plan` with `plan={"plan_token": "<token from the dry run>"}` instead of resending the plan.
 5. Run `conformance` for the group and `DependencyEvidence` from the repository root. Fix the graph or report the gap.
-6. `end_work`, then report the layers, conformance counts, dependency evidence and open questions to the user. Approve only when the user asks.
+6. `end_work`, then report the layers, conformance counts, dependency evidence and open questions to the user. Approve only when the user asks, unless `capabilities` reports `agent_may_approve`. Otherwise Architector asks the user to confirm in the Editor.
 
 ## Designing New Systems
 

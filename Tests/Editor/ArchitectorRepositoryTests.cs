@@ -992,6 +992,87 @@ namespace Architector.Editor.Tests
         }
 
         [Test]
+        public void SemanticPlanEdgeCreatesTheMissingPortalPairOnce()
+        {
+            var firstLayerId = repository.CreateLayer(string.Empty, "First");
+            var secondLayerId = repository.CreateLayer(string.Empty, "Second");
+            var firstNode = repository.CreateEmptyNode(firstLayerId, 0f, 0f);
+            var secondNode = repository.CreateEmptyNode(secondLayerId, 0f, 0f);
+            var plan = new ArchitectorSemanticPlan
+            {
+                edges =
+                {
+                    new ArchitectorPlanEdge { sourceLayer = firstLayerId, source = firstNode, targetLayer = secondLayerId, target = secondNode, kind = ArchitectorEdgeKinds.Dependency },
+                    new ArchitectorPlanEdge { sourceLayer = secondLayerId, source = secondNode, targetLayer = firstLayerId, target = firstNode, kind = ArchitectorEdgeKinds.Event }
+                }
+            };
+            int PortalCount(string layerId) =>
+                repository.LoadLayer(layerId).semantic.nodes.Count(node => node.kind == ArchitectorNodeKinds.LayerPortal);
+
+            repository.DryRunSemanticPlan(plan);
+            Assert.That(PortalCount(firstLayerId), Is.Zero);
+
+            repository.ApplySemanticPlan(plan);
+
+            Assert.That(PortalCount(firstLayerId), Is.EqualTo(1));
+            Assert.That(PortalCount(secondLayerId), Is.EqualTo(1));
+            Assert.That(repository.LoadLayer(firstLayerId).semantic.edges.Count(edge => edge.targetLayerId == secondLayerId), Is.EqualTo(1));
+            Assert.That(repository.LoadLayer(secondLayerId).semantic.edges.Count(edge => edge.targetLayerId == firstLayerId), Is.EqualTo(1));
+        }
+
+        [Test]
+        public void SemanticPlanPortalEntryPlacesAnExistingPair()
+        {
+            var firstLayerId = repository.CreateLayer(string.Empty, "First");
+            var secondLayerId = repository.CreateLayer(string.Empty, "Second");
+            var firstNode = repository.CreateEmptyNode(firstLayerId, 0f, 0f);
+            var secondNode = repository.CreateEmptyNode(secondLayerId, 0f, 0f);
+            repository.CreateCrossLayerEdge(firstLayerId, firstNode, secondLayerId, secondNode, ArchitectorEdgeKinds.Dependency);
+
+            var result = repository.ApplySemanticPlan(new ArchitectorSemanticPlan
+            {
+                portals = { new ArchitectorPlanPortal { exitReference = "exit", entryReference = "entry", fromLayer = secondLayerId, toLayer = firstLayerId, exitX = 960f, entryX = 1280f } }
+            });
+
+            var firstPortal = repository.LoadLayer(firstLayerId).semantic.nodes.Single(node => node.kind == ArchitectorNodeKinds.LayerPortal);
+            var secondPortal = repository.LoadLayer(secondLayerId).semantic.nodes.Single(node => node.kind == ArchitectorNodeKinds.LayerPortal);
+            Assert.That(result.References["exit"], Is.EqualTo(secondPortal.id));
+            Assert.That(result.References["entry"], Is.EqualTo(firstPortal.id));
+            Assert.That(repository.LoadLayer(secondLayerId).layout.nodes.Single(node => node.nodeId == secondPortal.id).x, Is.EqualTo(960f));
+            Assert.That(repository.LoadLayer(firstLayerId).layout.nodes.Single(node => node.nodeId == firstPortal.id).x, Is.EqualTo(1280f));
+        }
+
+        [Test]
+        public void MovingNodesWritesOnlyLayoutAndSurvivesReloadAndUndo()
+        {
+            var firstLayerId = repository.CreateLayer(string.Empty, "First");
+            var secondLayerId = repository.CreateLayer(string.Empty, "Second");
+            var firstNode = repository.CreateEmptyNode(firstLayerId, 0f, 0f);
+            var secondNode = repository.CreateEmptyNode(secondLayerId, 0f, 0f);
+            repository.CreateCrossLayerEdge(firstLayerId, firstNode, secondLayerId, secondNode, ArchitectorEdgeKinds.Dependency);
+            var portalId = repository.LoadLayer(firstLayerId).semantic.nodes.Single(node => node.kind == ArchitectorNodeKinds.LayerPortal).id;
+            var semanticRevision = repository.SemanticRevision;
+            var revision = repository.Revision;
+
+            repository.MoveNodes(firstLayerId, new Dictionary<string, ArchitectorPoint>
+            {
+                [firstNode] = new ArchitectorPoint(960f, 640f),
+                [portalId] = new ArchitectorPoint(1920f, 1280f)
+            });
+
+            Assert.That(repository.Revision, Is.EqualTo(revision + 1));
+            Assert.That(repository.SemanticRevision, Is.EqualTo(semanticRevision));
+            var reloaded = new ArchitectorRepository(new ArchitectorPaths(temporaryRoot)).LoadLayer(firstLayerId).layout;
+            Assert.That(reloaded.nodes.Single(node => node.nodeId == firstNode).x, Is.EqualTo(960f));
+            Assert.That(reloaded.nodes.Single(node => node.nodeId == portalId).x, Is.EqualTo(1920f));
+
+            repository.Undo();
+
+            Assert.That(repository.LoadLayer(firstLayerId).layout.nodes.Single(node => node.nodeId == firstNode).x, Is.Not.EqualTo(960f));
+            Assert.That(repository.LoadLayer(firstLayerId).layout.nodes.Single(node => node.nodeId == portalId).x, Is.Not.EqualTo(1920f));
+        }
+
+        [Test]
         public void DeletingPortalDestinationLayerCleansTheSurvivingCounterpart()
         {
             var sourceLayerId = repository.CreateLayer(string.Empty, "Gameplay");
@@ -1674,28 +1755,6 @@ namespace Architector.Editor.Tests
         }
 
         [Test]
-        public void HighQualityDragRoutingPersistsAndParticipatesInUndoRedo()
-        {
-            Assert.That(repository.Settings.optimization.highQualityDragRouting, Is.False);
-
-            repository.UpdateSettings(
-                "Enable High Quality Drag Routing",
-                settings => settings.optimization.highQualityDragRouting = true);
-
-            Assert.That(repository.Settings.optimization.highQualityDragRouting, Is.True);
-            Assert.That(
-                ArchitectorJson.Read<ArchitectorSettingsDocument>(repository.Paths.SettingsPath)
-                    .optimization.highQualityDragRouting,
-                Is.True);
-
-            repository.Undo();
-            Assert.That(repository.Settings.optimization.highQualityDragRouting, Is.False);
-
-            repository.Redo();
-            Assert.That(repository.Settings.optimization.highQualityDragRouting, Is.True);
-        }
-
-        [Test]
         public void MemberSearchScopePersistsAndParticipatesInUndoRedo()
         {
             Assert.That(repository.Settings.optimization.memberParentDepth, Is.Zero);
@@ -2259,100 +2318,6 @@ namespace Architector.Editor.Tests
             {
                 repository.Project.layers.Single(layer => layer.name == "Middle").id
             }));
-        }
-
-        [Test]
-        public void OrthogonalRouteDetoursAroundNodeRectangle()
-        {
-            var method = typeof(ArchitectorLayerCanvas).GetMethod(
-                "FindObstacleAwareRoute",
-                BindingFlags.Static | BindingFlags.NonPublic);
-            Assert.That(method, Is.Not.Null);
-            var obstacle = new Rect(100f, 0f, 100f, 100f);
-            var route = (List<Vector2>)method.Invoke(null, new object[]
-            {
-                new Vector2(0f, 50f),
-                new Vector2(300f, 50f),
-                new[] { obstacle }
-            });
-
-            Assert.That(route, Is.Not.Null);
-            Assert.That(route.Count, Is.GreaterThanOrEqualTo(4));
-            for (var index = 1; index < route.Count; index++)
-            {
-                var start = route[index - 1];
-                var end = route[index];
-                Assert.That(Mathf.Approximately(start.x, end.x) || Mathf.Approximately(start.y, end.y), Is.True);
-                if (Mathf.Approximately(start.y, end.y) && start.y > obstacle.yMin && start.y < obstacle.yMax)
-                {
-                    var minX = Mathf.Min(start.x, end.x);
-                    var maxX = Mathf.Max(start.x, end.x);
-                    Assert.That(maxX <= obstacle.xMin || minX >= obstacle.xMax, Is.True);
-                }
-            }
-        }
-
-        [Test]
-        public void GridRouteUsesCellCentersAndDetoursAroundProtectedCells()
-        {
-            var method = typeof(ArchitectorLayerCanvas).GetMethod(
-                "FindGridRoute",
-                BindingFlags.Static | BindingFlags.NonPublic);
-            Assert.That(method, Is.Not.Null);
-            const float grid = 75f;
-            var protectedCells = new[] { new Rect(75f, -75f, 225f, 225f) };
-            var route = (List<Vector2>)method.Invoke(null, new object[]
-            {
-                new Vector2(37.5f, 37.5f),
-                new Vector2(337.5f, 37.5f),
-                protectedCells,
-                grid
-            });
-
-            Assert.That(route, Is.Not.Null);
-            Assert.That(route.Count, Is.GreaterThanOrEqualTo(4));
-            foreach (var point in route)
-            {
-                Assert.That(Mathf.Repeat(point.x, grid), Is.EqualTo(grid * 0.5f).Within(0.01f));
-                Assert.That(Mathf.Repeat(point.y, grid), Is.EqualTo(grid * 0.5f).Within(0.01f));
-            }
-            Assert.That(route.Any(point => point.y >= 187.5f || point.y <= -112.5f), Is.True);
-        }
-
-        [Test]
-        public void OneOccupiedPortUsesTheExactEdgeCenter()
-        {
-            var method = typeof(ArchitectorLayerCanvas).GetMethod(
-                "CenteredOccupiedPortOffset",
-                BindingFlags.Static | BindingFlags.NonPublic);
-            Assert.That(method, Is.Not.Null);
-
-            var offset = (float)method.Invoke(null, new object[] { 150f, 0, 1 });
-            Assert.That(offset, Is.EqualTo(0f).Within(0.01f));
-        }
-
-        [Test]
-        public void OccupiedPortsDivideTheWholeNodeEdgeSymmetrically()
-        {
-            var method = typeof(ArchitectorLayerCanvas).GetMethod(
-                "CenteredOccupiedPortOffset",
-                BindingFlags.Static | BindingFlags.NonPublic);
-            Assert.That(method, Is.Not.Null);
-
-            var twoOffsets = Enumerable.Range(0, 2)
-                .Select(index => (float)method.Invoke(null, new object[] { 150f, index, 2 }))
-                .ToList();
-            Assert.That(twoOffsets[0], Is.EqualTo(-twoOffsets[1]).Within(0.01f));
-            Assert.That(twoOffsets[0], Is.LessThan(0f));
-
-            var offsets = Enumerable.Range(0, 8)
-                .Select(index => (float)method.Invoke(null, new object[] { 150f, index, 8 }))
-                .ToList();
-
-            Assert.That(offsets.Distinct().Count(), Is.EqualTo(8));
-            Assert.That(offsets.First(), Is.EqualTo(-offsets.Last()).Within(0.01f));
-            Assert.That(offsets.Min(), Is.LessThan(-50f));
-            Assert.That(offsets.Max(), Is.GreaterThan(50f));
         }
 
         [Test]

@@ -52,6 +52,7 @@ namespace Architector.Editor
         public int schemaVersion = ArchitectorStorageCodec.SchemaVersion;
         public string layerId = string.Empty;
         public string semanticHash = string.Empty;
+        public bool approvedByAgent;
         public ArchitectorLayerBaselineRecord baseline = new();
     }
 
@@ -270,16 +271,11 @@ namespace Architector.Editor
                     {
                         layerId = layer.id,
                         semanticHash = layer.approval.semanticHash,
+                        approvedByAgent = layer.approval.approvedByAgent,
                         baseline = layer.approval.baseline ?? new ArchitectorLayerBaselineRecord()
                     });
                 }
-                files[ArchitectorPaths.LayoutPath(layer.id, layer.name)] = ArchitectorJson.Serialize(new ArchitectorStoredLayoutDocument
-                {
-                    layerId = layer.id,
-                    nodes = documents.layout.nodes.Where(node => !portalIds.Contains(node.nodeId)).ToList(),
-                    edges = documents.layout.edges.Where(edge => intraEdgeIds.Contains(edge.edgeId)).ToList(),
-                    visibleRelationshipKinds = documents.layout.visibleRelationshipKinds
-                });
+                files[ArchitectorPaths.LayoutPath(layer.id, layer.name)] = EncodeLayout(layer.id, documents);
             }
 
             var relationshipsByPair = new Dictionary<string, List<(ArchitectorEdgeRecord edge, ArchitectorEdgeLayoutRecord layout)>>(
@@ -323,6 +319,31 @@ namespace Architector.Editor
                 });
             }
             return files;
+        }
+
+        public static string EncodeLayout(string layerId, ArchitectorLayerDocuments documents)
+        {
+            var portalIds = documents.semantic.nodes.Where(IsPortal).Select(node => node.id).ToHashSet(StringComparer.Ordinal);
+            var intraEdgeIds = documents.semantic.edges
+                .Where(edge => IsIntraLayer(edge, layerId))
+                .Select(edge => edge.id)
+                .ToHashSet(StringComparer.Ordinal);
+            return ArchitectorJson.Serialize(new ArchitectorStoredLayoutDocument
+            {
+                layerId = layerId,
+                nodes = documents.layout.nodes.Where(node => !portalIds.Contains(node.nodeId)).ToList(),
+                edges = documents.layout.edges.Where(edge => intraEdgeIds.Contains(edge.edgeId)).ToList(),
+                visibleRelationshipKinds = documents.layout.visibleRelationshipKinds
+            });
+        }
+
+        public static string MovePortalEndpoint(string linkJson, string path, ArchitectorNodeLayoutRecord layout)
+        {
+            var link = ArchitectorJson.Deserialize<ArchitectorStoredLinkDocument>(linkJson, path);
+            var endpoint = link.endpoints.First(candidate => candidate.nodeId == layout.nodeId);
+            endpoint.x = layout.x;
+            endpoint.y = layout.y;
+            return ArchitectorJson.Serialize(link);
         }
 
         private static string LayerName(ArchitectorProjectDocument project, string layerId) =>
@@ -471,6 +492,7 @@ namespace Architector.Editor
                 layer.approval = new ArchitectorLayerApprovalRecord
                 {
                     semanticHash = stored.semanticHash,
+                    approvedByAgent = stored.approvedByAgent,
                     baseline = stored.baseline ?? new ArchitectorLayerBaselineRecord()
                 };
             }

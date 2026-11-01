@@ -6,11 +6,8 @@
 
 **The Architector MCP server is for MCP clients.** It is one program for Windows, macOS or Linux. It needs no .NET SDK and no other Unity MCP package.
 
-1. Open **Window > Architector > MCP Server** and press **Install Server**. The server goes to `~/.architector/mcp/<version>/`.
-2. Copy the settings for your client from the same window:
-   - Claude Code: a `claude mcp add` command.
-   - Codex: a block for `config.toml`.
-   - Cursor and other clients: a block for their MCP JSON file.
+1. Open **Window > Architector > Integrations** and press **Install Server**. The server goes to `~/.architector/mcp/<version>/`.
+2. In the same window press **Connect** next to Claude Code or Codex. This needs their command line tool. Cursor and other clients take a block for their MCP JSON file from **Manual Setup**.
 3. Restart the client if it does not pick the server up.
 
 | Tool | Needs the Editor | Purpose |
@@ -30,7 +27,7 @@ The server runs on the machine with the project. It talks to the Editor through 
 - [MCP for Unity by Coplay](https://github.com/CoplayDev/unity-mcp): tools `architector_query` and `architector_edit`.
 - [Unity MCP by Ivan Murzak](https://github.com/IvanMurzak/Unity-MCP) 1.6.0 or later: tools `architector-query` and `architector-edit`. Both take one `parameters` string with a JSON object, for example `{"action":"project_summary"}`. This plugin starts in cloud mode and logs an authorization error until you sign in or switch it to a local server.
 
-Architector detects the package and registers its tools. Check the state in **Window > Architector > Settings > AI Integration**.
+Install the package and press **Add Connection** for it in **Window > Architector > Integrations**. Check the state in **Window > Architector > Settings > AI Integration**.
 
 Keep **Run In Background** on in Player settings, or the Editor stops answering while its window has no focus.
 
@@ -50,7 +47,7 @@ Architecture lives in `Architector/`. Do not edit its JSON by hand.
   and read only the digest lines and documents it prints.
 - `Architector/Architecture.digest.md` is the approved architecture. Do not read it whole.
 - To change the architecture, use `architector_edit` with a work session. Saving does not approve.
-  Only the user approves a layer.
+  Architector asks the user to confirm every approval.
 ```
 
 ## 3. Choose Document Folders

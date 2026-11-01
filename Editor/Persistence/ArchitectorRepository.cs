@@ -21,6 +21,7 @@ namespace Architector.Editor
             new Dictionary<string, string>(StringComparer.Ordinal);
         private Dictionary<string, ArchitectorLayerDocuments> layerDocuments = new(StringComparer.Ordinal);
         private Dictionary<string, string> layerErrors = new(StringComparer.Ordinal);
+        private int layoutRevisions;
         private Dictionary<string, string> diskFiles = new(StringComparer.Ordinal);
         private Dictionary<string, ArchitectorFileStamp> diskStamps = new(StringComparer.Ordinal);
         private Dictionary<string, ArchitectorFileStamp> rejectedDiskStamps;
@@ -38,6 +39,7 @@ namespace Architector.Editor
         public ArchitectorProjectDocument Project { get; private set; }
         public ArchitectorSettingsDocument Settings { get; private set; }
         public int Revision { get; private set; }
+        public int SemanticRevision => Revision - layoutRevisions;
         public string ExternalChangeError { get; private set; } = string.Empty;
         public bool CanUndo => undo.Count > 0;
         public bool CanRedo => redo.Count > 0;
@@ -706,7 +708,7 @@ namespace Architector.Editor
         public void MoveNode(string layerId, string nodeId, float requestedX, float requestedY)
         {
             var layer = FindLayer(layerId) ?? throw new ArchitectorDataException($"Layer '{layerId}' does not exist.");
-            ExecuteLayerChange("Move Node", layer, (semantic, layout) =>
+            ExecuteLayoutChange("Move Node", layer, layout =>
             {
                 var nodeLayout = layout.nodes.FirstOrDefault(candidate => candidate.nodeId == nodeId)
                                  ?? throw new ArchitectorDataException($"Node '{nodeId}' does not exist in layer '{layer.name}'.");
@@ -721,12 +723,15 @@ namespace Architector.Editor
             });
         }
 
-        public void MoveNodes(string layerId, IReadOnlyDictionary<string, ArchitectorPoint> requestedPositions)
+        public void MoveNodes(
+            string layerId,
+            IReadOnlyDictionary<string, ArchitectorPoint> requestedPositions,
+            string actionName = "Move Nodes")
         {
             if (requestedPositions == null || requestedPositions.Count == 0)
                 return;
             var layer = FindLayer(layerId) ?? throw new ArchitectorDataException($"Layer '{layerId}' does not exist.");
-            ExecuteLayerChange("Move Nodes", layer, (_, layout) =>
+            ExecuteLayoutChange(actionName, layer, layout =>
             {
                 var knownIds = new HashSet<string>(layout.nodes.Select(node => node.nodeId), StringComparer.Ordinal);
                 foreach (var nodeId in requestedPositions.Keys)
@@ -871,25 +876,7 @@ namespace Architector.Editor
                                      ?? throw new ArchitectorDataException("The source node does not exist or is a Portal.");
                     var targetNode = target.semantic.nodes.FirstOrDefault(node => node.id == targetNodeId && !IsPortal(node))
                                      ?? throw new ArchitectorDataException("The target node does not exist or is a Portal.");
-                    var sourcePortal = source.semantic.nodes.FirstOrDefault(node => IsPortalTo(node, targetLayerId));
-                    var targetPortal = target.semantic.nodes.FirstOrDefault(node => IsPortalTo(node, sourceLayerId));
-                    if (sourcePortal == null && targetPortal == null)
-                    {
-                        var pairId = NewId("portal-pair");
-                        var sourcePortalId = NewId("node");
-                        var targetPortalId = NewId("node");
-                        var size = AlignNodeSizeToGrid(280f, 120f);
-                        AddPortalNode(source, sourcePortalId, pairId, targetLayerId, targetPortalId,
-                            ArchitectorPortalRoles.Exit, MakeUniqueNodeTitle(source.semantic, targetLayer.name),
-                            0f, 0f, size);
-                        AddPortalNode(target, targetPortalId, pairId, sourceLayerId, sourcePortalId,
-                            ArchitectorPortalRoles.Entry, MakeUniqueNodeTitle(target.semantic, sourceLayer.name),
-                            0f, 0f, size);
-                    }
-                    else if (sourcePortal == null || targetPortal == null)
-                    {
-                        throw new ArchitectorDataException("The Portal pair between the endpoint layers is incomplete.");
-                    }
+                    EnsureLayerPortalPair(source, target, sourceLayer, targetLayer);
                     if (source.semantic.edges.Any(edge =>
                             edge.sourceNodeId == sourceNodeId
                             && edge.targetLayerId == targetLayerId
@@ -963,7 +950,7 @@ namespace Architector.Editor
         public void SetRelationshipVisibility(string layerId, int visibleKinds)
         {
             var layer = FindLayer(layerId) ?? throw new ArchitectorDataException($"Layer '{layerId}' does not exist.");
-            ExecuteLayerChange("Change Relationship Visibility", layer, (_, layout) =>
+            ExecuteLayoutChange("Change Relationship Visibility", layer, layout =>
                 layout.visibleRelationshipKinds = visibleKinds & ArchitectorRelationshipVisibility.All);
         }
 
@@ -1610,7 +1597,85 @@ namespace Architector.Editor
             var nextProject = ArchitectorJson.Clone(Project);
             var nextLayers = CloneAllLayers();
             mutate(nextProject, nextLayers);
-            Commit(name, nextProject, nextLayers, null, false, notifyWhenUnchanged: true);
+            Commit(name, nextProject, nextLayers, null, false, notifyWhenUnchanged: true, reportApprovalImpacts: false);
+        }
+
+        private void ExecuteLayoutChange(string name, ArchitectorLayerRecord layer, Action<ArchitectorLayerLayoutDocument> mutate)
+        {
+            EnsureDiskMatchesSession();
+            var current = ReadLayer(layer.id);
+            var next = new ArchitectorLayerDocuments(current.semantic, ArchitectorJson.Clone(current.layout));
+            mutate(next.layout);
+
+            var changes = new SortedDictionary<string, string>(StringComparer.Ordinal);
+            var layoutPath = ArchitectorPaths.LayoutPath(layer.id, layer.name);
+            var layoutJson = ArchitectorStorageCodec.EncodeLayout(layer.id, next);
+            if (!string.Equals(layoutJson, ArchitectorStorageCodec.EncodeLayout(layer.id, current), StringComparison.Ordinal))
+            {
+                EnforceLayoutLock(layer);
+                changes[layoutPath] = layoutJson;
+            }
+            foreach (var portal in current.semantic.nodes.Where(IsPortal))
+            {
+                var before = current.layout.nodes.First(node => node.nodeId == portal.id);
+                var after = next.layout.nodes.First(node => node.nodeId == portal.id);
+                if (before.x == after.x && before.y == after.y)
+                    continue;
+                var linkPath = PortalLinkPath(layer.id, portal.portal);
+                if (!diskFiles.TryGetValue(linkPath, out var linkJson))
+                {
+                    changes[layoutPath] = null;
+                    break;
+                }
+                changes[linkPath] = ArchitectorStorageCodec.MovePortalEndpoint(linkJson, linkPath, after);
+            }
+
+            if (changes.ContainsKey(layoutPath) && (changes[layoutPath] == null || !diskFiles.ContainsKey(layoutPath)))
+            {
+                ExecuteLayerChange(name, layer, (_, layout) => mutate(layout));
+                return;
+            }
+            if (changes.Count == 0)
+            {
+                layoutRevisions++;
+                Revision++;
+                Changed?.Invoke();
+                return;
+            }
+            WriteLayoutCommit(name, changes, layer.id, next);
+        }
+
+        private string PortalLinkPath(string layerId, ArchitectorPortalRecord portal)
+        {
+            var layers = new[] { layerId, portal.targetLayerId }.OrderBy(id => id, StringComparer.Ordinal).ToArray();
+            return ArchitectorPaths.LinkPath(portal.pairId, FindLayer(layers[0])?.name ?? string.Empty, FindLayer(layers[1])?.name ?? string.Empty);
+        }
+
+        private void WriteLayoutCommit(
+            string name,
+            IReadOnlyDictionary<string, string> changes,
+            string layerId,
+            ArchitectorLayerDocuments next)
+        {
+            var before = changes.Keys.Select(path => new ArchitectorFileSnapshot(path, diskFiles[path])).ToList();
+            var after = changes.Select(pair => new ArchitectorFileSnapshot(pair.Key, pair.Value)).ToList();
+            var previous = layerDocuments[layerId];
+            try
+            {
+                ApplySnapshots(after);
+                layerDocuments[layerId] = next;
+                layoutRevisions++;
+                Revision++;
+                undo.Push(new ArchitectorUndoRecord(name, before, after));
+                redo.Clear();
+                Changed?.Invoke();
+            }
+            catch
+            {
+                ApplySnapshots(before);
+                layerDocuments[layerId] = previous;
+                throw;
+            }
         }
 
         private void ExecuteLayerChange(string name, ArchitectorLayerRecord layer, Action<ArchitectorLayerDocument, ArchitectorLayerLayoutDocument> mutate)
@@ -1687,7 +1752,8 @@ namespace Architector.Editor
             ArchitectorSettingsDocument nextSettings,
             bool dryRun,
             IReadOnlyDictionary<string, string> recoveryDiskFiles = null,
-            bool notifyWhenUnchanged = false)
+            bool notifyWhenUnchanged = false,
+            bool reportApprovalImpacts = true)
         {
             if (recoveryDiskFiles == null)
                 EnsureDiskMatchesSession();
@@ -1723,7 +1789,8 @@ namespace Architector.Editor
                     changes[pair.Key] = pair.Value;
                 validatedFiles = nextFiles.Count;
                 layerCount = nextLayers.Count;
-                approvalImpacts = BuildApprovalImpacts(nextProject, nextLayers);
+                if (reportApprovalImpacts)
+                    approvalImpacts = BuildApprovalImpacts(nextProject, nextLayers);
                 EnforceGroupLocks(nextProject, nextLayers, previousFiles, nextFiles);
             }
 
@@ -2112,6 +2179,31 @@ namespace Architector.Editor
                 layerIds.Add(layerId);
             foreach (var childId in group.childGroupIds)
                 CollectDescendants(project, childId, groupIds, layerIds);
+        }
+
+        private void EnsureLayerPortalPair(
+            ArchitectorLayerDocuments source,
+            ArchitectorLayerDocuments target,
+            ArchitectorLayerRecord sourceLayer,
+            ArchitectorLayerRecord targetLayer)
+        {
+            var sourcePortal = source.semantic.nodes.FirstOrDefault(node => IsPortalTo(node, targetLayer.id));
+            var targetPortal = target.semantic.nodes.FirstOrDefault(node => IsPortalTo(node, sourceLayer.id));
+            if (sourcePortal != null && targetPortal != null)
+                return;
+            if (sourcePortal != null || targetPortal != null)
+                throw new ArchitectorDataException("The Portal pair between the endpoint layers is incomplete.");
+
+            var pairId = NewId("portal-pair");
+            var sourcePortalId = NewId("node");
+            var targetPortalId = NewId("node");
+            var size = AlignNodeSizeToGrid(280f, 120f);
+            AddPortalNode(source, sourcePortalId, pairId, targetLayer.id, targetPortalId,
+                ArchitectorPortalRoles.Exit, MakeUniqueNodeTitle(source.semantic, targetLayer.name),
+                0f, 0f, size);
+            AddPortalNode(target, targetPortalId, pairId, sourceLayer.id, sourcePortalId,
+                ArchitectorPortalRoles.Entry, MakeUniqueNodeTitle(target.semantic, sourceLayer.name),
+                0f, 0f, size);
         }
 
         private void AddPortalNode(

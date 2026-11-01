@@ -64,6 +64,7 @@ namespace Architector.Editor
         public ArchitectorSourceIndexSettings sourceIndex = new();
         public ArchitectorGeometrySettings geometry = new();
         public ArchitectorOptimizationSettings optimization = new();
+        public ArchitectorArrangeSettings arrange = new();
         public ArchitectorPaletteSettings palette = new();
         public ArchitectorAgentSettings agent = new();
     }
@@ -72,6 +73,7 @@ namespace Architector.Editor
     public sealed class ArchitectorLayerApprovalRecord
     {
         public string semanticHash = string.Empty;
+        public bool approvedByAgent;
         public ArchitectorLayerBaselineRecord baseline = new();
     }
 
@@ -115,10 +117,14 @@ namespace Architector.Editor
     }
 
     [Serializable]
+    public sealed class ArchitectorArrangeSettings
+    {
+        public int maxGroupRelationships = 16;
+    }
+
+    [Serializable]
     public sealed class ArchitectorOptimizationSettings
     {
-        public bool highQualityDragRouting;
-        public bool gridRouting;
         public int memberParentDepth;
         public bool includeInterfaceMembers;
         public bool includeFrameworkMembers;

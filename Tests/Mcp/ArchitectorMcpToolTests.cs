@@ -11,6 +11,7 @@ namespace Architector.Editor.Mcp.Tests
     {
         private string temporaryRoot;
         private ArchitectorRepository repository;
+        private Func<string, bool> confirmation;
 
         [SetUp]
         public void SetUp()
@@ -18,11 +19,14 @@ namespace Architector.Editor.Mcp.Tests
             temporaryRoot = Path.Combine(Path.GetTempPath(), "ArchitectorMcpTests", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(temporaryRoot);
             repository = new ArchitectorRepository(new ArchitectorPaths(temporaryRoot));
+            confirmation = ArchitectorApprovalGate.Confirm;
+            ArchitectorApprovalGate.Confirm = _ => true;
         }
 
         [TearDown]
         public void TearDown()
         {
+            ArchitectorApprovalGate.Confirm = confirmation;
             if (!string.IsNullOrEmpty(temporaryRoot) && Directory.Exists(temporaryRoot))
                 Directory.Delete(temporaryRoot, true);
         }
@@ -415,6 +419,40 @@ namespace Architector.Editor.Mcp.Tests
             Assert.That(result?.Code, Is.EqualTo("approval_is_separate"));
             Assert.That(repository.Revision, Is.EqualTo(revision));
             Assert.That(repository.Project.layers, Is.Empty);
+        }
+
+        [Test]
+        public void AgentApprovalWaitsForTheUserUnlessTheModeAllowsIt()
+        {
+            var layerId = repository.CreateLayer(string.Empty, "Draft");
+            var aiWork = new ArchitectorAiWorkCoordinator();
+            var token = aiWork.Begin("Review test", repository.Revision);
+            var preferences = ArchitectorAgentPreferences.Current;
+            var previousMode = preferences.WorkflowMode;
+            JObject Request() => new()
+            {
+                ["action"] = "approve_layers", ["layers"] = new JArray(layerId), ["approve_changes"] = true,
+                ["expected_revision"] = repository.Revision, ["work_token"] = token
+            };
+
+            ArchitectorApprovalGate.Confirm = _ => false;
+            var refused = ArchitectorMcpEditTool.HandleCommand(repository, aiWork, Request()) as ErrorResponse;
+            Assert.That(refused?.Code, Is.EqualTo("user_refused"));
+            Assert.That(repository.GetLayerApprovalStatus(layerId).State, Is.EqualTo(ArchitectorApprovalStates.Draft));
+
+            ArchitectorAgentWorkflowModes.Register(new ArchitectorAgentWorkflowMode("test", "Test", "Test", "Test", agentMayApprove: true, showsNotice: true));
+            try
+            {
+                preferences.WorkflowMode = "test";
+                Assert.That(ArchitectorMcpEditTool.HandleCommand(repository, aiWork, Request()), Is.Not.InstanceOf<ErrorResponse>());
+                Assert.That(repository.FindLayer(layerId).approval.approvedByAgent, Is.True);
+                repository.ApproveLayers(new[] { layerId });
+                Assert.That(repository.FindLayer(layerId).approval.approvedByAgent, Is.False);
+            }
+            finally
+            {
+                preferences.WorkflowMode = previousMode;
+            }
         }
 
         [Test]

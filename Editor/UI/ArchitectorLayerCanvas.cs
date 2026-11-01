@@ -16,6 +16,12 @@ namespace Architector.Editor
         private static readonly int BoxSelectionControlHint = "ArchitectorBoxSelection".GetHashCode();
         private static readonly int PanControlHint = "ArchitectorPan".GetHashCode();
         private const float RightButtonPanThresholdSquared = 16f;
+        private const float EdgeCornerRadius = 8f;
+        private const int EdgeTierUnrelated = 0;
+        private const int EdgeTierIncoming = 1;
+        private const int EdgeTierOutgoing = 2;
+        private const int EdgeTierSelected = 3;
+        private static readonly List<Vector2> EmptyRoute = new();
 
         private readonly string viewId;
         private string layerId = string.Empty;
@@ -26,18 +32,18 @@ namespace Architector.Editor
         private Vector2 lastEdgeCyclePosition = new(float.PositiveInfinity, float.PositiveInfinity);
         private List<string> lastEdgeCycleIds = new();
         private int lastEdgeCycleIndex = -1;
+        private readonly ArchitectorEdgeRouter edgeRouter = new();
+        private readonly Dictionary<string, List<Vector2>> edgeWorldRoutes = new(StringComparer.Ordinal);
         private readonly Dictionary<string, List<Vector2>> edgeRouteCache = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, float> sourceLaneOffsetByEdgeId = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, float> targetLaneOffsetByEdgeId = new(StringComparer.Ordinal);
-        private int edgeLaneCacheRevision = -1;
+        private readonly List<(ArchitectorEdgeRecord edge, List<Vector2> route)> edgesInTier = new();
+        private Vector3[] routeBuffer = new Vector3[64];
+        private readonly Vector3[] dashBuffer = new Vector3[2];
+        private bool edgeRoutesDragged;
+        private Vector2 edgeRouteDragDelta;
         private int edgeRouteCacheRevision = -1;
         private Vector2 edgeRouteCachePan;
         private float edgeRouteCacheZoom = -1f;
         private int currentRepositoryRevision;
-        private bool highQualityDragRouting;
-        private bool gridRouting;
-        private float routingGridSize = 75f;
-        private bool dragPreviewOverlapsNode;
         private Vector2 pan = new(48f, 48f);
         private float zoom = 1f;
         private bool draggingNode;
@@ -117,9 +123,6 @@ namespace Architector.Editor
                 cachedPortalRelationshipRows = repository.GetLayerPortalRelationshipRows(layer.id);
                 cachedPortalRelationshipRowsRevision = currentRepositoryRevision;
             }
-            highQualityDragRouting = repository.Settings.optimization.highQualityDragRouting;
-            gridRouting = repository.Settings.optimization.gridRouting;
-            routingGridSize = repository.Settings.geometry.gridSize;
             var palette = EditorGUIUtility.isProSkin
                 ? repository.Settings.palette.dark
                 : repository.Settings.palette.light;
@@ -154,9 +157,7 @@ namespace Architector.Editor
             {
                 EditorGUI.DrawRect(localRect, palette.workspace.ToColor());
                 DrawGrid(localRect, repository.Settings.geometry.gridSize, palette.grid.ToColor());
-                dragPreviewOverlapsNode = highQualityDragRouting && HasDragMovement && DoesDragPreviewOverlapNode(documents.layout);
-                PrepareEdgeAnchorLanes(documents);
-                DrawEdges(documents, palette);
+                DrawEdges(documents, palette, localRect);
                 DrawNodes(documents, palette, repository);
                 DrawConnectionAffordance(documents);
                 DrawSelectedEdgeAction(documents);
@@ -523,6 +524,8 @@ namespace Architector.Editor
                 menu.AddItem(new GUIContent(selectedForDelete.Length == 1 ? "Clear Relationships" : $"Clear Relationships ({selectedForDelete.Length})"), false,
                     () => execute(() => repository.ClearNodeEdges(layerId, selectedForDelete)));
                 menu.AddSeparator(string.Empty);
+                AddArrangeItems(menu, repository, documents, execute, selectedForDelete);
+                menu.AddSeparator(string.Empty);
                 if (selectedForDelete.Length == 1)
                 {
                     var selectedNode = documents.semantic.nodes.First(node => node.id == selectedForDelete[0]);
@@ -570,7 +573,8 @@ namespace Architector.Editor
             else
             {
                 selectedEdgeId = string.Empty;
-                selectedNodeIds.Clear();
+                AddArrangeItems(menu, repository, documents, execute, selectedNodeIds.ToArray());
+                menu.AddSeparator(string.Empty);
                 var worldAtMouse = ScreenToWorld(mouse);
                 if (clipboard.HasContent)
                 {
@@ -608,6 +612,58 @@ namespace Architector.Editor
             }
             requestContextMenu(menu, GUIUtility.GUIToScreenPoint(mouse));
             current.Use();
+        }
+
+        private void AddArrangeItems(
+            GenericMenu menu,
+            ArchitectorRepository repository,
+            ArchitectorLayerDocuments documents,
+            Action<Action> execute,
+            IReadOnlyCollection<string> selected)
+        {
+            var allNodes = documents.semantic.nodes.Select(node => node.id).ToArray();
+            if (selected.Count == 0)
+            {
+                menu.AddItem(new GUIContent("Arrange"), false,
+                    () => ArrangeNodes(repository, documents, execute, allNodes, null));
+                return;
+            }
+
+            var neighbours = documents.semantic.edges
+                .Where(edge => selected.Contains(edge.sourceNodeId) || selected.Contains(edge.targetNodeId))
+                .SelectMany(edge => new[] { edge.sourceNodeId, edge.targetNodeId });
+            var arranged = selected.Count == 1 ? selected.Concat(neighbours).Distinct().ToArray() : selected.ToArray();
+            menu.AddItem(new GUIContent("Arrange"), false,
+                () => ArrangeNodes(repository, documents, execute, arranged, selected.Count == 1 ? selected : null));
+            menu.AddItem(new GUIContent("Arrange As Centers"), false,
+                () => ArrangeNodes(repository, documents, execute, allNodes, selected));
+        }
+
+        private void ArrangeNodes(
+            ArchitectorRepository repository,
+            ArchitectorLayerDocuments documents,
+            Action<Action> execute,
+            IReadOnlyCollection<string> nodeIds,
+            IReadOnlyCollection<string> centers)
+        {
+            var arranged = new HashSet<string>(nodeIds, StringComparer.Ordinal);
+            var portals = new HashSet<string>(documents.semantic.nodes.Where(IsPortal).Select(node => node.id), StringComparer.Ordinal);
+            var nodes = documents.layout.nodes
+                .Where(node => arranged.Contains(node.nodeId))
+                .Select(node => new ArchitectorArrangeNode(node.nodeId, node.x, node.y, node.width, node.height, portals.Contains(node.nodeId)))
+                .ToArray();
+            var edges = documents.semantic.edges
+                .Select(edge => new ArchitectorArrangeEdge(edge.sourceNodeId, edge.targetNodeId))
+                .ToArray();
+            var geometry = repository.Settings.geometry;
+            var positions = ArchitectorGraphArranger.Arrange(
+                nodes,
+                edges,
+                geometry.minimumNodeGap,
+                geometry.snapToGrid ? geometry.gridSize : 1f,
+                repository.Settings.arrange.maxGroupRelationships,
+                centers);
+            execute(() => repository.MoveNodes(layerId, positions, "Arrange Nodes"));
         }
 
         private static IReadOnlyList<ArchitectorIndexedType> AvailableTypes(
@@ -789,31 +845,68 @@ namespace Architector.Editor
                 Mathf.Clamp(point.y, rect.yMin, rect.yMax));
         }
 
-        private void DrawEdges(ArchitectorLayerDocuments documents, ArchitectorThemePaletteSettings palette)
+        private void DrawEdges(ArchitectorLayerDocuments documents, ArchitectorThemePaletteSettings palette, Rect viewRect)
         {
+            EnsureEdgeRouteCache(documents);
+            var casing = palette.workspace.ToColor();
+            var hasSelection = selectedNodeIds.Count > 0 || !string.IsNullOrEmpty(selectedEdgeId);
             Handles.BeginGUI();
-            foreach (var edge in documents.semantic.edges.OrderBy(edge =>
-                         string.Equals(edge.id, selectedEdgeId, StringComparison.Ordinal) ? 1 : 0))
+            for (var tier = EdgeTierUnrelated; tier <= EdgeTierSelected; tier++)
             {
-                var route = GetEdgeRoute(edge, documents);
-                if (route.Count < 2)
-                    continue;
-                var color = EdgeColor(edge, palette);
-                Handles.color = color;
-                var selected = string.Equals(edge.id, selectedEdgeId, StringComparison.Ordinal);
-                var width = selected
-                    ? 3f
-                    : string.Equals(edge.kind, ArchitectorEdgeKinds.Dependency, StringComparison.Ordinal) ? 2f : 1.75f;
-                DrawEdgeRoute(route, edge.kind, width);
-                DrawArrowHead(
-                    route[route.Count - 2],
-                    route[route.Count - 1],
-                    color,
-                    width,
-                    string.Equals(edge.kind, ArchitectorEdgeKinds.Dependency, StringComparison.Ordinal));
+                edgesInTier.Clear();
+                foreach (var edge in documents.semantic.edges)
+                {
+                    if (EdgeTier(edge) != tier)
+                        continue;
+                    var route = GetEdgeRoute(edge, documents);
+                    if (route.Count >= 2 && RouteIsVisible(route, viewRect))
+                        edgesInTier.Add((edge, route));
+                }
+
+                var width = tier == EdgeTierSelected ? 3f : tier == EdgeTierUnrelated ? 1.75f : 2.5f;
+                var arrowLength = tier == EdgeTierUnrelated ? 9f : 12f;
+                foreach (var (edge, route) in edgesInTier)
+                {
+                    var filled = string.Equals(edge.kind, ArchitectorEdgeKinds.Dependency, StringComparison.Ordinal);
+                    var count = FillRouteBuffer(route, filled ? arrowLength * 0.8f : 0f);
+                    if (tier != EdgeTierUnrelated)
+                    {
+                        Handles.color = casing;
+                        Handles.DrawAAPolyLine(width + 3f, count, routeBuffer);
+                    }
+                    Handles.color = EdgeDrawColor(edge, palette, tier, hasSelection);
+                    DrawEdgeRoute(count, edge.kind, filled ? width + 0.25f : width);
+                }
+                foreach (var (edge, route) in edgesInTier)
+                {
+                    DrawArrowHead(
+                        route[route.Count - 2],
+                        route[route.Count - 1],
+                        EdgeDrawColor(edge, palette, tier, hasSelection),
+                        width,
+                        arrowLength,
+                        string.Equals(edge.kind, ArchitectorEdgeKinds.Dependency, StringComparison.Ordinal));
+                }
             }
             Handles.color = Color.white;
             Handles.EndGUI();
+        }
+
+        private int EdgeTier(ArchitectorEdgeRecord edge)
+        {
+            if (string.Equals(edge.id, selectedEdgeId, StringComparison.Ordinal))
+                return EdgeTierSelected;
+            if (selectedNodeIds.Contains(edge.sourceNodeId))
+                return EdgeTierOutgoing;
+            return selectedNodeIds.Contains(edge.targetNodeId) ? EdgeTierIncoming : EdgeTierUnrelated;
+        }
+
+        private Color EdgeDrawColor(ArchitectorEdgeRecord edge, ArchitectorThemePaletteSettings palette, int tier, bool hasSelection)
+        {
+            var color = EdgeColor(edge, palette);
+            if (tier == EdgeTierUnrelated && hasSelection)
+                color.a *= 0.45f;
+            return color;
         }
 
         private Color EdgeColor(ArchitectorEdgeRecord edge, ArchitectorThemePaletteSettings palette)
@@ -834,34 +927,60 @@ namespace Architector.Editor
             return color.ToColor();
         }
 
-        private static void DrawEdgeRoute(IReadOnlyList<Vector2> route, string kind, float width)
+        private static bool RouteIsVisible(IReadOnlyList<Vector2> route, Rect viewRect)
+        {
+            var min = route[0];
+            var max = route[0];
+            for (var index = 1; index < route.Count; index++)
+            {
+                min = Vector2.Min(min, route[index]);
+                max = Vector2.Max(max, route[index]);
+            }
+            return max.x >= viewRect.xMin - 16f && min.x <= viewRect.xMax + 16f
+                                                && max.y >= viewRect.yMin - 16f && min.y <= viewRect.yMax + 16f;
+        }
+
+        private int FillRouteBuffer(IReadOnlyList<Vector2> route, float tipInset)
+        {
+            if (routeBuffer.Length < route.Count)
+                routeBuffer = new Vector3[route.Count * 2];
+            for (var index = 0; index < route.Count; index++)
+                routeBuffer[index] = route[index];
+            var last = route.Count - 1;
+            var finalSegment = route[last] - route[last - 1];
+            if (tipInset > 0f && finalSegment.magnitude > tipInset)
+                routeBuffer[last] = route[last] - finalSegment.normalized * tipInset;
+            return route.Count;
+        }
+
+        private void DrawEdgeRoute(int count, string kind, float width)
         {
             switch (kind)
             {
                 case ArchitectorEdgeKinds.DataFlow:
-                    DrawPatternedRoute(route, width, 10f, 6f);
+                    DrawPatternedRoute(count, width, 10f, 6f);
                     return;
                 case ArchitectorEdgeKinds.Event:
-                    DrawPatternedRoute(route, width, 1.5f, 4.5f);
+                    DrawPatternedRoute(count, width, 1.5f, 4.5f);
                     return;
                 case ArchitectorEdgeKinds.Callback:
-                    DrawPatternedRoute(route, width, 9f, 4f, 1.5f, 4f);
+                    DrawPatternedRoute(count, width, 9f, 4f, 1.5f, 4f);
                     return;
                 default:
-                    Handles.DrawAAPolyLine(width, route.Select(point => new Vector3(point.x, point.y)).ToArray());
+                    Handles.DrawAAPolyLine(width, count, routeBuffer);
                     return;
             }
         }
 
-        private static void DrawPatternedRoute(IReadOnlyList<Vector2> route, float width, params float[] pattern)
+        private void DrawPatternedRoute(int count, float width, params float[] pattern)
         {
             var patternIndex = 0;
             var patternRemaining = pattern[0];
             var drawing = true;
-            for (var routeIndex = 1; routeIndex < route.Count; routeIndex++)
+            for (var routeIndex = 1; routeIndex < count; routeIndex++)
             {
-                var cursor = route[routeIndex - 1];
-                var segment = route[routeIndex] - cursor;
+                Vector2 cursor = routeBuffer[routeIndex - 1];
+                var segment = (Vector2)routeBuffer[routeIndex] - cursor;
                 var segmentRemaining = segment.magnitude;
                 if (segmentRemaining <= 0.001f)
                     continue;
@@ -871,7 +990,11 @@ namespace Architector.Editor
                     var step = Mathf.Min(segmentRemaining, patternRemaining);
                     var next = cursor + direction * step;
                     if (drawing)
-                        Handles.DrawAAPolyLine(width, new Vector3(cursor.x, cursor.y), new Vector3(next.x, next.y));
+                    {
+                        dashBuffer[0] = cursor;
+                        dashBuffer[1] = next;
+                        Handles.DrawAAPolyLine(width, 2, dashBuffer);
+                    }
                     cursor = next;
                     segmentRemaining -= step;
                     patternRemaining -= step;
@@ -884,16 +1007,16 @@ namespace Architector.Editor
             }
         }
 
-        private static void DrawArrowHead(Vector2 previous, Vector2 tip, Color color, float width, bool filled)
+        private static void DrawArrowHead(Vector2 previous, Vector2 tip, Color color, float width, float length, bool filled)
         {
             var direction = (tip - previous).normalized;
             if (direction.sqrMagnitude < 0.5f)
                 return;
             var perpendicular = new Vector2(-direction.y, direction.x);
-            var basePoint = tip - direction * 9f;
+            var basePoint = tip - direction * length;
             Handles.color = color;
-            var firstWing = basePoint + perpendicular * 4.5f;
-            var secondWing = basePoint - perpendicular * 4.5f;
+            var firstWing = basePoint + perpendicular * length * 0.5f;
+            var secondWing = basePoint - perpendicular * length * 0.5f;
             if (filled)
                 Handles.DrawAAConvexPolygon(tip, firstWing, secondWing);
             else
@@ -907,613 +1030,68 @@ namespace Architector.Editor
         private List<Vector2> GetEdgeRoute(ArchitectorEdgeRecord edge, ArchitectorLayerDocuments documents)
         {
             EnsureEdgeRouteCache(documents);
-            if (!HasDragMovement)
-                return edgeRouteCache.TryGetValue(edge.id, out var cached) ? cached : new List<Vector2>();
-
-            var sourceMoves = selectedNodeIds.Contains(edge.sourceNodeId);
-            var targetMoves = selectedNodeIds.Contains(edge.targetNodeId);
-            if (!sourceMoves && !targetMoves)
-                return edgeRouteCache.TryGetValue(edge.id, out var unchanged) ? unchanged : BuildEdgeRoute(edge, documents, true);
-            if (sourceMoves && targetMoves && edgeRouteCache.TryGetValue(edge.id, out var internalRoute))
-            {
-                var screenDelta = dragPreviewDelta * zoom;
-                return internalRoute.Select(point => point + screenDelta).ToList();
-            }
-
-            return BuildEdgeRoute(edge, documents, highQualityDragRouting && !dragPreviewOverlapsNode);
+            return edgeRouteCache.TryGetValue(edge.id, out var route) ? route : EmptyRoute;
         }
 
         private bool HasDragMovement => draggingNode && dragPreviewDelta.sqrMagnitude > DragMovementThresholdSquared;
 
-        private bool DoesDragPreviewOverlapNode(ArchitectorLayerLayoutDocument layout)
-        {
-            const float previewClearance = 8f;
-            foreach (var movingNode in layout.nodes.Where(node => selectedNodeIds.Contains(node.nodeId)))
-            {
-                var movingRect = GetScreenNodeRect(movingNode);
-                foreach (var stationaryNode in layout.nodes.Where(node => !selectedNodeIds.Contains(node.nodeId)))
-                {
-                    var stationaryRect = GetScreenNodeRect(stationaryNode);
-                    stationaryRect.xMin -= previewClearance;
-                    stationaryRect.xMax += previewClearance;
-                    stationaryRect.yMin -= previewClearance;
-                    stationaryRect.yMax += previewClearance;
-                    if (movingRect.Overlaps(stationaryRect))
-                        return true;
-                }
-            }
-
-            return false;
-        }
-
         private void EnsureEdgeRouteCache(ArchitectorLayerDocuments documents)
         {
-            var sameRevisionAndZoom = edgeRouteCacheRevision == currentRepositoryRevision
-                                      && Mathf.Approximately(edgeRouteCacheZoom, zoom);
-            if (sameRevisionAndZoom && edgeRouteCache.Count > 0)
+            var dragged = HasDragMovement;
+            var layoutChanged = edgeRouteCacheRevision != currentRepositoryRevision
+                                || edgeRoutesDragged != dragged
+                                || dragged && edgeRouteDragDelta != dragPreviewDelta;
+            if (layoutChanged)
             {
-                var panDelta = pan - edgeRouteCachePan;
-                if (panDelta.sqrMagnitude >= 0.001f)
-                {
-                    foreach (var route in edgeRouteCache.Values)
-                    {
-                        for (var index = 0; index < route.Count; index++)
-                            route[index] += panDelta;
-                    }
-                    edgeRouteCachePan = pan;
-                }
+                RebuildEdgeRoutes(documents);
+                edgeRouteCacheRevision = currentRepositoryRevision;
+                edgeRoutesDragged = dragged;
+                edgeRouteDragDelta = dragPreviewDelta;
+            }
+            else if (Mathf.Approximately(edgeRouteCacheZoom, zoom) && (edgeRouteCachePan - pan).sqrMagnitude < 0.001f)
+            {
                 return;
             }
 
-            var cacheValid = sameRevisionAndZoom && (edgeRouteCachePan - pan).sqrMagnitude < 0.001f;
-            if (cacheValid || HasDragMovement && edgeRouteCache.Count > 0)
-                return;
-
-            edgeRouteCache.Clear();
-            foreach (var edge in documents.semantic.edges)
-                edgeRouteCache[edge.id] = BuildEdgeRoute(edge, documents, true);
-            edgeRouteCacheRevision = currentRepositoryRevision;
+            foreach (var pair in edgeWorldRoutes)
+            {
+                if (!edgeRouteCache.TryGetValue(pair.Key, out var screenRoute))
+                {
+                    screenRoute = new List<Vector2>(pair.Value.Count);
+                    edgeRouteCache.Add(pair.Key, screenRoute);
+                }
+                screenRoute.Clear();
+                foreach (var point in pair.Value)
+                    screenRoute.Add(WorldToScreen(point));
+            }
             edgeRouteCacheZoom = zoom;
             edgeRouteCachePan = pan;
         }
 
-        private List<Vector2> BuildEdgeRoute(
-            ArchitectorEdgeRecord edge,
-            ArchitectorLayerDocuments documents,
-            bool useObstacleRouting)
+        private void RebuildEdgeRoutes(ArchitectorLayerDocuments documents)
         {
-            var sourceLayout = documents.layout.nodes.FirstOrDefault(node => node.nodeId == edge.sourceNodeId);
-            var targetLayout = documents.layout.nodes.FirstOrDefault(node => node.nodeId == edge.targetNodeId);
-            if (sourceLayout == null || targetLayout == null)
-                return new List<Vector2>();
-            var edgeLayout = documents.layout.edges.FirstOrDefault(candidate => candidate.edgeId == edge.id);
-            var sourceRect = GetWorldNodeRect(sourceLayout);
-            var targetRect = GetWorldNodeRect(targetLayout);
-            var sourceSide = edgeLayout == null || edgeLayout.preferredSourceSide == "auto"
-                ? FacingSide(sourceRect.center, targetRect.center)
-                : edgeLayout.preferredSourceSide;
-            var targetSide = edgeLayout == null || edgeLayout.preferredTargetSide == "auto"
-                ? FacingSide(targetRect.center, sourceRect.center)
-                : edgeLayout.preferredTargetSide;
-            var sourceAnchor = SideAnchor(
-                sourceRect,
-                sourceSide,
-                sourceLaneOffsetByEdgeId.TryGetValue(edge.id, out var sourceLaneOffset) ? sourceLaneOffset : 0f);
-            var targetAnchor = SideAnchor(
-                targetRect,
-                targetSide,
-                targetLaneOffsetByEdgeId.TryGetValue(edge.id, out var targetLaneOffset) ? targetLaneOffset : 0f);
-            var sourceOut = sourceAnchor + SideDirection(sourceSide) * 18f;
-            var targetOut = targetAnchor + SideDirection(targetSide) * 18f;
-            var route = new List<Vector2> { sourceAnchor, sourceOut };
-
-            if (useObstacleRouting)
-            {
-                var obstacles = documents.layout.nodes.Select(GetWorldNodeRect).ToList();
-                if (gridRouting)
-                {
-                    var sourceGateway = GridGateway(sourceAnchor, sourceSide, routingGridSize);
-                    var targetGateway = GridGateway(targetAnchor, targetSide, routingGridSize);
-                    var protectedObstacles = obstacles.Select(rect =>
-                    {
-                        if (rect == sourceRect || rect == targetRect)
-                            return rect;
-                        return ExpandRect(rect, routingGridSize);
-                    }).ToList();
-                    var gridPath = FindGridRoute(sourceGateway, targetGateway, protectedObstacles, routingGridSize);
-                    if (gridPath != null)
-                    {
-                        route.Clear();
-                        AddSourceAttachmentPath(route, sourceAnchor, sourceGateway, sourceSide);
-                        route.AddRange(gridPath.Skip(1));
-                        AddTargetAttachmentPath(route, targetGateway, targetAnchor, targetSide);
-                        RemoveDuplicateRoutePoints(route);
-                        RemoveCollinearRoutePoints(route);
-                        return WorldRouteToScreen(route);
-                    }
-                }
-                var obstacleAwarePath = FindObstacleAwareRoute(sourceOut, targetOut, obstacles);
-                if (obstacleAwarePath != null)
-                {
-                    route.AddRange(obstacleAwarePath.Skip(1));
-                    route.Add(targetAnchor);
-                    RemoveDuplicateRoutePoints(route);
-                    RemoveCollinearRoutePoints(route);
-                    return WorldRouteToScreen(route);
-                }
-            }
-
-            var sourceHorizontal = sourceSide == "left" || sourceSide == "right";
-            var targetHorizontal = targetSide == "left" || targetSide == "right";
-            if (sourceHorizontal && targetHorizontal)
-            {
-                var middleX = (sourceOut.x + targetOut.x) * 0.5f;
-                route.Add(new Vector2(middleX, sourceOut.y));
-                route.Add(new Vector2(middleX, targetOut.y));
-            }
-            else if (!sourceHorizontal && !targetHorizontal)
-            {
-                var middleY = (sourceOut.y + targetOut.y) * 0.5f;
-                route.Add(new Vector2(sourceOut.x, middleY));
-                route.Add(new Vector2(targetOut.x, middleY));
-            }
-            else if (sourceHorizontal)
-            {
-                route.Add(new Vector2(targetOut.x, sourceOut.y));
-            }
-            else
-            {
-                route.Add(new Vector2(sourceOut.x, targetOut.y));
-            }
-            route.Add(targetOut);
-            route.Add(targetAnchor);
-            RemoveDuplicateRoutePoints(route);
-            return WorldRouteToScreen(route);
-        }
-
-        private void PrepareEdgeAnchorLanes(ArchitectorLayerDocuments documents)
-        {
-            if (edgeLaneCacheRevision == currentRepositoryRevision)
-                return;
-
-            sourceLaneOffsetByEdgeId.Clear();
-            targetLaneOffsetByEdgeId.Clear();
-            var layoutByNodeId = documents.layout.nodes.ToDictionary(node => node.nodeId, StringComparer.Ordinal);
-            var edgeLayoutById = documents.layout.edges.ToDictionary(edge => edge.edgeId, StringComparer.Ordinal);
-            var groups = new Dictionary<(string nodeId, string side), EdgeLaneGroup>();
-
+            var rects = new Dictionary<string, Rect>(documents.layout.nodes.Count, StringComparer.Ordinal);
+            foreach (var node in documents.layout.nodes)
+                rects[node.nodeId] = GetWorldNodeRect(node);
+            var edgeLayouts = new Dictionary<string, ArchitectorEdgeLayoutRecord>(StringComparer.Ordinal);
+            foreach (var edgeLayout in documents.layout.edges)
+                edgeLayouts[edgeLayout.edgeId] = edgeLayout;
+            var requests = new List<ArchitectorRouteRequest>(documents.semantic.edges.Count);
             foreach (var edge in documents.semantic.edges)
             {
-                if (!layoutByNodeId.TryGetValue(edge.sourceNodeId, out var sourceLayout)
-                    || !layoutByNodeId.TryGetValue(edge.targetNodeId, out var targetLayout))
-                {
-                    continue;
-                }
-
-                var sourceRect = GetWorldNodeRect(sourceLayout);
-                var targetRect = GetWorldNodeRect(targetLayout);
-                edgeLayoutById.TryGetValue(edge.id, out var edgeLayout);
-                var sourceSide = edgeLayout == null || edgeLayout.preferredSourceSide == "auto"
-                    ? FacingSide(sourceRect.center, targetRect.center)
-                    : edgeLayout.preferredSourceSide;
-                var targetSide = edgeLayout == null || edgeLayout.preferredTargetSide == "auto"
-                    ? FacingSide(targetRect.center, sourceRect.center)
-                    : edgeLayout.preferredTargetSide;
-                AddLaneEndpoint(groups, edge.sourceNodeId, sourceSide, edge.id, true, TangentDelta(sourceRect, sourceSide, targetRect.center));
-                AddLaneEndpoint(groups, edge.targetNodeId, targetSide, edge.id, false, TangentDelta(targetRect, targetSide, sourceRect.center));
+                edgeLayouts.TryGetValue(edge.id, out var edgeLayout);
+                requests.Add(new ArchitectorRouteRequest(
+                    edge.id,
+                    edge.sourceNodeId,
+                    edge.targetNodeId,
+                    edgeLayout?.preferredSourceSide,
+                    edgeLayout?.preferredTargetSide));
             }
 
-            var kindByEdgeId = documents.semantic.edges.ToDictionary(edge => edge.id, edge => edge.kind, StringComparer.Ordinal);
-            foreach (var pair in groups)
-            {
-                var group = pair.Value;
-                if (!layoutByNodeId.TryGetValue(pair.Key.nodeId, out var nodeLayout))
-                    continue;
-
-                var nodeRect = GetWorldNodeRect(nodeLayout);
-                var edgeLength = pair.Key.side == "left" || pair.Key.side == "right" ? nodeRect.height : nodeRect.width;
-                var occupiedPorts = BuildOccupiedPorts(group, kindByEdgeId);
-                for (var portIndex = 0; portIndex < occupiedPorts.Count; portIndex++)
-                {
-                    var port = occupiedPorts[portIndex];
-                    var offset = CenteredOccupiedPortOffset(edgeLength, portIndex, occupiedPorts.Count);
-                    foreach (var edgeId in port.edgeIds)
-                    {
-                        if (port.outgoing)
-                            sourceLaneOffsetByEdgeId[edgeId] = offset;
-                        else
-                            targetLaneOffsetByEdgeId[edgeId] = offset;
-                    }
-                }
-            }
-            edgeLaneCacheRevision = currentRepositoryRevision;
-        }
-
-        private static List<OccupiedEdgePort> BuildOccupiedPorts(
-            EdgeLaneGroup group,
-            IReadOnlyDictionary<string, string> kindByEdgeId)
-        {
-            var ports = new List<OccupiedEdgePort>();
-            AddOccupiedPorts(ports, group.outgoingTangentByEdgeId, true, kindByEdgeId);
-            AddOccupiedPorts(ports, group.incomingTangentByEdgeId, false, kindByEdgeId);
-            ports.Sort((left, right) =>
-            {
-                var tangentComparison = left.averageTangent.CompareTo(right.averageTangent);
-                if (tangentComparison != 0)
-                    return tangentComparison;
-                var kindComparison = EdgeKindOrder(left.kind).CompareTo(EdgeKindOrder(right.kind));
-                if (kindComparison != 0)
-                    return kindComparison;
-                return left.outgoing.CompareTo(right.outgoing);
-            });
-            return ports;
-        }
-
-        private static void AddOccupiedPorts(
-            ICollection<OccupiedEdgePort> ports,
-            IReadOnlyDictionary<string, float> tangentByEdgeId,
-            bool outgoing,
-            IReadOnlyDictionary<string, string> kindByEdgeId)
-        {
-            foreach (var kindGroup in tangentByEdgeId.GroupBy(
-                         pair => kindByEdgeId[pair.Key],
-                         StringComparer.Ordinal))
-            {
-                var edgeIds = kindGroup.Select(pair => pair.Key).OrderBy(id => id, StringComparer.Ordinal).ToList();
-                ports.Add(new OccupiedEdgePort(
-                    outgoing,
-                    kindGroup.Key,
-                    edgeIds,
-                    kindGroup.Average(pair => pair.Value)));
-            }
-        }
-
-        private static int EdgeKindOrder(string kind)
-        {
-            return kind switch
-            {
-                ArchitectorEdgeKinds.Dependency => 0,
-                ArchitectorEdgeKinds.DataFlow => 1,
-                ArchitectorEdgeKinds.Event => 2,
-                ArchitectorEdgeKinds.Callback => 3,
-                _ => 4
-            };
-        }
-
-        private static float CenteredOccupiedPortOffset(float edgeLength, int portIndex, int occupiedPortCount)
-        {
-            if (occupiedPortCount <= 1)
-                return 0f;
-
-            var margin = Mathf.Min(18f, edgeLength * 0.1f);
-            var usableLength = Mathf.Max(0f, edgeLength - margin * 2f);
-            var regionLength = usableLength / occupiedPortCount;
-            return -edgeLength * 0.5f + margin + regionLength * (portIndex + 0.5f);
-        }
-
-        private static void AddLaneEndpoint(
-            IDictionary<(string nodeId, string side), EdgeLaneGroup> groups,
-            string nodeId,
-            string side,
-            string edgeId,
-            bool outgoing,
-            float tangentDelta)
-        {
-            var key = (nodeId, side);
-            if (!groups.TryGetValue(key, out var group))
-            {
-                group = new EdgeLaneGroup();
-                groups.Add(key, group);
-            }
-
-            if (outgoing)
-                group.outgoingTangentByEdgeId[edgeId] = tangentDelta;
-            else
-                group.incomingTangentByEdgeId[edgeId] = tangentDelta;
-        }
-
-        private static float TangentDelta(Rect rect, string side, Vector2 oppositeCenter)
-        {
-            return side == "left" || side == "right"
-                ? oppositeCenter.y - rect.center.y
-                : oppositeCenter.x - rect.center.x;
-        }
-
-        private List<Vector2> WorldRouteToScreen(IEnumerable<Vector2> route)
-        {
-            return route.Select(WorldToScreen).ToList();
-        }
-
-        private static Rect ExpandRect(Rect rect, float amount)
-        {
-            return new Rect(rect.xMin - amount, rect.yMin - amount, rect.width + amount * 2f, rect.height + amount * 2f);
-        }
-
-        private static Vector2 GridGateway(Vector2 anchor, string side, float gridSize)
-        {
-            var sample = anchor + SideDirection(side) * gridSize * 0.5f;
-            return new Vector2(
-                (Mathf.Floor(sample.x / gridSize) + 0.5f) * gridSize,
-                (Mathf.Floor(sample.y / gridSize) + 0.5f) * gridSize);
-        }
-
-        private static void AddSourceAttachmentPath(ICollection<Vector2> route, Vector2 start, Vector2 end, string side)
-        {
-            route.Add(start);
-            var horizontal = side == "left" || side == "right";
-            route.Add(horizontal ? new Vector2(end.x, start.y) : new Vector2(start.x, end.y));
-            route.Add(end);
-        }
-
-        private static void AddTargetAttachmentPath(ICollection<Vector2> route, Vector2 start, Vector2 end, string side)
-        {
-            route.Add(start);
-            var horizontal = side == "left" || side == "right";
-            route.Add(horizontal ? new Vector2(start.x, end.y) : new Vector2(end.x, start.y));
-            route.Add(end);
-        }
-
-        private static List<Vector2> FindGridRoute(
-            Vector2 start,
-            Vector2 target,
-            IReadOnlyList<Rect> blockedRects,
-            float gridSize)
-        {
-            if (gridSize <= 0f)
-                return null;
-            var startCell = WorldToGridCell(start, gridSize);
-            var targetCell = WorldToGridCell(target, gridSize);
-            var corridor = Rect.MinMaxRect(
-                Mathf.Min(start.x, target.x) - gridSize * 3f,
-                Mathf.Min(start.y, target.y) - gridSize * 3f,
-                Mathf.Max(start.x, target.x) + gridSize * 3f,
-                Mathf.Max(start.y, target.y) + gridSize * 3f);
-            var relevant = blockedRects.Where(rect => rect.Overlaps(corridor)).ToArray();
-            var minX = Mathf.Min(startCell.x, targetCell.x) - 3;
-            var maxX = Mathf.Max(startCell.x, targetCell.x) + 3;
-            var minY = Mathf.Min(startCell.y, targetCell.y) - 3;
-            var maxY = Mathf.Max(startCell.y, targetCell.y) + 3;
-            foreach (var rect in relevant)
-            {
-                minX = Mathf.Min(minX, Mathf.FloorToInt(rect.xMin / gridSize) - 1);
-                maxX = Mathf.Max(maxX, Mathf.FloorToInt(rect.xMax / gridSize) + 1);
-                minY = Mathf.Min(minY, Mathf.FloorToInt(rect.yMin / gridSize) - 1);
-                maxY = Mathf.Max(maxY, Mathf.FloorToInt(rect.yMax / gridSize) + 1);
-            }
-
-            var costs = new Dictionary<RouteState, float>();
-            var previous = new Dictionary<RouteState, RouteState>();
-            var open = new SortedSet<RouteOpenItem>();
-            var serial = 0;
-            var initial = new RouteState(startCell.x, startCell.y, -1);
-            costs[initial] = 0f;
-            open.Add(new RouteOpenItem(GridManhattan(startCell.x, startCell.y, targetCell.x, targetCell.y), serial++, initial));
-            RouteState? completed = null;
-            while (open.Count > 0)
-            {
-                var item = open.Min;
-                open.Remove(item);
-                var current = item.state;
-                if (current.x == targetCell.x && current.y == targetCell.y)
-                {
-                    completed = current;
-                    break;
-                }
-                TryGridNeighbor(current, current.x - 1, current.y, 0, minX, maxX, minY, maxY, targetCell, gridSize, relevant, startCell, costs, previous, open, ref serial);
-                TryGridNeighbor(current, current.x + 1, current.y, 1, minX, maxX, minY, maxY, targetCell, gridSize, relevant, startCell, costs, previous, open, ref serial);
-                TryGridNeighbor(current, current.x, current.y - 1, 2, minX, maxX, minY, maxY, targetCell, gridSize, relevant, startCell, costs, previous, open, ref serial);
-                TryGridNeighbor(current, current.x, current.y + 1, 3, minX, maxX, minY, maxY, targetCell, gridSize, relevant, startCell, costs, previous, open, ref serial);
-            }
-            if (!completed.HasValue)
-                return null;
-            var path = new List<Vector2>();
-            var cursor = completed.Value;
-            while (true)
-            {
-                path.Add(GridCellCenter(cursor.x, cursor.y, gridSize));
-                if (!previous.TryGetValue(cursor, out cursor))
-                    break;
-            }
-            path.Reverse();
-            RemoveCollinearRoutePoints(path);
-            return path;
-        }
-
-        private static void TryGridNeighbor(
-            RouteState current, int x, int y, int direction,
-            int minX, int maxX, int minY, int maxY,
-            Vector2Int target, float gridSize, IReadOnlyList<Rect> blockedRects, Vector2Int start,
-            IDictionary<RouteState, float> costs, IDictionary<RouteState, RouteState> previous,
-            ISet<RouteOpenItem> open, ref int serial)
-        {
-            if (x < minX || x > maxX || y < minY || y > maxY)
-                return;
-            var point = GridCellCenter(x, y, gridSize);
-            if ((x != start.x || y != start.y) && (x != target.x || y != target.y)
-                && PointInsideAnyObstacle(point, blockedRects))
-                return;
-            var next = new RouteState(x, y, direction);
-            var bendPenalty = current.direction < 0 || current.direction == direction ? 0f : gridSize * 0.35f;
-            var nextCost = costs[current] + gridSize + bendPenalty;
-            if (costs.TryGetValue(next, out var known) && known <= nextCost)
-                return;
-            costs[next] = nextCost;
-            previous[next] = current;
-            open.Add(new RouteOpenItem(nextCost + GridManhattan(x, y, target.x, target.y) * gridSize, serial++, next));
-        }
-
-        private static Vector2Int WorldToGridCell(Vector2 point, float gridSize)
-        {
-            return new Vector2Int(Mathf.FloorToInt(point.x / gridSize), Mathf.FloorToInt(point.y / gridSize));
-        }
-
-        private static Vector2 GridCellCenter(int x, int y, float gridSize)
-        {
-            return new Vector2((x + 0.5f) * gridSize, (y + 0.5f) * gridSize);
-        }
-
-        private static int GridManhattan(int x, int y, int targetX, int targetY)
-        {
-            return Mathf.Abs(x - targetX) + Mathf.Abs(y - targetY);
-        }
-
-        private static List<Vector2> FindObstacleAwareRoute(Vector2 start, Vector2 target, IReadOnlyList<Rect> nodeRects)
-        {
-            const float clearance = 8f;
-            var obstacles = nodeRects
-                .Select(rect => new Rect(rect.xMin - clearance, rect.yMin - clearance, rect.width + clearance * 2f, rect.height + clearance * 2f))
-                .ToArray();
-            var xValues = new List<float> { start.x, target.x };
-            var yValues = new List<float> { start.y, target.y };
-            foreach (var obstacle in obstacles)
-            {
-                xValues.Add(obstacle.xMin);
-                xValues.Add(obstacle.xMax);
-                yValues.Add(obstacle.yMin);
-                yValues.Add(obstacle.yMax);
-            }
-            var xs = DistinctSorted(xValues);
-            var ys = DistinctSorted(yValues);
-            var startX = IndexOfApproximate(xs, start.x);
-            var startY = IndexOfApproximate(ys, start.y);
-            var targetX = IndexOfApproximate(xs, target.x);
-            var targetY = IndexOfApproximate(ys, target.y);
-            var costs = new Dictionary<RouteState, float>();
-            var previous = new Dictionary<RouteState, RouteState>();
-            var open = new SortedSet<RouteOpenItem>();
-            var serial = 0;
-            var startState = new RouteState(startX, startY, -1);
-            costs[startState] = 0f;
-            open.Add(new RouteOpenItem(Manhattan(start, target), serial++, startState));
-            RouteState? completed = null;
-
-            while (open.Count > 0)
-            {
-                var currentItem = open.Min;
-                open.Remove(currentItem);
-                var current = currentItem.state;
-                if (!costs.TryGetValue(current, out var currentCost))
-                    continue;
-                var currentPoint = new Vector2(xs[current.x], ys[current.y]);
-                var expectedPriority = currentCost + Manhattan(currentPoint, target);
-                if (currentItem.priority > expectedPriority + 0.01f)
-                    continue;
-                if (current.x == targetX && current.y == targetY)
-                {
-                    completed = current;
-                    break;
-                }
-
-                TryRouteNeighbor(current, current.x - 1, current.y, 0, xs, ys, obstacles, target, costs, previous, open, ref serial);
-                TryRouteNeighbor(current, current.x + 1, current.y, 1, xs, ys, obstacles, target, costs, previous, open, ref serial);
-                TryRouteNeighbor(current, current.x, current.y - 1, 2, xs, ys, obstacles, target, costs, previous, open, ref serial);
-                TryRouteNeighbor(current, current.x, current.y + 1, 3, xs, ys, obstacles, target, costs, previous, open, ref serial);
-            }
-
-            if (!completed.HasValue)
-                return null;
-            var path = new List<Vector2>();
-            var cursor = completed.Value;
-            while (true)
-            {
-                path.Add(new Vector2(xs[cursor.x], ys[cursor.y]));
-                if (!previous.TryGetValue(cursor, out cursor))
-                    break;
-            }
-            path.Reverse();
-            RemoveCollinearRoutePoints(path);
-            return path;
-        }
-
-        private static void TryRouteNeighbor(
-            RouteState current,
-            int nextX,
-            int nextY,
-            int direction,
-            IReadOnlyList<float> xs,
-            IReadOnlyList<float> ys,
-            IReadOnlyList<Rect> obstacles,
-            Vector2 target,
-            IDictionary<RouteState, float> costs,
-            IDictionary<RouteState, RouteState> previous,
-            ISet<RouteOpenItem> open,
-            ref int serial)
-        {
-            if (nextX < 0 || nextX >= xs.Count || nextY < 0 || nextY >= ys.Count)
-                return;
-            var from = new Vector2(xs[current.x], ys[current.y]);
-            var to = new Vector2(xs[nextX], ys[nextY]);
-            if (PointInsideAnyObstacle(to, obstacles) || SegmentCrossesObstacle(from, to, obstacles))
-                return;
-            var next = new RouteState(nextX, nextY, direction);
-            var bendPenalty = current.direction < 0 || current.direction == direction ? 0f : 24f;
-            var nextCost = costs[current] + Vector2.Distance(from, to) + bendPenalty;
-            if (costs.TryGetValue(next, out var knownCost) && knownCost <= nextCost)
-                return;
-            costs[next] = nextCost;
-            previous[next] = current;
-            open.Add(new RouteOpenItem(nextCost + Manhattan(to, target), serial++, next));
-        }
-
-        private static bool PointInsideAnyObstacle(Vector2 point, IEnumerable<Rect> obstacles)
-        {
-            const float epsilon = 0.01f;
-            return obstacles.Any(rect => point.x > rect.xMin + epsilon && point.x < rect.xMax - epsilon
-                                         && point.y > rect.yMin + epsilon && point.y < rect.yMax - epsilon);
-        }
-
-        private static bool SegmentCrossesObstacle(Vector2 start, Vector2 end, IEnumerable<Rect> obstacles)
-        {
-            const float epsilon = 0.01f;
-            if (Mathf.Abs(start.y - end.y) < epsilon)
-            {
-                var minX = Mathf.Min(start.x, end.x);
-                var maxX = Mathf.Max(start.x, end.x);
-                return obstacles.Any(rect => start.y > rect.yMin + epsilon && start.y < rect.yMax - epsilon
-                                             && maxX > rect.xMin + epsilon && minX < rect.xMax - epsilon);
-            }
-            var minY = Mathf.Min(start.y, end.y);
-            var maxY = Mathf.Max(start.y, end.y);
-            return obstacles.Any(rect => start.x > rect.xMin + epsilon && start.x < rect.xMax - epsilon
-                                         && maxY > rect.yMin + epsilon && minY < rect.yMax - epsilon);
-        }
-
-        private static List<float> DistinctSorted(IEnumerable<float> values)
-        {
-            var sorted = values.OrderBy(value => value).ToList();
-            var result = new List<float>();
-            foreach (var value in sorted)
-            {
-                if (result.Count == 0 || Mathf.Abs(result[result.Count - 1] - value) > 0.01f)
-                    result.Add(value);
-            }
-            return result;
-        }
-
-        private static int IndexOfApproximate(IReadOnlyList<float> values, float value)
-        {
-            for (var index = 0; index < values.Count; index++)
-            {
-                if (Mathf.Abs(values[index] - value) <= 0.01f)
-                    return index;
-            }
-            return 0;
-        }
-
-        private static float Manhattan(Vector2 first, Vector2 second)
-        {
-            return Mathf.Abs(first.x - second.x) + Mathf.Abs(first.y - second.y);
-        }
-
-        private static void RemoveCollinearRoutePoints(List<Vector2> route)
-        {
-            for (var index = route.Count - 2; index > 0; index--)
-            {
-                var before = route[index] - route[index - 1];
-                var after = route[index + 1] - route[index];
-                if (Mathf.Abs(Vector2.Dot(before.normalized, after.normalized)) > 0.999f)
-                    route.RemoveAt(index);
-            }
+            edgeWorldRoutes.Clear();
+            edgeRouteCache.Clear();
+            foreach (var route in edgeRouter.Route(rects, requests))
+                edgeWorldRoutes[route.Key] = ArchitectorEdgeRouter.RoundCorners(route.Value, EdgeCornerRadius);
         }
 
         private string HitTestEdge(Vector2 mouse, ArchitectorLayerDocuments documents)
@@ -1606,8 +1184,8 @@ namespace Architector.Editor
                 if (distance >= bestDistance)
                     continue;
                 var side = distance == left ? "left" : distance == right ? "right" : distance == top ? "top" : "bottom";
-                var anchor = SideAnchor(rect, side);
-                var center = anchor + SideDirection(side) * 12f;
+                var anchor = ArchitectorEdgeRouter.Anchor(rect, side);
+                var center = anchor + ArchitectorEdgeRouter.SideDirection(side) * 12f;
                 best = new ConnectionAffordance
                 {
                     visible = true,
@@ -1706,25 +1284,6 @@ namespace Architector.Editor
             return new Rect(worldPosition.x, worldPosition.y, node.width, node.height);
         }
 
-        private static string FacingSide(Vector2 origin, Vector2 target)
-        {
-            var delta = target - origin;
-            if (Mathf.Abs(delta.x) >= Mathf.Abs(delta.y))
-                return delta.x >= 0f ? "right" : "left";
-            return delta.y >= 0f ? "bottom" : "top";
-        }
-
-        private static Vector2 SideAnchor(Rect rect, string side, float laneOffset = 0f)
-        {
-            return side switch
-            {
-                "left" => new Vector2(rect.xMin, rect.center.y + laneOffset),
-                "right" => new Vector2(rect.xMax, rect.center.y + laneOffset),
-                "top" => new Vector2(rect.center.x + laneOffset, rect.yMin),
-                _ => new Vector2(rect.center.x + laneOffset, rect.yMax)
-            };
-        }
-
         private static Vector2 ProjectToSide(Rect rect, Vector2 point, string side)
         {
             const float padding = 12f;
@@ -1737,31 +1296,11 @@ namespace Architector.Editor
             };
         }
 
-        private static Vector2 SideDirection(string side)
-        {
-            return side switch
-            {
-                "left" => Vector2.left,
-                "right" => Vector2.right,
-                "top" => Vector2.down,
-                _ => Vector2.up
-            };
-        }
-
         private void ResetEdgeCycle()
         {
             lastEdgeCyclePosition = new Vector2(float.PositiveInfinity, float.PositiveInfinity);
             lastEdgeCycleIds.Clear();
             lastEdgeCycleIndex = -1;
-        }
-
-        private static void RemoveDuplicateRoutePoints(List<Vector2> route)
-        {
-            for (var index = route.Count - 1; index > 0; index--)
-            {
-                if ((route[index] - route[index - 1]).sqrMagnitude < 0.01f)
-                    route.RemoveAt(index);
-            }
         }
 
         private static float DistanceToSegment(Vector2 point, Vector2 start, Vector2 end)
@@ -2035,8 +1574,8 @@ namespace Architector.Editor
             selectionVisibilityPending = false;
             selectionVisibilitySawLayout = false;
             edgeRouteCache.Clear();
+            edgeWorldRoutes.Clear();
             edgeRouteCacheRevision = -1;
-            edgeLaneCacheRevision = -1;
             hasCachedDocuments = false;
             cachedDocumentsRevision = -1;
             cachedPortalRelationshipRows =
@@ -2058,80 +1597,6 @@ namespace Architector.Editor
             public string targetNodeId;
             public string targetSide;
             public Rect buttonRect;
-        }
-
-        private sealed class EdgeLaneGroup
-        {
-            public readonly Dictionary<string, float> outgoingTangentByEdgeId = new(StringComparer.Ordinal);
-            public readonly Dictionary<string, float> incomingTangentByEdgeId = new(StringComparer.Ordinal);
-        }
-
-        private sealed class OccupiedEdgePort
-        {
-            public OccupiedEdgePort(bool outgoing, string kind, List<string> edgeIds, float averageTangent)
-            {
-                this.outgoing = outgoing;
-                this.kind = kind;
-                this.edgeIds = edgeIds;
-                this.averageTangent = averageTangent;
-            }
-
-            public readonly bool outgoing;
-            public readonly string kind;
-            public readonly List<string> edgeIds;
-            public readonly float averageTangent;
-        }
-
-        private readonly struct RouteState : IEquatable<RouteState>
-        {
-            public RouteState(int x, int y, int direction)
-            {
-                this.x = x;
-                this.y = y;
-                this.direction = direction;
-            }
-
-            public readonly int x;
-            public readonly int y;
-            public readonly int direction;
-
-            public bool Equals(RouteState other)
-            {
-                return x == other.x && y == other.y && direction == other.direction;
-            }
-
-            public override bool Equals(object obj)
-            {
-                return obj is RouteState other && Equals(other);
-            }
-
-            public override int GetHashCode()
-            {
-                unchecked
-                {
-                    return ((x * 397) ^ y) * 397 ^ direction;
-                }
-            }
-        }
-
-        private readonly struct RouteOpenItem : IComparable<RouteOpenItem>
-        {
-            public RouteOpenItem(float priority, int serial, RouteState state)
-            {
-                this.priority = priority;
-                this.serial = serial;
-                this.state = state;
-            }
-
-            public readonly float priority;
-            public readonly int serial;
-            public readonly RouteState state;
-
-            public int CompareTo(RouteOpenItem other)
-            {
-                var priorityComparison = priority.CompareTo(other.priority);
-                return priorityComparison != 0 ? priorityComparison : serial.CompareTo(other.serial);
-            }
         }
     }
 }

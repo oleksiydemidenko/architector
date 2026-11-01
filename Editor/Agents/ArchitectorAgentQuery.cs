@@ -114,6 +114,8 @@ namespace Architector.Editor.Agents
             {
                 revision = repository.Revision,
                 workflow_mode = ArchitectorAgentPreferences.Current.WorkflowMode,
+                workflow_rule = ArchitectorAgentPreferences.Current.Mode.AgentRule,
+                agent_may_approve = ArchitectorAgentPreferences.Current.Mode.AgentMayApprove,
                 window_locking = ArchitectorAgentPreferences.Current.LockWindowsDuringAgentWork,
                 query_actions = new[] { "capabilities", "work_status", "project_summary", "group_contents", "layer_graph", "approval_status", "baseline_diff", "conformance", "find", "type_search", "type_contract", "validate" },
                 edit_actions = new[] { "begin_work", "resume_work", "end_work", "approve_layers", "revoke_approvals", "revert_to_approved", "dry_run", "apply", "dry_run_plan", "apply_plan", "validate_external", "reload_external" },
@@ -143,7 +145,7 @@ namespace Architector.Editor.Agents
                         "References may also be existing immutable IDs or Explorer paths such as Core/Player/Movement.",
                         "Group and layer names are unique among siblings; the path identifies an entry.",
                         "A layer with an approval baseline shows only Portals to other approved layers; layer_graph marks the others visible_in_layer=false. Hidden Portals remain canonical and validated.",
-                        "Layer code scope (layerScopes: folders or single files, and namespaces; the most specific entry wins) maps code to layers for the dependency evidence tool; it does not affect approval. Run: dotnet run --project Assets/Plugins/Architector/Tools~/DependencyEvidence -- <repository root>.",
+                        "Layer code scope (layerScopes: folders or single files, and namespaces; the most specific entry wins) maps code to layers for the dependency evidence tool; it does not affect approval. Run: dotnet run --project \"" + ArchitectorPackagePaths.DependencyEvidenceProject + "\" -- <repository root>.",
                         "A locked group (locked=true) rejects every change to its groups, layers, layouts and approvals, and new dependencies from inside it to outside. Portals and relationships into it are allowed. There is no unlock action: never try to bypass a lock or find its password; propose the change to the user.",
                         "type_search ranks runtime assemblies before Editor and Tests assemblies and returns key, name, kind, first source and existing occurrences.",
                         "dry_run_plan returns plan_token; apply_plan with plan={\"plan_token\": \"...\"} applies the same plan without resending it while the revision is unchanged.",
@@ -151,6 +153,7 @@ namespace Architector.Editor.Agents
                         "Fill a node responsibility (one line, at most 240 characters) when its role is not obvious from the name; it explains the node and does not affect approval.",
                         "Raw dry_run/apply documents use the storage layout: architector.project.json, Groups/<id>.group.json, Layers/<id>.layer.json (header, own nodes and intra-layer edges), Layouts/<id>.layout.json and Links/<pair-id>.link.json (both Portal endpoints and cross-layer relationships). Prefer semantic plans.",
                         "Parent groups must exist or appear before their children.",
+                        "A cross-layer edge creates the Portal pair between its layers when it is missing, and deleting the last relationship between two layers removes the pair. portals is optional: it only sets the position of a pair, new or existing, and a pair left without relationships is removed.",
                         "Nodes and portals are placed with normal grid and collision rules.",
                         "Entry deletion is recursive; Portal node/layer deletion removes reciprocal endpoints.",
                         "All creation and mutation arrays form one validated transaction and one Undo action.",
@@ -160,8 +163,9 @@ namespace Architector.Editor.Agents
                         "apply_plan requires expected_revision; dry_run_plan never writes.",
                         "apply/apply_plan save designs without approval; do not pass approve_changes.",
                         "Approval means the design is agreed and canonical. New layers are Draft; semantic edits to approved layers make them Changed; layout-only edits preserve approval.",
-                        "approve_layers only when the user explicitly asks: pass layer IDs, current expected_revision and approve_changes=true. No workflow mode approves implicitly.",
-                        "workflow_mode is the user's local preference. safe: present a new or changed design and wait for the user's go-ahead before implementing it. free: implement unapproved designs in unlocked groups autonomously.",
+                        "approve_layers only when the user explicitly asks: pass layer IDs, current expected_revision and approve_changes=true. revoke_approvals and revert_to_approved take the same layer IDs and revision. Unless agent_may_approve is true, Architector asks the user to confirm in the Editor and the call fails with user_refused when they decline. No workflow mode approves implicitly.",
+                        "When agent_may_approve is true the agent may approve without asking; the baseline records that the agent approved the layer.",
+                        "workflow_mode is the user's local preference and the agent cannot change it; workflow_rule says what it requires.",
                         "Rework an approved layer in place; it stays canonical as Changed until the user approves or reverts it. baseline_diff lists changes since approval; revert_to_approved restores the approved version only when the user asks.",
                         "End the work session before handing results to the user; validation, revision and work-token checks always apply."
                     }

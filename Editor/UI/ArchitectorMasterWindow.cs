@@ -115,7 +115,7 @@ namespace Architector.Editor
         private IReadOnlyList<string> explorerSearchLayerIds = Array.Empty<string>();
         private string currentDrawDataError = string.Empty;
 
-        internal bool IsMasterWindow => windowMode == WindowMode.Master;
+        public bool IsMasterWindow => windowMode == WindowMode.Master;
 
         [MenuItem("Window/Architector/Window")]
         public static void Open()
@@ -445,14 +445,14 @@ namespace Architector.Editor
 
         private ArchitectorExplorerEntryStatus GetExplorerStatus(string id)
         {
-            if (explorerStatusRevision != repository.Revision || explorerStatusTypeGeneration != typeIndex.Generation)
+            if (explorerStatusRevision != repository.SemanticRevision || explorerStatusTypeGeneration != typeIndex.Generation)
                 RebuildExplorerStatus();
             return explorerStatus.TryGetValue(id, out var status) ? status : ArchitectorExplorerEntryStatus.None;
         }
 
         private void RebuildExplorerStatus()
         {
-            explorerStatusRevision = repository.Revision;
+            explorerStatusRevision = repository.SemanticRevision;
             explorerStatusTypeGeneration = typeIndex.Generation;
             explorerStatus.Clear();
             var healthy = new List<string>();
@@ -532,7 +532,7 @@ namespace Architector.Editor
             EditorGUI.DrawRect(headerRect, headerColor);
             EditorGUI.DrawRect(new Rect(headerRect.x, headerRect.yMax - 1f, headerRect.width, 1f), separatorColor);
             var versionRect = new Rect(headerRect.x + 6f, headerRect.y - 1f, 100f, headerRect.height);
-            GUI.Label(versionRect, "v0.0.1", versionStyle);
+            GUI.Label(versionRect, $"v{ArchitectorPackagePaths.Version}", versionStyle);
             const float settingsSize = 24f;
             var settingsRect = new Rect(
                 headerRect.xMax - settingsSize - 4f,
@@ -544,6 +544,7 @@ namespace Architector.Editor
                 if (GUI.Button(settingsRect, EditorGUIUtility.IconContent("Settings"), GUI.skin.button))
                     ArchitectorSettingsWindow.Open();
             }
+            var noticeRight = settingsRect.x;
             if (aiWork?.IsActive == true)
             {
                 var aiButtonWidth = ArchitectorAiWorkUi.WorkspaceButtonWidth(aiWork);
@@ -553,6 +554,15 @@ namespace Architector.Editor
                     aiButtonWidth,
                     settingsRect.height);
                 ArchitectorAiWorkUi.DrawWorkspaceButton(aiRect, aiWork);
+                noticeRight = aiRect.x;
+            }
+            var mode = ArchitectorAgentPreferences.Current.Mode;
+            if (mode.ShowsNotice)
+            {
+                var noticeWidth = ArchitectorAiWorkUi.WorkflowNoticeWidth(mode);
+                ArchitectorAiWorkUi.DrawWorkflowNotice(
+                    new Rect(noticeRight - noticeWidth - 4f, settingsRect.y, noticeWidth, settingsRect.height),
+                    mode);
             }
 
             GUILayout.Space(HeaderHeight);
@@ -560,20 +570,34 @@ namespace Architector.Editor
 
         private void DrawWorkspaceAiHeader()
         {
-            if (aiWork?.IsActive != true)
+            var mode = ArchitectorAgentPreferences.Current.Mode;
+            var aiActive = aiWork?.IsActive == true;
+            if (!aiActive && !mode.ShowsNotice)
                 return;
             var rect = GUILayoutUtility.GetRect(0f, ArchitectorAiWorkUi.StatusHeight, GUILayout.ExpandWidth(true));
             var headerColor = EditorGUIUtility.isProSkin
                 ? new Color(0.22f, 0.22f, 0.22f)
                 : new Color(0.76f, 0.76f, 0.76f);
             EditorGUI.DrawRect(rect, headerColor);
-            var aiButtonWidth = ArchitectorAiWorkUi.WorkspaceButtonWidth(aiWork);
-            var buttonRect = new Rect(
-                rect.xMax - aiButtonWidth - 4f,
-                rect.y + 3f,
-                aiButtonWidth,
-                rect.height - 6f);
-            ArchitectorAiWorkUi.DrawWorkspaceButton(buttonRect, aiWork);
+            var noticeRight = rect.xMax;
+            if (aiActive)
+            {
+                var aiButtonWidth = ArchitectorAiWorkUi.WorkspaceButtonWidth(aiWork);
+                var buttonRect = new Rect(
+                    rect.xMax - aiButtonWidth - 4f,
+                    rect.y + 3f,
+                    aiButtonWidth,
+                    rect.height - 6f);
+                ArchitectorAiWorkUi.DrawWorkspaceButton(buttonRect, aiWork);
+                noticeRight = buttonRect.x;
+            }
+            if (mode.ShowsNotice)
+            {
+                var noticeWidth = ArchitectorAiWorkUi.WorkflowNoticeWidth(mode);
+                ArchitectorAiWorkUi.DrawWorkflowNotice(
+                    new Rect(noticeRight - noticeWidth - 4f, rect.y + 3f, noticeWidth, rect.height - 6f),
+                    mode);
+            }
         }
 
         private void DrawExplorer()
@@ -1739,6 +1763,15 @@ namespace Architector.Editor
                             new GUIContent("Planned", "The design is approved, but some typed nodes are not linked to code or their contracts do not pass conformance yet."),
                             EditorStyles.miniBoldLabel,
                             GUILayout.ExpandWidth(false));
+                    if (layer.approval?.approvedByAgent == true)
+                    {
+                        GUILayout.Label(
+                            new GUIContent("By Agent", "An agent approved this layer without your review."),
+                            EditorStyles.miniBoldLabel,
+                            GUILayout.ExpandWidth(false));
+                        if (GUILayout.Button(new GUIContent("Confirm", "Record that you reviewed this layer."), EditorStyles.miniButton, GUILayout.ExpandWidth(false)))
+                            Run(() => repository.ApproveLayers(new[] { layer.id }));
+                    }
                     GUILayout.FlexibleSpace();
                     DrawRelationshipFilters(layer.id);
                 }
@@ -1875,12 +1908,12 @@ namespace Architector.Editor
         {
             if (layerConformance == null
                 || !string.Equals(layerConformanceLayerId, layerId, StringComparison.Ordinal)
-                || layerConformanceRepositoryRevision != repository.Revision
+                || layerConformanceRepositoryRevision != repository.SemanticRevision
                 || layerConformanceTypeGeneration != typeIndex.Generation)
             {
                 layerConformance = ArchitectorConformance.Evaluate(repository, typeIndex, new[] { layerId }, int.MaxValue);
                 layerConformanceLayerId = layerId;
-                layerConformanceRepositoryRevision = repository.Revision;
+                layerConformanceRepositoryRevision = repository.SemanticRevision;
                 layerConformanceTypeGeneration = typeIndex.Generation;
             }
             return layerConformance;
@@ -2454,7 +2487,7 @@ namespace Architector.Editor
         private void RequestContextMenu(GenericMenu menu, Vector2 screenPosition)
         {
             pendingContextMenu = menu;
-            pendingContextMenuPosition = screenPosition - position.position;
+            pendingContextMenuPosition = screenPosition;
             pendingContextMenuNeedsRepaint = true;
             Repaint();
         }
@@ -2466,13 +2499,13 @@ namespace Architector.Editor
 
             pendingContextMenuNeedsRepaint = false;
             var menu = pendingContextMenu;
-            var menuPosition = pendingContextMenuPosition;
+            var screenPosition = pendingContextMenuPosition;
             pendingContextMenu = null;
             EditorApplication.delayCall += () =>
             {
                 if (this == null)
                     return;
-                menu.DropDown(new Rect(menuPosition, Vector2.zero));
+                menu.DropDown(new Rect(GUIUtility.ScreenToGUIPoint(screenPosition), Vector2.zero));
             };
         }
 

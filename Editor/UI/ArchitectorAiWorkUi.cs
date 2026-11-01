@@ -88,6 +88,29 @@ namespace Architector.Editor
                 current.Use();
         }
 
+        public static float WorkflowNoticeWidth(ArchitectorAgentWorkflowMode mode)
+        {
+            return Mathf.Ceil(CreateStatusStyle(false).CalcSize(WorkflowNoticeContent(mode)).x) + 2f;
+        }
+
+        public static void DrawWorkflowNotice(Rect rect, ArchitectorAgentWorkflowMode mode)
+        {
+            var outline = EditorGUIUtility.isProSkin ? new Color(0.12f, 0.12f, 0.12f, 1f) : new Color(0.42f, 0.42f, 0.42f, 1f);
+            var fill = EditorGUIUtility.isProSkin ? new Color(0.32f, 0.32f, 0.32f, 1f) : new Color(0.66f, 0.66f, 0.66f, 1f);
+            if (rect.Contains(Event.current.mousePosition))
+                fill *= 1.12f;
+            fill.a = 1f;
+            EditorGUI.DrawRect(rect, outline);
+            EditorGUI.DrawRect(new Rect(rect.x + 1f, rect.y + 1f, Mathf.Max(0f, rect.width - 2f), Mathf.Max(0f, rect.height - 2f)), fill);
+            if (GUI.Button(rect, WorkflowNoticeContent(mode), CreateStatusStyle(false)))
+                ArchitectorSettingsWindow.OpenAgentWorkflow();
+        }
+
+        private static GUIContent WorkflowNoticeContent(ArchitectorAgentWorkflowMode mode)
+        {
+            return new GUIContent(mode.DisplayName, EditorGUIUtility.IconContent("console.warnicon.sml").image, mode.Description);
+        }
+
         private static void DrawStatusControl(
             Rect rect,
             bool locked,

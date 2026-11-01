@@ -78,6 +78,9 @@ namespace Architector.Editor.Agents
                         || revertArray.Any(item => item.Type != JTokenType.String))
                         return ArchitectorAgentResult.Fail("layers_required", new { message = "layers must be a non-empty array of layer IDs." });
                     var revertIds = revertArray.Values<string>().ToArray();
+                    var revertAllowed = RequireApprovalAuthority(repository, action, revertIds);
+                    if (revertAllowed != null)
+                        return revertAllowed;
                     foreach (var layerId in revertIds)
                         repository.RevertLayerToApproved(layerId);
                     return ArchitectorAgentResult.Ok("Architector layers reverted to their approved baselines.", new
@@ -101,12 +104,15 @@ namespace Architector.Editor.Agents
                     if (action == "approve_layers" && !parameters.approve_changes)
                         return ArchitectorAgentResult.Fail("approval_required", new
                         {
-                            message = "Approval marks agreed canonical architecture and is set only when the user explicitly asks for it. Pass approve_changes=true only after that request.",
+                            message = "Approval marks agreed canonical architecture. Pass approve_changes=true to request it.",
                             revision = repository.Revision,
                             layers = layerIds
                         });
+                    var allowed = RequireApprovalAuthority(repository, action, layerIds);
+                    if (allowed != null)
+                        return allowed;
                     if (action == "approve_layers")
-                        repository.ApproveLayers(layerIds);
+                        repository.ApproveLayers(layerIds, ArchitectorAgentPreferences.Current.Mode.AgentMayApprove);
                     else
                         repository.RevokeLayerApprovals(layerIds);
                     return ArchitectorAgentResult.Ok(
@@ -243,6 +249,27 @@ namespace Architector.Editor.Agents
             }
             DryRunPlans[token] = ((JObject)plan.DeepClone(), revision);
             return token;
+        }
+
+        private static ArchitectorAgentResult RequireApprovalAuthority(ArchitectorRepository repository, string action, IReadOnlyList<string> layerIds)
+        {
+            if (ArchitectorAgentPreferences.Current.Mode.AgentMayApprove)
+                return null;
+            var names = layerIds.Select(id => repository.FindLayer(id)?.name ?? id);
+            var question = action switch
+            {
+                "approve_layers" => "approve",
+                "revoke_approvals" => "revoke the approval of",
+                _ => "revert to the approved version"
+            };
+            if (ArchitectorApprovalGate.Confirm($"An agent wants to {question}:\n\n{string.Join("\n", names)}"))
+                return null;
+            return ArchitectorAgentResult.Fail("user_refused", new
+            {
+                message = "The user did not confirm this action in the Unity Editor. Do not repeat it unless the user asks.",
+                revision = repository.Revision,
+                layers = layerIds
+            });
         }
 
         private static ArchitectorAgentResult CheckRevision(ArchitectorRepository repository, int? expectedRevision, bool required)

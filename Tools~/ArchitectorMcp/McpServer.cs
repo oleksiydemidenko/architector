@@ -6,7 +6,7 @@ using System.Text.Json.Nodes;
 public static class McpServer
 {
     private const string ProtocolVersion = "2025-06-18";
-    private const string Instructions = "Architector holds the architecture of this Unity project as layers with contracts. Before changing an unfamiliar file or type, call architector_route and read only what it names. Use architector_digest for approved layers. Writing needs the open Unity Editor: use architector_edit with a work session (begin_work, dry_run_plan, apply_plan, end_work). Saving does not approve; only the user approves a layer.";
+    private const string Instructions = "Architector holds the architecture of this Unity project as layers with contracts. Before changing an unfamiliar file or type, call architector_route and read only what it names. Use architector_digest for approved layers. Writing needs the open Unity Editor: use architector_edit with a work session (begin_work, dry_run_plan, apply_plan, end_work). Saving does not approve. Approving needs the user's confirmation in the Editor unless capabilities reports agent_may_approve.";
     private static readonly UTF8Encoding Utf8 = new(false);
     private static string? root;
 

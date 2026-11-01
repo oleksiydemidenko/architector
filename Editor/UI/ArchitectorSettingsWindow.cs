@@ -12,13 +12,20 @@ namespace Architector.Editor
         private ArchitectorAiWorkCoordinator aiWork;
         private string loadError = string.Empty;
         private Vector2 scroll;
+        private bool sourceIndexExpanded = true;
+        private bool geometryExpanded = true;
+        private bool paletteExpanded;
+        private bool utilitiesExpanded = true;
         private bool includedRootsExpanded = true;
         private bool excludedRootsExpanded;
         private bool optimizationExpanded;
-        private bool experimentalExpanded;
         private bool darkPaletteExpanded;
         private bool lightPaletteExpanded;
         private bool aiIntegrationExpanded = true;
+        private bool arrangeExpanded = true;
+        private const string WorkflowControlName = "ArchitectorAgentWorkflow";
+        private double workflowHighlightUntil;
+        private bool workflowFocusPending;
         private readonly Dictionary<string, ArchitectorAgentIntegrationProbeResult> integrationStatuses = new(StringComparer.Ordinal);
 
         [MenuItem("Window/Architector/Settings")]
@@ -34,6 +41,38 @@ namespace Architector.Editor
             window.titleContent = new GUIContent("Architector Settings");
             window.minSize = new Vector2(680f, 420f);
             window.Show();
+        }
+
+        public static void OpenAgentWorkflow()
+        {
+            Open();
+            var window = GetWindow<ArchitectorSettingsWindow>();
+            window.aiIntegrationExpanded = true;
+            window.workflowHighlightUntil = EditorApplication.timeSinceStartup + 2d;
+            window.workflowFocusPending = true;
+            window.Repaint();
+        }
+
+        private void DrawWorkflowHighlight(Rect rect)
+        {
+            if (workflowFocusPending && Event.current.type == EventType.Repaint)
+            {
+                workflowFocusPending = false;
+                scroll.y = Mathf.Max(0f, rect.y - 48f);
+                EditorGUI.FocusTextInControl(null);
+                GUI.FocusControl(WorkflowControlName);
+            }
+            if (EditorApplication.timeSinceStartup >= workflowHighlightUntil)
+                return;
+            if (Event.current.type == EventType.Repaint)
+            {
+                var color = new Color(1f, 0.76f, 0.20f);
+                EditorGUI.DrawRect(new Rect(rect.x, rect.y - 1f, rect.width, 1f), color);
+                EditorGUI.DrawRect(new Rect(rect.x, rect.yMax, rect.width, 1f), color);
+                EditorGUI.DrawRect(new Rect(rect.x - 1f, rect.y - 1f, 1f, rect.height + 2f), color);
+                EditorGUI.DrawRect(new Rect(rect.xMax, rect.y - 1f, 1f, rect.height + 2f), color);
+            }
+            Repaint();
         }
 
         private void OnEnable()
@@ -77,19 +116,16 @@ namespace Architector.Editor
             using (new LabelWidthScope(Mathf.Clamp(position.width * 0.52f, 190f, 280f)))
             {
                 scroll = EditorGUILayout.BeginScrollView(scroll);
-                DrawSourceIndex(draft.sourceIndex);
-                EditorGUILayout.Space(8f);
-                DrawGeometry(draft.geometry);
-                EditorGUILayout.Space(8f);
-                DrawPalette(draft.palette);
-                EditorGUILayout.Space(8f);
-                DrawAiIntegration(draft.agent);
-                EditorGUILayout.Space(8f);
-                DrawOptimization(draft.optimization);
-                EditorGUILayout.Space(8f);
-                DrawExperimental(draft.optimization);
-                EditorGUILayout.Space(8f);
-                DrawUtilities();
+                using (new EditorGUILayout.VerticalScope(ArchitectorFoldoutBox.ContentStyle))
+                {
+                    DrawSourceIndex(draft.sourceIndex);
+                    DrawGeometry(draft.geometry);
+                    DrawPalette(draft.palette);
+                    DrawAiIntegration(draft.agent);
+                    DrawArrange(draft.arrange);
+                    DrawOptimization(draft.optimization);
+                    DrawUtilities();
+                }
                 EditorGUILayout.EndScrollView();
             }
 
@@ -99,7 +135,9 @@ namespace Architector.Editor
 
         private void DrawSourceIndex(ArchitectorSourceIndexSettings sourceIndex)
         {
-            GUILayout.Label("C# Source Index", EditorStyles.boldLabel);
+            using var box = new ArchitectorFoldoutBox("C# Source Index", ref sourceIndexExpanded);
+            if (!box.Expanded)
+                return;
             EditorGUILayout.HelpBox("Only these project-relative roots will be scanned for C# types. Excluded roots always win.", MessageType.None);
             includedRootsExpanded = EditorGUILayout.Foldout(includedRootsExpanded, $"Included Roots ({sourceIndex.includedRoots.Count})", true);
             if (includedRootsExpanded)
@@ -139,21 +177,37 @@ namespace Architector.Editor
             }
         }
 
-        private static void DrawGeometry(ArchitectorGeometrySettings geometry)
+        private void DrawGeometry(ArchitectorGeometrySettings geometry)
         {
-            GUILayout.Label("Workspace Geometry", EditorStyles.boldLabel);
+            using var box = new ArchitectorFoldoutBox("Workspace Geometry", ref geometryExpanded);
+            if (!box.Expanded)
+                return;
             geometry.minimumNodeGap = EditorGUILayout.FloatField("Minimum Node Gap", geometry.minimumNodeGap);
             geometry.gridSize = EditorGUILayout.FloatField("Grid Size", geometry.gridSize);
             geometry.snapToGrid = EditorGUILayout.Toggle("Snap To Grid", geometry.snapToGrid);
         }
 
-        private void DrawOptimization(ArchitectorOptimizationSettings optimization)
+        private void DrawArrange(ArchitectorArrangeSettings arrange)
         {
-            optimizationExpanded = EditorGUILayout.Foldout(optimizationExpanded, "Optimization", true);
-            if (!optimizationExpanded)
+            using var box = new ArchitectorFoldoutBox("Arrange", ref arrangeExpanded);
+            if (!box.Expanded)
                 return;
 
-            using (new EditorGUI.IndentLevelScope())
+            arrange.maxGroupRelationships = EditorGUILayout.IntSlider(
+                new GUIContent(
+                    "Group Relationships",
+                    "A connected part of a layer with more relationships than this is split into groups around its most connected nodes."),
+                arrange.maxGroupRelationships,
+                4,
+                64);
+        }
+
+        private void DrawOptimization(ArchitectorOptimizationSettings optimization)
+        {
+            using var box = new ArchitectorFoldoutBox("Optimization", ref optimizationExpanded);
+            if (!box.Expanded)
+                return;
+
             {
                 GUILayout.Label("Member Search Scope", EditorStyles.boldLabel);
                 EditorGUILayout.HelpBox(
@@ -173,40 +227,11 @@ namespace Architector.Editor
             }
         }
 
-        private void DrawExperimental(ArchitectorOptimizationSettings optimization)
-        {
-            experimentalExpanded = EditorGUILayout.Foldout(experimentalExpanded, "Experimental", true);
-            if (!experimentalExpanded)
-                return;
-
-            using (new EditorGUI.IndentLevelScope())
-            {
-                GUILayout.Label("Routing", EditorStyles.boldLabel);
-                var gridRoutingLabel = new GUIContent(
-                    "Grid Routing",
-                    "Routes stable relationships through grid-cell centers with a one-cell attachment zone around nodes. The current router remains the fallback.");
-                optimization.gridRouting = EditorGUILayout.Toggle(gridRoutingLabel, optimization.gridRouting);
-                EditorGUILayout.HelpBox(
-                    optimization.gridRouting
-                        ? "Experimental cell routing is active. Disable it to restore the current visibility router immediately."
-                        : "The proven visibility router remains active.",
-                    MessageType.None);
-
-                var label = new GUIContent(
-                    "High Quality Drag Routing",
-                    "Recalculates full obstacle-aware routes while dragging, except while dragged nodes overlap other nodes. This can reduce performance on large graphs.");
-                optimization.highQualityDragRouting = EditorGUILayout.Toggle(label, optimization.highQualityDragRouting);
-                EditorGUILayout.HelpBox(
-                    optimization.highQualityDragRouting
-                        ? "Full obstacle-aware routes are previewed during drag. Overlapping nodes temporarily use the fast preview."
-                        : "Fast preview routes are used during drag. Full routes are recalculated and cached when the nodes are released.",
-                    MessageType.None);
-            }
-        }
-
         private void DrawPalette(ArchitectorPaletteSettings palette)
         {
-            GUILayout.Label("Color Palette", EditorStyles.boldLabel);
+            using var box = new ArchitectorFoldoutBox("Color Palette", ref paletteExpanded);
+            if (!box.Expanded)
+                return;
             EditorGUILayout.HelpBox("Separate palettes keep nodes, text, types, edges and selections readable in both Unity themes.", MessageType.None);
 
             darkPaletteExpanded = EditorGUILayout.Foldout(darkPaletteExpanded, "Dark Theme", true);
@@ -253,41 +278,64 @@ namespace Architector.Editor
 
         private void DrawUtilities()
         {
-            GUILayout.Label("Utilities", EditorStyles.boldLabel);
+            using var box = new ArchitectorFoldoutBox("Utilities", ref utilitiesExpanded);
+            if (!box.Expanded)
+                return;
+            if (GUILayout.Button("Open Architector Integrations"))
+                OpenIntegrations();
             if (GUILayout.Button("Reveal Settings JSON"))
                 EditorUtility.RevealInFinder(repository.Paths.SettingsPath);
         }
 
         private void DrawAiIntegration(ArchitectorAgentSettings agent)
         {
-            aiIntegrationExpanded = EditorGUILayout.Foldout(aiIntegrationExpanded, "AI Integration", true);
-            if (!aiIntegrationExpanded)
+            using var box = new ArchitectorFoldoutBox("AI Integration", ref aiIntegrationExpanded);
+            if (!box.Expanded)
                 return;
 
-            using (new EditorGUI.IndentLevelScope())
             {
                 GUILayout.Label("This Computer", EditorStyles.miniBoldLabel);
                 var preferences = ArchitectorAgentPreferences.Current;
-                var free = EditorGUILayout.Popup(
+                var modes = ArchitectorAgentWorkflowModes.All;
+                var missingModes = ArchitectorAgentWorkflowModes.Optional
+                    .Where(mode => !ArchitectorAgentWorkflowModes.IsInstalled(mode.Id))
+                    .ToArray();
+                var modeIndex = Mathf.Max(0, modes.ToList().FindIndex(mode => mode.Id == preferences.WorkflowMode));
+                GUI.SetNextControlName(WorkflowControlName);
+                var selectedMode = EditorGUILayout.Popup(
                     new GUIContent("Agent Workflow", "Stored only for you on this computer."),
-                    string.Equals(preferences.WorkflowMode, ArchitectorAgentWorkflowModes.Free, StringComparison.Ordinal) ? 1 : 0,
-                    new[] { "Safe", "Free" }) == 1;
+                    modeIndex,
+                    modes.Select(mode => mode.DisplayName)
+                        .Concat(missingModes.Select(mode => $"{mode.DisplayName} (Not Installed)"))
+                        .ToArray());
+                DrawWorkflowHighlight(GUILayoutUtility.GetLastRect());
+                if (selectedMode >= modes.Count)
+                {
+                    selectedMode = modeIndex;
+                    OpenIntegrations();
+                }
                 var lockWindows = EditorGUILayout.Toggle(
                     new GUIContent("Lock Windows During Agent Work", "Stored only for you on this computer. Revision checks protect every write either way."),
                     preferences.LockWindowsDuringAgentWork);
-                if (free != string.Equals(preferences.WorkflowMode, ArchitectorAgentWorkflowModes.Free, StringComparison.Ordinal))
-                    preferences.WorkflowMode = free ? ArchitectorAgentWorkflowModes.Free : ArchitectorAgentWorkflowModes.Safe;
+                if (selectedMode != modeIndex)
+                    preferences.WorkflowMode = modes[selectedMode].Id;
                 if (lockWindows != preferences.LockWindowsDuringAgentWork)
                     preferences.LockWindowsDuringAgentWork = lockWindows;
                 EditorGUILayout.HelpBox(
-                    free
-                        ? "Free: the agent implements unapproved designs in unlocked groups on its own. Approval is still set only when you ask for it."
-                        : "Safe: the agent presents a new or changed design and waits for your go-ahead before implementing it. Approval is set only when you ask for it.",
-                    MessageType.Info);
+                    modes[selectedMode].Description,
+                    modes[selectedMode].ShowsNotice ? MessageType.Warning : MessageType.Info);
 
                 EditorGUILayout.Space(6f);
-                GUILayout.Label("Connections", EditorStyles.boldLabel);
-                foreach (var descriptor in ArchitectorAgentIntegrationRegistry.Descriptors)
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    GUILayout.Label("Connections", EditorStyles.boldLabel);
+                    GUILayout.FlexibleSpace();
+                    if (GUILayout.Button(
+                            new GUIContent(" Add Connection", EditorGUIUtility.IconContent("Toolbar Plus").image, "Open the list of integrations."),
+                            GUILayout.Height(22f)))
+                        OpenIntegrations();
+                }
+                foreach (var descriptor in ArchitectorAgentIntegrationRegistry.Descriptors.Where(candidate => ArchitectorAgentIntegrationRegistry.IsAdded(agent, candidate)))
                 {
                     var enabled = IntegrationEnabled(agent, descriptor.id);
                     if (!integrationStatuses.TryGetValue(descriptor.id, out var status))
@@ -345,9 +393,14 @@ namespace Architector.Editor
                 }
 
                 EditorGUILayout.HelpBox(
-                    "Architector owns the gateway and contract. Every optional Unity MCP package is isolated in its own adapter and may be removed without changing canonical architecture data.",
+                    "The Architector server comes with the package. Every optional Unity MCP package is isolated in its own adapter and may be removed without changing canonical architecture data.",
                     MessageType.None);
             }
+        }
+
+        private static void OpenIntegrations()
+        {
+            EditorApplication.delayCall += () => EditorApplication.ExecuteMenuItem("Window/Architector/Integrations");
         }
 
         private static Color IntegrationStatusColor(string state)
@@ -393,6 +446,7 @@ namespace Architector.Editor
                     settings.sourceIndex = draft.sourceIndex;
                     settings.geometry = draft.geometry;
                     settings.optimization = draft.optimization;
+                    settings.arrange = draft.arrange;
                     settings.palette = draft.palette;
                     settings.agent = draft.agent;
                 });
