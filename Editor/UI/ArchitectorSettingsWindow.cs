@@ -6,7 +6,7 @@ using UnityEngine;
 
 namespace Architector.Editor
 {
-    public sealed class ArchitectorSettingsWindow : EditorWindow
+    public sealed partial class ArchitectorSettingsWindow : EditorWindow
     {
         private ArchitectorRepository repository;
         private ArchitectorAiWorkCoordinator aiWork;
@@ -79,6 +79,12 @@ namespace Architector.Editor
         {
             titleContent = new GUIContent("Architector Settings");
             minSize = new Vector2(680f, 420f);
+            ArchitectorPackageUpdates.Changed -= OnUpdatesChanged;
+            ArchitectorPackageUpdates.Changed += OnUpdatesChanged;
+            updateShownTag = ArchitectorPackageUpdates.State.availableTag;
+            updateExpanded = ArchitectorPackageUpdates.UpdateAvailable;
+            EditorApplication.delayCall -= CheckForUpdatesOnOpen;
+            EditorApplication.delayCall += CheckForUpdatesOnOpen;
             if (!ArchitectorSession.TryGet(out var session, out loadError))
                 return;
             repository = session.Repository;
@@ -89,6 +95,8 @@ namespace Architector.Editor
 
         private void OnDisable()
         {
+            ArchitectorPackageUpdates.Changed -= OnUpdatesChanged;
+            EditorApplication.delayCall -= CheckForUpdatesOnOpen;
             if (repository != null)
                 repository.Changed -= Repaint;
             if (aiWork != null)
@@ -99,6 +107,7 @@ namespace Architector.Editor
         {
             if (repository == null)
             {
+                DrawUpdates();
                 EditorGUILayout.HelpBox(loadError, MessageType.Error);
                 if (GUILayout.Button("Retry"))
                     OnEnable();
@@ -110,13 +119,14 @@ namespace Architector.Editor
             if (aiLocked)
                 ArchitectorAiWorkUi.ConsumeInputWhenLocked();
 
-            var draft = ArchitectorJson.Clone(repository.Settings);
-            EditorGUI.BeginChangeCheck();
-            using (new EditorGUI.DisabledScope(aiLocked))
-            using (new LabelWidthScope(Mathf.Clamp(position.width * 0.52f, 190f, 280f)))
+            scroll = EditorGUILayout.BeginScrollView(scroll);
+            using (new EditorGUILayout.VerticalScope(ArchitectorFoldoutBox.ContentStyle))
             {
-                scroll = EditorGUILayout.BeginScrollView(scroll);
-                using (new EditorGUILayout.VerticalScope(ArchitectorFoldoutBox.ContentStyle))
+                DrawUpdates();
+                var draft = ArchitectorJson.Clone(repository.Settings);
+                EditorGUI.BeginChangeCheck();
+                using (new EditorGUI.DisabledScope(aiLocked))
+                using (new LabelWidthScope(Mathf.Clamp(position.width * 0.52f, 190f, 280f)))
                 {
                     DrawSourceIndex(draft.sourceIndex);
                     DrawGeometry(draft.geometry);
@@ -126,11 +136,10 @@ namespace Architector.Editor
                     DrawOptimization(draft.optimization);
                     DrawUtilities();
                 }
-                EditorGUILayout.EndScrollView();
+                if (EditorGUI.EndChangeCheck())
+                    Apply(draft);
             }
-
-            if (EditorGUI.EndChangeCheck())
-                Apply(draft);
+            EditorGUILayout.EndScrollView();
         }
 
         private void DrawSourceIndex(ArchitectorSourceIndexSettings sourceIndex)
@@ -225,6 +234,10 @@ namespace Architector.Editor
                     new GUIContent("Include Framework API", "Allows members declared by Unity and system/framework types to be offered by the member picker."),
                     optimization.includeFrameworkMembers);
                 GUILayout.Label("Canvas", EditorStyles.boldLabel);
+                optimization.relationshipMerging = (ArchitectorRelationshipMerging)EditorGUILayout.Popup(
+                    new GUIContent("Relationship Merging", "Builds shared paths for incoming relationships of the same type on one node side. Branches join along the route to shorten separate runs. All enabled modes combine parallel relationships between the same nodes when their type and preferred sides match. Maximum uses the same threshold as 2 or more."),
+                    (int)optimization.relationshipMerging,
+                    new[] { "Off", "3 or more", "2 or more", "Maximum" });
                 optimization.hideRoutesWhileDragging = EditorGUILayout.Toggle(
                     new GUIContent("Hide Routes While Dragging", "Relationships of a dragged node are hidden and appear again when they are routed after the drop. Other relationships stay. Turn off to reroute them on every drag step, which is slower on large layers."),
                     optimization.hideRoutesWhileDragging);

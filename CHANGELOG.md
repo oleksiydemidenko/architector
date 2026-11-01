@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Added **Relationship Merging** under Settings > Optimization > Canvas: Off (default), 3 or more, 2 or more, and Maximum. Incoming relationships of one type and target side grow a shared route tree by short added connections. Long runs are shared; junction dots mark real merges rather than a terminal rail before the node. Different networks occupy separate tracks, and ordinary crossings keep their bridges. All enabled modes combine parallel relationships with matching type and preferred sides into a thicker arrow, preserving their identities; Maximum uses the same threshold as 2 or more.
+- Shared strokes draw once, retain branch selection, cycle member relationships on repeated trunk clicks, and list members in the Relationship Inspector. Node highlighting, background routing, drag previews and Arrange use the shared geometry.
+
+- Authoring instructions omit node coordinates and finish new layers with Arrange. The Coplay MCP adapter exposes the layer, selection and center parameters for `arrange_layer`.
+- Settings starts with Update: automatic daily checks and manual checks, a prerelease option, intervening changelog entries, and an explicit update button. An available update opens the section and marks its header with a warning icon.
+- Updates require the platform's MCP server and checksums to be published, and compatible Unity requirements. Architector and an installed Lazy Mode package update together through Package Manager. Local clones are left to Git.
+- Install Server verifies the downloaded server against the release's SHA-256 checksum before replacing an existing file. Package updates, server installation and client reconnection remain explicit actions.
+- Setup Check refreshes after server and package installation, preference changes and when the Integrations window regains focus.
+
 ## 0.2.2
 
 - Settings opens only AI Integration and Utilities after a recompile.

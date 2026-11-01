@@ -1713,7 +1713,7 @@ namespace Architector.Editor
                 return;
             if (!string.IsNullOrEmpty(inspectedEdgeId))
             {
-                edgeInspector.Draw(inspectedLayerId, inspectedEdgeId, repository, Run);
+                edgeInspector.Draw(inspectedLayerId, inspectedEdgeId, repository, Run, layerCanvas.SelectedTrunkEdges);
                 return;
             }
             if (!string.IsNullOrEmpty(inspectedNodeId))

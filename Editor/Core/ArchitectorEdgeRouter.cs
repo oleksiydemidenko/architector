@@ -8,13 +8,14 @@ namespace Architector.Editor
 {
     public readonly struct ArchitectorRouteRequest
     {
-        public ArchitectorRouteRequest(string id, string sourceNodeId, string targetNodeId, string sourceSide, string targetSide)
+        public ArchitectorRouteRequest(string id, string sourceNodeId, string targetNodeId, string sourceSide, string targetSide, string kind = ArchitectorEdgeKinds.Dependency)
         {
             Id = id;
             SourceNodeId = sourceNodeId;
             TargetNodeId = targetNodeId;
             SourceSide = sourceSide;
             TargetSide = targetSide;
+            Kind = kind;
         }
 
         public string Id { get; }
@@ -22,9 +23,10 @@ namespace Architector.Editor
         public string TargetNodeId { get; }
         public string SourceSide { get; }
         public string TargetSide { get; }
+        public string Kind { get; }
     }
 
-    public sealed class ArchitectorEdgeRouter
+    public sealed partial class ArchitectorEdgeRouter
     {
         public const float Clearance = 20f;
         private const float OuterMargin = 48f;
@@ -112,9 +114,10 @@ namespace Architector.Editor
         public static Dictionary<string, List<Vector2>> Decorate(
             IReadOnlyDictionary<string, List<Vector2>> routes,
             float cornerRadius,
-            float bridgeRadius)
+            float bridgeRadius,
+            ISet<string> arrowRoutes = null)
         {
-            var legs = routes.ToDictionary(route => route.Key, route => Legs(route.Key, route.Value), StringComparer.Ordinal);
+            var legs = routes.ToDictionary(route => route.Key, route => Legs(route.Key, route.Value, arrowRoutes == null || arrowRoutes.Contains(route.Key)), StringComparer.Ordinal);
             var verticals = SortedVerticals(legs.Values);
             foreach (var horizontal in legs.Values.SelectMany(route => route).Where(leg => leg.Horizontal))
             {
@@ -247,11 +250,11 @@ namespace Architector.Editor
             return Mathf.Abs(start.y - end.y) < 0.01f && Mathf.Abs(start.x - end.x) > 1f;
         }
 
-        private static List<Leg> Legs(string id, IReadOnlyList<Vector2> route)
+        private static List<Leg> Legs(string id, IReadOnlyList<Vector2> route, bool arrow = true)
         {
             var legs = new List<Leg>(route.Count);
             for (var index = 1; index < route.Count; index++)
-                legs.Add(new Leg(id, route[index - 1], route[index], index == 1, index + 1 == route.Count));
+                legs.Add(new Leg(id, route[index - 1], route[index], index == 1, arrow && index + 1 == route.Count));
             return legs;
         }
 
@@ -436,7 +439,7 @@ namespace Architector.Editor
             };
         }
 
-        private void BuildGrid(IReadOnlyList<Rect> obstacles, IReadOnlyList<WorkRoute> routes)
+        private void BuildGrid(IReadOnlyList<Rect> obstacles, IReadOnlyList<WorkRoute> routes, bool parallelTracks = false)
         {
             var xValues = new List<float>(obstacles.Count * 3 + routes.Count * 2 + 2);
             var yValues = new List<float>(obstacles.Count * 3 + routes.Count * 2 + 2);
@@ -447,6 +450,13 @@ namespace Architector.Editor
                 xValues.Add(rect.xMax + Clearance);
                 yValues.Add(rect.yMin - Clearance);
                 yValues.Add(rect.yMax + Clearance);
+                if (parallelTracks)
+                {
+                    xValues.Add(rect.xMin - Clearance - TrackSpacing);
+                    xValues.Add(rect.xMax + Clearance + TrackSpacing);
+                    yValues.Add(rect.yMin - Clearance - TrackSpacing);
+                    yValues.Add(rect.yMax + Clearance + TrackSpacing);
+                }
                 if (portsAssigned)
                     continue;
                 xValues.Add(rect.center.x);
@@ -542,7 +552,7 @@ namespace Architector.Editor
                 route.Points = DirectRoute(route.Source, route.Target);
         }
 
-        private bool FindPath(WorkRoute route, IReadOnlyList<Terminal> sources, IReadOnlyList<Terminal> targets)
+        private bool FindPath(WorkRoute route, IReadOnlyList<Terminal> sources, IReadOnlyList<Terminal> targets, bool separateNetworks = false)
         {
             var goalState = width * height * 4;
             var goalMinX = int.MaxValue;
@@ -651,7 +661,7 @@ namespace Architector.Editor
                             length = ys[y] - ys[nextY];
                             break;
                     }
-                    if (blocked[step])
+                    if (blocked[step] || separateNetworks && usage[step] > 0)
                         continue;
 
                     var nextCell = nextY * width + nextX;
@@ -745,13 +755,14 @@ namespace Architector.Editor
             }
         }
 
-        private static void AssignPorts(IReadOnlyList<WorkRoute> routes, IReadOnlyList<WorkRoute> frozen)
+        private static void AssignPorts(IReadOnlyList<WorkRoute> routes, IReadOnlyList<WorkRoute> frozen, ISet<string> sharedTargets = null)
         {
             var groups = new Dictionary<(string node, string side), List<Endpoint>>();
             foreach (var route in routes.Concat(frozen))
             {
                 AddEndpoint(groups, route, true);
-                AddEndpoint(groups, route, false);
+                if (sharedTargets == null || !sharedTargets.Contains(route.Id))
+                    AddEndpoint(groups, route, false);
             }
             foreach (var group in groups
                          .Where(group => group.Value.Any(endpoint => !endpoint.route.Frozen))
@@ -1172,8 +1183,8 @@ namespace Architector.Editor
             var points = segment.route.Points;
             low = corridorLow;
             high = corridorHigh;
-            var beforeLength = segment.index == 1 ? Clearance : MinimumSegment;
-            var afterLength = segment.index + 3 == points.Count ? Clearance : MinimumSegment;
+            var beforeLength = segment.index == 1 && !segment.route.SourceJunction ? Clearance : MinimumSegment;
+            var afterLength = segment.index + 3 == points.Count && !segment.route.TargetJunction ? Clearance : MinimumSegment;
             Limit(Across(points[segment.index - 1], horizontal), segment.position, beforeLength, ref low, ref high);
             Limit(Across(points[segment.index + 2], horizontal), segment.position, afterLength, ref low, ref high);
             if (low > high)
@@ -1360,6 +1371,8 @@ namespace Architector.Editor
             public string Id => Request.Id;
             public Rect SourceRect { get; }
             public Rect TargetRect { get; }
+            public bool SourceJunction { get; set; }
+            public bool TargetJunction { get; set; }
             public Terminal Source { get; set; }
             public Terminal Target { get; set; }
             public bool SourcePortPlaced { get; set; }
@@ -1422,13 +1435,13 @@ namespace Architector.Editor
 
         private readonly struct Terminal
         {
-            public Terminal(string side, Vector2 anchor, float penalty)
+            public Terminal(string side, Vector2 anchor, float penalty, float clearance = Clearance)
             {
                 Side = side;
                 Anchor = anchor;
                 Penalty = penalty;
                 Direction = DirectionOf(side);
-                Stub = anchor + DirectionVector(Direction) * Clearance;
+                Stub = anchor + DirectionVector(Direction) * clearance;
             }
 
             public string Side { get; }

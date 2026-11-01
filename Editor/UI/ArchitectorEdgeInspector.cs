@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
@@ -14,8 +15,11 @@ namespace Architector.Editor
         private ArchitectorEdgeRecord edge;
         private string sourceCaption = string.Empty;
         private string targetCaption = string.Empty;
+        private string[] cachedTrunkIds = Array.Empty<string>();
+        private string[] trunkCaptions = Array.Empty<string>();
+        private Vector2 trunkScroll;
 
-        public void Draw(string layerId, string edgeId, ArchitectorRepository repository, Action<Action> execute)
+        public void Draw(string layerId, string edgeId, ArchitectorRepository repository, Action<Action> execute, IReadOnlyList<string> trunkEdges = null)
         {
             if (cachedEdgeId != edgeId || cachedRevision != repository.Revision)
                 LoadEdge(edgeId, repository);
@@ -37,6 +41,24 @@ namespace Architector.Editor
                 if (EditorGUI.EndChangeCheck())
                     execute(() => repository.UpdateEdgeKind(layerId, edgeId, Kinds[nextIndex], nextLabel));
 
+                if (trunkEdges != null && trunkEdges.Count > 1)
+                {
+                    EditorGUILayout.Space(8f);
+                    GUILayout.Label($"Shared Trunk ({trunkEdges.Count})", EditorStyles.boldLabel);
+                    if (!trunkEdges.SequenceEqual(cachedTrunkIds, StringComparer.Ordinal))
+                    {
+                        cachedTrunkIds = trunkEdges.ToArray();
+                        trunkCaptions = trunkEdges.Select(repository.FindRelationship).Where(member => member != null)
+                            .Select(member => $"{Caption(member.sourceLayerId, member.sourceNodeId, repository)} → {Caption(member.targetLayerId, member.targetNodeId, repository)}{(string.IsNullOrEmpty(member.label) ? "" : " · " + member.label)}")
+                            .ToArray();
+                    }
+                    using (var scroll = new EditorGUILayout.ScrollViewScope(trunkScroll, GUILayout.MaxHeight(320f)))
+                    {
+                        trunkScroll = scroll.scrollPosition;
+                        foreach (var caption in trunkCaptions)
+                            EditorGUILayout.LabelField(caption, EditorStyles.wordWrappedMiniLabel);
+                    }
+                }
                 EditorGUILayout.Space(8f);
                 EditorGUILayout.HelpBox(
                     edge.kind == ArchitectorEdgeKinds.Dependency
@@ -48,6 +70,8 @@ namespace Architector.Editor
 
         private void LoadEdge(string edgeId, ArchitectorRepository repository)
         {
+            cachedTrunkIds = Array.Empty<string>();
+            trunkCaptions = Array.Empty<string>();
             cachedEdgeId = edgeId;
             cachedRevision = repository.Revision;
             edge = repository.FindRelationship(edgeId);

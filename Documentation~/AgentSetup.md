@@ -33,6 +33,16 @@ Keep **Run In Background** on in Player settings, or the Editor stops answering 
 
 Another MCP server needs a small adapter: see [Adding an Agent Integration](AddingAgentIntegration.md).
 
+## Updates
+
+Open **Window > Architector > Settings > Update**. It checks when Settings opens, at most once a day if **Check Automatically** is on. **Check for Updates** checks immediately. **Include Prereleases** is on by default while Architector is in development. A ready update opens the foldout and marks it with a warning icon; you can collapse it again.
+
+The section shows the installed and available versions and the changelog entries between them. It offers a release only after its server and checksum files are published for your system and its Unity requirements are satisfied. **Update** updates Architector and an already installed Lazy Mode package together, then Unity recompiles. Finish text edits and end agent work before updating. Play Mode, compilation, unsaved Editor windows and other installations block the operation.
+
+Install the matching server and reconnect clients in **Integrations** afterward. Server downloads are checked against the release's SHA-256 checksum before installation. None of these installations or client changes happen automatically. Commit `Packages/manifest.json` and `Packages/packages-lock.json` to share the package version with the team. Agent Checks is a separate package and is not changed by this updater.
+
+A `file:` or embedded installation is shown as a local clone, with no update offer. Update that clone with Git; its path is local to that machine. Update preferences and cached results are local Editor preferences and never modify the architecture or approval state.
+
 ## 2. Tell The Agent
 
 Add this to your `AGENTS.md`, `CLAUDE.md` or Cursor rules. Keep it short: every line is read in every session.

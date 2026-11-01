@@ -4,7 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using UnityEngine;
-using UnityEngine.Networking;
 
 namespace Architector.Editor.Agents
 {
@@ -53,66 +52,29 @@ namespace Architector.Editor.Agents
 
     public static class ArchitectorMcpInstaller
     {
-        private const string ReleaseRoot = "https://github.com/oleksiydemidenko/architector/releases/download";
         private const int CliTimeoutMilliseconds = 30000;
 
         public static string Version => ArchitectorPackagePaths.Version;
         public static string ProjectRoot => Path.GetDirectoryName(Application.dataPath);
         public static string BinaryPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".architector", "mcp", Version, FileName);
         public static bool IsInstalled => File.Exists(BinaryPath);
-        public static string DownloadUrl => $"{ReleaseRoot}/v{Version}/architector-mcp-{RuntimeId}{Extension}";
+        public static string DownloadUrl => ArchitectorReleaseAssets.Url("v" + Version, ArchitectorReleaseAssets.ServerFileName);
         private static string FileName => "architector-mcp" + Extension;
         private static string Extension => Application.platform == RuntimePlatform.WindowsEditor ? ".exe" : string.Empty;
 
-        private static string RuntimeId
+        public static async void Install(Action<string> finished)
         {
-            get
-            {
-                var arm = RuntimeInformation.ProcessArchitecture == Architecture.Arm64;
-                return Application.platform switch
-                {
-                    RuntimePlatform.WindowsEditor => "win-x64",
-                    RuntimePlatform.OSXEditor => arm ? "osx-arm64" : "osx-x64",
-                    _ => arm ? "linux-arm64" : "linux-x64"
-                };
-            }
-        }
-
-        public static void Install(Action<string> finished)
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(BinaryPath));
-            var partial = BinaryPath + ".download";
-            var request = UnityWebRequest.Get(DownloadUrl);
-            request.downloadHandler = new DownloadHandlerFile(partial) { removeFileOnAbort = true };
-            var operation = request.SendWebRequest();
-            operation.completed += _ =>
-            {
-                var error = request.result == UnityWebRequest.Result.Success
-                    ? null
-                    : request.responseCode == 404
-                        ? $"The server for version {Version} is not published yet."
-                        : request.error;
-                request.Dispose();
-                if (error == null)
-                    error = Finish(partial);
-                finished(error);
-            };
-        }
-
-        private static string Finish(string partial)
-        {
+            string error = null;
             try
             {
-                File.Delete(BinaryPath);
-                File.Move(partial, BinaryPath);
-                if (Application.platform != RuntimePlatform.WindowsEditor)
-                    Process.Start("chmod", $"+x \"{BinaryPath}\"")?.WaitForExit();
-                return null;
+                await ArchitectorReleaseAssets.InstallServer("v" + Version, BinaryPath);
             }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+            catch (Exception exception)
             {
-                return exception.Message;
+                error = exception.Message;
             }
+            if (!ArchitectorReleaseAssets.IsReloading)
+                finished(error);
         }
 
         public static ArchitectorMcpClientState CheckClient(ArchitectorMcpClient client, string binary, string root)

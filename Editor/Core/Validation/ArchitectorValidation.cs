@@ -61,6 +61,8 @@ namespace Architector.Editor
                 throw new ArchitectorDataException("Arrange group relationships must be positive.");
             if (settings.optimization.memberParentDepth is < -1 or > 2)
                 throw new ArchitectorDataException("Member parent depth must be 0, 1, 2 or -1 for all parents.");
+            if (!Enum.IsDefined(typeof(ArchitectorRelationshipMerging), settings.optimization.relationshipMerging))
+                throw new ArchitectorDataException("Unknown relationship merging mode.");
             var integrationIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (var integration in settings.agent.integrations)
             {

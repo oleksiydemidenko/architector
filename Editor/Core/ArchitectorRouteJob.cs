@@ -15,13 +15,17 @@ namespace Architector.Editor
             IReadOnlyDictionary<string, Rect> nodes,
             IReadOnlyList<ArchitectorRouteRequest> requests,
             float cornerRadius,
-            float bridgeRadius)
+            float bridgeRadius,
+            ArchitectorRelationshipMerging merging = ArchitectorRelationshipMerging.Off)
         {
             var token = cancellation.Token;
             task = Task.Run(() =>
             {
-                var routes = new ArchitectorEdgeRouter().Route(nodes, requests, true, token);
-                var drawn = ArchitectorEdgeRouter.Decorate(routes, cornerRadius, bridgeRadius);
+                var router = new ArchitectorEdgeRouter();
+                var network = merging == ArchitectorRelationshipMerging.Off ? null : router.RouteMerged(nodes, requests, merging, token);
+                var routes = network?.Routes ?? router.Route(nodes, requests, true, token);
+                var drawn = network == null ? ArchitectorEdgeRouter.Decorate(routes, cornerRadius, bridgeRadius) : network.Decorate(cornerRadius, bridgeRadius);
+                Network = network;
                 token.ThrowIfCancellationRequested();
                 Routes = routes;
                 DrawnRoutes = drawn;
@@ -31,6 +35,7 @@ namespace Architector.Editor
         public bool IsCompleted => task.IsCompleted;
         public bool Succeeded => task.Status == TaskStatus.RanToCompletion;
         public Exception Failure => task.IsFaulted ? task.Exception?.GetBaseException() : null;
+        public ArchitectorRouteNetwork Network { get; private set; }
         public Dictionary<string, List<Vector2>> Routes { get; private set; }
         public Dictionary<string, List<Vector2>> DrawnRoutes { get; private set; }
 

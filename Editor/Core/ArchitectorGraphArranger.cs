@@ -27,14 +27,16 @@ namespace Architector.Editor
 
     public readonly struct ArchitectorArrangeEdge
     {
-        public ArchitectorArrangeEdge(string sourceNodeId, string targetNodeId)
+        public ArchitectorArrangeEdge(string sourceNodeId, string targetNodeId, string kind = ArchitectorEdgeKinds.Dependency)
         {
             SourceNodeId = sourceNodeId;
             TargetNodeId = targetNodeId;
+            Kind = kind;
         }
 
         public string SourceNodeId { get; }
         public string TargetNodeId { get; }
+        public string Kind { get; }
     }
 
     public static class ArchitectorGraphArranger
@@ -54,7 +56,8 @@ namespace Architector.Editor
             float gap,
             float grid,
             int maxGroupRelationships,
-            IReadOnlyCollection<string> centers = null)
+            IReadOnlyCollection<string> centers = null,
+            ArchitectorRelationshipMerging merging = ArchitectorRelationshipMerging.Off)
         {
             var result = new Dictionary<string, ArchitectorPoint>(StringComparer.Ordinal);
             if (nodes.Count == 0)
@@ -65,7 +68,7 @@ namespace Architector.Editor
                 ? GroupAroundCenters(graph, centers)
                 : GroupByLimit(graph, maxGroupRelationships);
             var placements = OrderGroups(groups, graph).Select(group => LayOut(group, graph, gap, grid)).ToList();
-            ImproveByRoutes(placements, graph, nodes, edges, gap, grid);
+            ImproveByRoutes(placements, graph, nodes, edges, gap, grid, merging);
             Pack(placements.Select(placement => ToBlock(placement.Cells, graph, gap, grid)).ToList(), nodes, gap, grid, result);
             return result;
         }
@@ -76,7 +79,8 @@ namespace Architector.Editor
             IReadOnlyList<ArchitectorArrangeNode> nodes,
             IReadOnlyList<ArchitectorArrangeEdge> edges,
             float gap,
-            float grid)
+            float grid,
+            ArchitectorRelationshipMerging merging)
         {
             var requests = edges
                 .Where(edge => edge.SourceNodeId != edge.TargetNodeId
@@ -90,13 +94,14 @@ namespace Architector.Editor
                     edge.SourceNodeId,
                     edge.TargetNodeId,
                     "auto",
-                    "auto")))
+                    "auto",
+                    edge.Kind)))
                 .ToArray();
             if (requests.Length < 2)
                 return;
 
             var router = new ArchitectorEdgeRouter();
-            var cost = RouteCost(router, placements, graph, nodes, requests, gap, grid, out var busy);
+            var cost = RouteCost(router, placements, graph, nodes, requests, gap, grid, out var busy, merging);
             var evaluations = 0;
             var improved = true;
             while (improved && evaluations < RouteEvaluations)
@@ -116,7 +121,7 @@ namespace Architector.Editor
                     Place(cells, occupants, pair.first, secondId);
                     Place(cells, occupants, pair.second, firstId);
                     evaluations++;
-                    var nextCost = RouteCost(router, placements, graph, nodes, requests, gap, grid, out var nextBusy);
+                    var nextCost = RouteCost(router, placements, graph, nodes, requests, gap, grid, out var nextBusy, merging);
                     if (nextCost < cost - 0.001f)
                     {
                         cost = nextCost;
@@ -163,7 +168,8 @@ namespace Architector.Editor
             IReadOnlyList<ArchitectorRouteRequest> requests,
             float gap,
             float grid,
-            out Dictionary<string, int> busy)
+            out Dictionary<string, int> busy,
+            ArchitectorRelationshipMerging merging)
         {
             var positions = new Dictionary<string, ArchitectorPoint>(StringComparer.Ordinal);
             Pack(placements.Select(placement => ToBlock(placement.Cells, graph, gap, grid)).ToList(), nodes, gap, grid, positions);
@@ -171,19 +177,41 @@ namespace Architector.Editor
                 pair => pair.Key,
                 pair => new Rect(pair.Value.x, pair.Value.y, graph.Nodes[pair.Key].Width, graph.Nodes[pair.Key].Height),
                 StringComparer.Ordinal);
-            var routes = router.Route(rects, requests, false);
+            var network = merging == ArchitectorRelationshipMerging.Off ? null : router.RouteMerged(rects, requests, merging);
+            var routes = network == null ? router.Route(rects, requests, false) : network.Strokes.ToDictionary(stroke => stroke.Id, stroke => stroke.Points, StringComparer.Ordinal);
             var crossings = ArchitectorEdgeRouter.CrossingCounts(routes);
             busy = new Dictionary<string, int>(StringComparer.Ordinal);
             var cost = 0f;
-            foreach (var request in requests)
+            if (network == null)
             {
-                var route = routes[request.Id];
-                var count = crossings[request.Id];
-                cost += count * RouteCrossingCost * 0.5f + (route.Count - 2) * RouteBendCost;
-                for (var index = 1; index < route.Count; index++)
-                    cost += Mathf.Abs(route[index].x - route[index - 1].x) + Mathf.Abs(route[index].y - route[index - 1].y);
-                busy[request.SourceNodeId] = busy.GetValueOrDefault(request.SourceNodeId) + count;
-                busy[request.TargetNodeId] = busy.GetValueOrDefault(request.TargetNodeId) + count;
+                foreach (var request in requests)
+                {
+                    var route = routes[request.Id];
+                    var count = crossings[request.Id];
+                    cost += count * RouteCrossingCost * 0.5f + (route.Count - 2) * RouteBendCost;
+                    for (var index = 1; index < route.Count; index++)
+                        cost += Mathf.Abs(route[index].x - route[index - 1].x) + Mathf.Abs(route[index].y - route[index - 1].y);
+                    busy[request.SourceNodeId] = busy.GetValueOrDefault(request.SourceNodeId) + count;
+                    busy[request.TargetNodeId] = busy.GetValueOrDefault(request.TargetNodeId) + count;
+                }
+            }
+            else
+            {
+                var requestsById = requests.ToDictionary(request => request.Id, StringComparer.Ordinal);
+                foreach (var stroke in network.Strokes)
+                {
+                    var route = stroke.Points;
+                    var count = crossings[stroke.Id];
+                    cost += count * RouteCrossingCost * 0.5f + (route.Count - 2) * RouteBendCost;
+                    for (var index = 1; index < route.Count; index++)
+                        cost += Mathf.Abs(route[index].x - route[index - 1].x) + Mathf.Abs(route[index].y - route[index - 1].y);
+                    foreach (var id in stroke.EdgeIds)
+                    {
+                        var request = requestsById[id];
+                        busy[request.SourceNodeId] = busy.GetValueOrDefault(request.SourceNodeId) + count;
+                        busy[request.TargetNodeId] = busy.GetValueOrDefault(request.TargetNodeId) + count;
+                    }
+                }
             }
             return cost + Balance(placements) * gap;
         }

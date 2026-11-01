@@ -48,7 +48,7 @@ namespace Architector.Editor.Agents
         {
             titleContent = new GUIContent(Title);
             minSize = new Vector2(560f, 420f);
-            ArchitectorAgentPreferences.Changed += Repaint;
+            ArchitectorAgentPreferences.Changed += OnChanged;
             if (!ArchitectorSession.TryGet(out var session, out loadError))
                 return;
             repository = session.Repository;
@@ -61,7 +61,7 @@ namespace Architector.Editor.Agents
 
         private void OnDisable()
         {
-            ArchitectorAgentPreferences.Changed -= Repaint;
+            ArchitectorAgentPreferences.Changed -= OnChanged;
             if (repository != null)
                 repository.Changed -= OnChanged;
         }
@@ -71,6 +71,11 @@ namespace Architector.Editor.Agents
             probes.Clear();
             setupItems = null;
             Repaint();
+        }
+
+        private void OnFocus()
+        {
+            OnChanged();
         }
 
         private void Update()
@@ -87,8 +92,7 @@ namespace Architector.Editor.Agents
             {
                 packageError = packageRequest.Status == StatusCode.Failure ? packageRequest.Error?.message : null;
                 packageRequest = null;
-                probes.Clear();
-                Repaint();
+                OnChanged();
             }
         }
 
@@ -179,7 +183,7 @@ namespace Architector.Editor.Agents
             EditorGUILayout.LabelField("Mode", active ? "on" : "off");
 
             using (new EditorGUILayout.HorizontalScope())
-            using (new EditorGUI.DisabledScope(packageRequest != null))
+            using (new EditorGUI.DisabledScope(packageRequest != null || ArchitectorPackageUpdates.IsInstalling))
             {
                 if (installed)
                 {
@@ -189,12 +193,14 @@ namespace Architector.Editor.Agents
                     {
                         packageError = null;
                         packageRequest = Client.Remove(mode.PackageName);
+                        ArchitectorPackageUpdates.TrackPackageOperation(packageRequest);
                     }
                 }
                 else if (GUILayout.Button("Install Package", GUILayout.Height(24f)))
                 {
                     packageError = null;
                     packageRequest = Client.Add($"{mode.InstallUrl}#v{ArchitectorMcpInstaller.Version}");
+                    ArchitectorPackageUpdates.TrackPackageOperation(packageRequest);
                 }
             }
         }
@@ -203,7 +209,7 @@ namespace Architector.Editor.Agents
         {
             EditorGUILayout.LabelField("Bridge", ArchitectorAgentBridge.Port > 0 ? $"listening on port {ArchitectorAgentBridge.Port}" : "not running");
             EditorGUILayout.LabelField("Server", ArchitectorMcpInstaller.IsInstalled ? $"version {ArchitectorMcpInstaller.Version} installed" : "not installed");
-            using (new EditorGUI.DisabledScope(installing))
+            using (new EditorGUI.DisabledScope(installing || ArchitectorPackageUpdates.IsInstalling || packageRequest != null))
             {
                 var label = installing ? "Downloading..." : ArchitectorMcpInstaller.IsInstalled ? "Reinstall Server" : "Install Server";
                 if (GUILayout.Button(label, GUILayout.Height(26f)))
@@ -289,13 +295,14 @@ namespace Architector.Editor.Agents
             EditorGUILayout.LabelField("Connection", added ? "added to this project" : "not added");
 
             using (new EditorGUILayout.HorizontalScope())
-            using (new EditorGUI.DisabledScope(aiWork?.SettingsLocked == true || packageRequest != null))
+            using (new EditorGUI.DisabledScope(aiWork?.SettingsLocked == true || packageRequest != null || ArchitectorPackageUpdates.IsInstalling))
             {
                 if (!packageInstalled && !string.IsNullOrEmpty(descriptor.installUrl)
                     && GUILayout.Button("Install Package", GUILayout.Height(24f)))
                 {
                     packageError = null;
                     packageRequest = Client.Add(descriptor.installUrl);
+                    ArchitectorPackageUpdates.TrackPackageOperation(packageRequest);
                 }
                 if (GUILayout.Button(added ? "Remove Connection" : "Add Connection", GUILayout.Height(24f)))
                     SetAdded(descriptor, !added);
@@ -332,11 +339,13 @@ namespace Architector.Editor.Agents
             installError = null;
             ArchitectorMcpInstaller.Install(result =>
             {
+                if (!this)
+                    return;
                 installing = false;
                 installError = result;
                 foreach (var client in ArchitectorMcpClient.All)
                     RefreshClient(client);
-                Repaint();
+                OnChanged();
             });
         }
     }

@@ -6,18 +6,27 @@ namespace Architector.Editor.Mcp
 {
     [McpForUnityTool(
         "architector_edit",
-        Description = "Manage an AI work session, approval, or dry-run/apply canonical documents and compact semantic plans with revision checks and one Undo operation. Actions: begin_work, resume_work, end_work, approve_layers, revoke_approvals, revert_to_approved, dry_run, apply, dry_run_plan, apply_plan, validate_external, reload_external.",
+        Description = "Manage an AI work session, approval, layout, or dry-run/apply canonical documents and compact semantic plans with revision checks and one Undo operation. Actions: begin_work, resume_work, end_work, approve_layers, revoke_approvals, revert_to_approved, dry_run, apply, dry_run_plan, apply_plan, arrange_layer, validate_external, reload_external.",
         AutoRegister = true,
         Group = "core")]
     public static class ArchitectorMcpEditTool
     {
         public sealed class Parameters
         {
-            [ToolParameter("Edit action: begin_work, resume_work, end_work, approve_layers, revoke_approvals, dry_run, apply, dry_run_plan, apply_plan, validate_external, or reload_external.")]
+            [ToolParameter("Edit action: begin_work, resume_work, end_work, approve_layers, revoke_approvals, dry_run, apply, dry_run_plan, apply_plan, arrange_layer, validate_external, or reload_external.")]
             public string action { get; set; }
 
-            [ToolParameter("Expected repository revision. Required for apply and reload_external.", Required = false)]
+            [ToolParameter("Expected repository revision. Required for apply, arrange_layer and reload_external.", Required = false)]
             public int? expected_revision { get; set; }
+
+            [ToolParameter("Layer ID or Explorer path for arrange_layer.", Required = false)]
+            public string target { get; set; }
+
+            [ToolParameter("Node IDs to arrange; omit to arrange the whole layer.", Required = false)]
+            public string[] nodes { get; set; }
+
+            [ToolParameter("Node IDs to use as Arrange centers; omit to choose automatically.", Required = false)]
+            public string[] centers { get; set; }
 
             [ToolParameter("Undo/Redo action name for apply.", Required = false)]
             public string action_name { get; set; }

@@ -130,6 +130,7 @@ namespace Architector.Editor
         public bool includeFrameworkMembers;
         public bool hideRoutesWhileDragging = true;
         public bool routeInBackground = true;
+        public ArchitectorRelationshipMerging relationshipMerging;
     }
 
     [Serializable]

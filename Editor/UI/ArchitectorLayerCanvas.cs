@@ -6,7 +6,7 @@ using UnityEngine;
 
 namespace Architector.Editor
 {
-    public sealed class ArchitectorLayerCanvas
+    public sealed partial class ArchitectorLayerCanvas
     {
         private const float MinimumZoom = 0.4f;
         private const float MaximumZoom = 2f;
@@ -143,6 +143,12 @@ namespace Architector.Editor
             currentRepositoryRevision = repository.Revision;
             hideRoutesWhileDragging = repository.Settings.optimization.hideRoutesWhileDragging;
             routeInBackground = repository.Settings.optimization.routeInBackground;
+            var merging = repository.Settings.optimization.relationshipMerging;
+            if (relationshipMerging != merging)
+            {
+                relationshipMerging = merging;
+                edgeRouteCacheRevision = -1;
+            }
             repaintCanvas = requestRepaint;
             if (!hasCachedDocuments || cachedDocumentsRevision != currentRepositoryRevision)
             {
@@ -1086,6 +1092,11 @@ namespace Architector.Editor
         {
             EnsureEdgeRouteCache(documents);
             edgeViewRect = viewRect;
+            if (edgeNetwork != null)
+            {
+                DrawMergedEdges(documents, palette, viewRect);
+                return;
+            }
             var casing = palette.workspace.ToColor();
             var hasSelection = selectedNodeIds.Count > 0 || !string.IsNullOrEmpty(selectedEdgeId);
             Handles.BeginGUI();
@@ -1313,6 +1324,7 @@ namespace Architector.Editor
                 foreach (var point in pair.Value)
                     screenRoute.Add(WorldToScreen(point));
             }
+            CacheStrokeScreenRoutes();
             edgeRouteCacheZoom = zoom;
             edgeRouteCachePan = pan;
         }
@@ -1334,7 +1346,8 @@ namespace Architector.Editor
                     edge.sourceNodeId,
                     edge.targetNodeId,
                     edgeLayout?.preferredSourceSide,
-                    edgeLayout?.preferredTargetSide));
+                    edgeLayout?.preferredTargetSide,
+                    edge.kind));
             }
 
             if (!RoutesFollowDrag && routeInBackground && !routeJobFailed)
@@ -1344,6 +1357,18 @@ namespace Architector.Editor
             }
 
             CancelRouting();
+            if (relationshipMerging != ArchitectorRelationshipMerging.Off)
+            {
+                var network = RoutesFollowDrag && edgeBaseNetwork != null
+                    ? edgeRouter.RouteMovedMerged(rects, requests, dragStartWorldByNode.Keys, edgeBaseNetwork, dragPreviewDelta)
+                    : edgeRouter.RouteMerged(rects, requests, relationshipMerging);
+                if (!RoutesFollowDrag)
+                    edgeBaseNetwork = network;
+                SetRouteNetwork(network, network.Decorate(EdgeCornerRadius, EdgeBridgeRadius));
+                return;
+            }
+            edgeNetwork = null;
+            edgeBaseNetwork = null;
             Dictionary<string, List<Vector2>> routes;
             if (RoutesFollowDrag)
             {
@@ -1362,7 +1387,7 @@ namespace Architector.Editor
         private void StartRouteJob(Dictionary<string, Rect> rects, List<ArchitectorRouteRequest> requests)
         {
             routeJob?.Cancel();
-            routeJob = new ArchitectorRouteJob(rects, requests, EdgeCornerRadius, EdgeBridgeRadius);
+            routeJob = new ArchitectorRouteJob(rects, requests, EdgeCornerRadius, EdgeBridgeRadius, relationshipMerging);
             if (watchingRouteJob)
                 return;
             watchingRouteJob = true;
@@ -1401,6 +1426,13 @@ namespace Architector.Editor
             if (!job.Succeeded || RoutesFollowDrag)
                 return false;
             edgeBaseRoutes = job.Routes;
+            edgeBaseNetwork = job.Network;
+            if (job.Network != null)
+            {
+                SetRouteNetwork(job.Network, job.DrawnRoutes);
+                return true;
+            }
+            edgeNetwork = null;
             edgeWorldRoutes = job.DrawnRoutes;
             edgeRouteCache.Clear();
             return true;
@@ -1415,6 +1447,7 @@ namespace Architector.Editor
 
         private string HitTestEdge(Vector2 mouse, ArchitectorLayerDocuments documents)
         {
+            EnsureEdgeRouteCache(documents);
             var hits = new List<(string edgeId, float distance)>();
             for (var edgeIndex = documents.semantic.edges.Count - 1; edgeIndex >= 0; edgeIndex--)
             {
@@ -1423,8 +1456,11 @@ namespace Architector.Editor
                     continue;
                 var route = GetEdgeRoute(edge, documents);
                 var bestDistance = float.MaxValue;
-                for (var index = 1; index < route.Count; index++)
-                    bestDistance = Mathf.Min(bestDistance, DistanceToSegment(mouse, route[index - 1], route[index]));
+                if (edgeNetwork != null)
+                    bestDistance = MergedHitDistance(edge.id, mouse);
+                else
+                    for (var index = 1; index < route.Count; index++)
+                        bestDistance = Mathf.Min(bestDistance, DistanceToSegment(mouse, route[index - 1], route[index]));
                 if (bestDistance <= 6f)
                     hits.Add((edge.id, bestDistance));
             }
@@ -1950,6 +1986,9 @@ namespace Architector.Editor
             selectionVisibilitySawLayout = false;
             edgeRouteCache.Clear();
             edgeWorldRoutes.Clear();
+            edgeNetwork = null;
+            edgeBaseNetwork = null;
+            edgeStrokeCache.Clear();
             edgeRouteCacheRevision = -1;
             hasCachedDocuments = false;
             cachedDocumentsRevision = -1;

@@ -16,6 +16,11 @@ namespace Architector.Editor
         private static GUIStyle contentStyle;
 
         public ArchitectorFoldoutBox(string title, ref bool expanded)
+            : this(new GUIContent(title), ref expanded)
+        {
+        }
+
+        public ArchitectorFoldoutBox(GUIContent title, ref bool expanded)
         {
             EnsureStyles();
             var rect = GUILayoutUtility.GetRect(0f, HeaderHeight, GUILayout.ExpandWidth(true));

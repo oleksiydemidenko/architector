@@ -766,7 +766,7 @@ namespace Architector.Editor
             if (nodes.Length == 0)
                 return;
             var edges = view.semantic.edges
-                .Select(edge => new ArchitectorArrangeEdge(edge.sourceNodeId, edge.targetNodeId))
+                .Select(edge => new ArchitectorArrangeEdge(edge.sourceNodeId, edge.targetNodeId, edge.kind))
                 .ToArray();
             var positions = ArchitectorGraphArranger.Arrange(
                 nodes,
@@ -774,7 +774,8 @@ namespace Architector.Editor
                 Settings.geometry.minimumNodeGap,
                 Settings.geometry.snapToGrid ? Settings.geometry.gridSize : 1f,
                 Settings.arrange.maxGroupRelationships,
-                centers);
+                centers,
+                Settings.optimization.relationshipMerging);
             MoveNodes(layerId, positions, "Arrange Nodes");
         }
 
