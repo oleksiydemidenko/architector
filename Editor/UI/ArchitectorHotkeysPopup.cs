@@ -36,8 +36,8 @@ namespace Architector.Editor
             }),
             ("Review", new[]
             {
-                ("Drag", "Mark every row under the pointer"),
-                ("Ctrl+click", "Toggle one row"),
+                ("Click", "Toggle one row"),
+                ("Drag", "Toggle every row under the pointer"),
                 ("Shift+click", "Mark a range"),
                 ("Ctrl+A", "Select all"),
                 ("Esc", "Clear")

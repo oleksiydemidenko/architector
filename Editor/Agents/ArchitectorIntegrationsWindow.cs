@@ -12,6 +12,7 @@ namespace Architector.Editor.Agents
     public sealed class ArchitectorIntegrationsWindow : EditorWindow
     {
         private const string Title = "Architector Integrations";
+        private const string ExpandedKey = "Architector.Integrations.Expanded.";
 
         private ArchitectorRepository repository;
         private ArchitectorAiWorkCoordinator aiWork;
@@ -20,12 +21,10 @@ namespace Architector.Editor.Agents
         private bool installing;
         private string installError;
         private bool manualSetupExpanded;
-        private bool setupExpanded = true;
         private IReadOnlyList<ArchitectorSetupItem> setupItems;
         private ArchitectorTypeIndex typeIndex;
         private Request packageRequest;
         private string packageError;
-        private readonly Dictionary<string, bool> expanded = new(StringComparer.Ordinal);
         private readonly Dictionary<string, ArchitectorAgentIntegrationProbeResult> probes = new(StringComparer.Ordinal);
         private readonly Dictionary<ArchitectorMcpClient, ArchitectorMcpClientState> clientStates = new();
         private readonly Dictionary<ArchitectorMcpClient, Task<ArchitectorMcpClientState>> clientTasks = new();
@@ -115,7 +114,7 @@ namespace Architector.Editor.Agents
                 DrawSetupCheck();
                 foreach (var descriptor in ArchitectorAgentIntegrationRegistry.Descriptors)
                 {
-                    var open = !expanded.TryGetValue(descriptor.id, out var known) || known;
+                    var open = SessionState.GetBool(ExpandedKey + descriptor.id, false);
                     using (var box = new ArchitectorFoldoutBox(descriptor.displayName, ref open))
                     {
                         if (box.Expanded)
@@ -126,7 +125,7 @@ namespace Architector.Editor.Agents
                                 DrawBridge(descriptor);
                         }
                     }
-                    expanded[descriptor.id] = open;
+                    SessionState.SetBool(ExpandedKey + descriptor.id, open);
                     if (descriptor.builtIn)
                         DrawOptionalModes();
                 }
@@ -136,7 +135,9 @@ namespace Architector.Editor.Agents
 
         private void DrawSetupCheck()
         {
+            var setupExpanded = SessionState.GetBool(ExpandedKey + "setup", true);
             using var box = new ArchitectorFoldoutBox("Setup Check", ref setupExpanded);
+            SessionState.SetBool(ExpandedKey + "setup", setupExpanded);
             if (!box.Expanded)
                 return;
             setupItems ??= ArchitectorSetupCheck.Run(repository, typeIndex);
@@ -157,13 +158,13 @@ namespace Architector.Editor.Agents
         {
             foreach (var mode in ArchitectorAgentWorkflowModes.Optional)
             {
-                var open = !expanded.TryGetValue(mode.Id, out var known) || known;
+                var open = SessionState.GetBool(ExpandedKey + mode.Id, false);
                 using (var box = new ArchitectorFoldoutBox($"{mode.DisplayName} Mode", ref open))
                 {
                     if (box.Expanded)
                         DrawOptionalMode(mode);
                 }
-                expanded[mode.Id] = open;
+                SessionState.SetBool(ExpandedKey + mode.Id, open);
             }
         }
 

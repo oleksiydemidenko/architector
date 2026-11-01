@@ -28,7 +28,7 @@ namespace Architector.Editor
         private int errorsGeneration = -1;
         private string anchorLayerId = string.Empty;
         private int dragRow = -1;
-        private bool dragValue;
+        private readonly HashSet<string> strokeRows = new(StringComparer.Ordinal);
         private readonly Dictionary<string, int> errorCounts = new(StringComparer.Ordinal);
         private readonly HashSet<string> selected = new(StringComparer.Ordinal);
         private readonly List<string> rows = new();
@@ -194,27 +194,19 @@ namespace Architector.Editor
                     var row = RowAt(current.mousePosition);
                     if (row < 0)
                         return;
-                    var overCheckbox = current.mousePosition.x < rowRects[row].x + CheckboxWidth;
+                    strokeRows.Clear();
                     var anchor = rows.IndexOf(anchorLayerId);
                     if (current.shift && anchor >= 0)
                     {
-                        if (!current.control && !current.command)
-                            selected.Clear();
-                        dragValue = true;
-                        SetRange(anchor, row, true);
+                        for (var index = Mathf.Min(anchor, row); index <= Mathf.Max(anchor, row); index++)
+                        {
+                            selected.Add(rows[index]);
+                            strokeRows.Add(rows[index]);
+                        }
                     }
                     else
                     {
-                        if (current.control || current.command || overCheckbox)
-                        {
-                            dragValue = !selected.Contains(rows[row]);
-                        }
-                        else
-                        {
-                            selected.Clear();
-                            dragValue = true;
-                        }
-                        SetRange(row, row, dragValue);
+                        ToggleRange(row, row);
                         anchorLayerId = rows[row];
                     }
                     dragRow = row;
@@ -233,7 +225,7 @@ namespace Architector.Editor
                     var row = NearestRow(current.mousePosition.y);
                     if (row >= 0 && row != dragRow)
                     {
-                        SetRange(dragRow, row, dragValue);
+                        ToggleRange(dragRow, row);
                         dragRow = row;
                     }
                     current.Use();
@@ -259,14 +251,14 @@ namespace Architector.Editor
             return row >= 0 ? row : rowRects.Count - 1;
         }
 
-        private void SetRange(int from, int to, bool value)
+        private void ToggleRange(int from, int to)
         {
             for (var index = Mathf.Min(from, to); index <= Mathf.Max(from, to); index++)
             {
-                if (value)
+                if (!strokeRows.Add(rows[index]))
+                    continue;
+                if (!selected.Remove(rows[index]))
                     selected.Add(rows[index]);
-                else
-                    selected.Remove(rows[index]);
             }
         }
 
