@@ -6,6 +6,19 @@ Architector owns the canonical repository, validation, approval workflow, and th
 
 Return one `ArchitectorAgentIntegrationDescriptor` from your probe with a stable lowercase ID, display name, Unity package name, and setup/documentation URL. The registry discovers it, so no core file changes. The stable ID is persisted only for the Enabled/Disabled preference.
 
+Descriptors have `tags`, defaulting to `MCP`. The first tag determines catalog ordering; additional tags are searchable labels. Keep transport integration probes separate from extension UI: a catalog entry does not grant an agent API access.
+
+## Add an extension to the catalog
+
+Packages that need their own integration controls can reference `Architector.Agents.Editor` and call `Architector.Editor.Agents.ArchitectorIntegrationCatalog.Register` during Editor initialization:
+
+```csharp
+ArchitectorIntegrationCatalog.Register(new ArchitectorIntegrationEntry(
+    "example-checks", "Example Checks", new[] { "Extension", "Checks" }, DrawChecks));
+```
+
+The callback draws only that entry's expanded details with Unity Editor GUI. Use a stable, unique ID and at least one tag. Duplicate IDs, including transport/workflow IDs, are rejected. `Unregister(id)` removes a dynamic entry. Registration raises `Changed`, so open windows refresh automatically; registered entries join the same search, tag filters and pagination. Browsing an entry must not install packages, activate a workflow, start a server or change client connections. Those actions belong to explicit controls in its details. Existing MCP transports continue to use their probes, and optional workflow modes continue to use their own mode registration.
+
 ## 2. Isolate package references
 
 Put all compile-time references to the external package in a dedicated assembly definition. Use an asmdef Version Define and matching Define Constraint so the adapter assembly is omitted when the package is absent or too old. Core, persistence, and UI assemblies must never reference package APIs.

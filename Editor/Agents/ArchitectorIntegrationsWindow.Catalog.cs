@@ -1,0 +1,137 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using UnityEditor;
+using UnityEngine;
+
+namespace Architector.Editor.Agents
+{
+    public sealed partial class ArchitectorIntegrationsWindow
+    {
+        private const int IntegrationsPerPage = 6;
+        [SerializeField] private string integrationSearch = string.Empty;
+        [SerializeField] private string integrationTag = string.Empty;
+        [SerializeField] private int integrationPage;
+        private List<ArchitectorIntegrationEntry> catalog;
+        private IReadOnlyList<ArchitectorIntegrationEntry> filteredIntegrations;
+        private string[] integrationTags;
+
+        private void EnsureCatalog()
+        {
+            if (catalog != null)
+                return;
+            catalog = new List<ArchitectorIntegrationEntry>();
+            foreach (var mode in ArchitectorAgentWorkflowModes.Optional)
+                catalog.Add(new ArchitectorIntegrationEntry(mode.Id, mode.DisplayName + " Mode", new[] { "Extension" }, () => DrawOptionalMode(mode)));
+            foreach (var descriptor in ArchitectorAgentIntegrationRegistry.Descriptors)
+                catalog.Add(new ArchitectorIntegrationEntry(descriptor.id, descriptor.displayName, descriptor.tags,
+                    () => { if (descriptor.builtIn) DrawServer(); else DrawBridge(descriptor); }, descriptor.builtIn ? 0 : 10));
+            catalog.AddRange(ArchitectorIntegrationCatalog.Entries);
+            integrationTags = catalog.SelectMany(entry => entry.Tags).Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(tag => tag, StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+
+        private void DrawIntegrationList()
+        {
+            EnsureCatalog();
+            DrawIntegrationTags();
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUI.BeginChangeCheck();
+                integrationSearch = EditorGUILayout.TextField(new GUIContent("Search", "Search names or tags, e.g. Lazy, MCP or tag:Extension."),
+                    integrationSearch, EditorStyles.toolbarSearchField);
+                if (EditorGUI.EndChangeCheck())
+                    ResetIntegrationSearch();
+                using (new EditorGUI.DisabledScope(string.IsNullOrEmpty(integrationSearch)))
+                    if (GUILayout.Button(new GUIContent("×", "Clear search"), EditorStyles.miniButton, GUILayout.Width(24f)))
+                    {
+                        integrationSearch = string.Empty;
+                        GUI.FocusControl(null);
+                        ResetIntegrationSearch();
+                    }
+            }
+
+            filteredIntegrations ??= ArchitectorIntegrationCatalog.Filter(catalog, integrationSearch, integrationTag);
+            DrawIntegrationPager();
+            scroll = EditorGUILayout.BeginScrollView(scroll);
+            if (filteredIntegrations.Count == 0)
+                EditorGUILayout.HelpBox("No integrations match this search.", MessageType.Info);
+            foreach (var entry in filteredIntegrations.Skip(integrationPage * IntegrationsPerPage).Take(IntegrationsPerPage))
+            {
+                var expanded = SessionState.GetBool(ExpandedKey + entry.Id, false);
+                using (var box = new ArchitectorFoldoutBox(entry.DisplayName + "   ·   " + string.Join(", ", entry.Tags), ref expanded))
+                {
+                    if (box.Expanded)
+                        entry.DrawDetails();
+                }
+                SessionState.SetBool(ExpandedKey + entry.Id, expanded);
+            }
+            EditorGUILayout.EndScrollView();
+        }
+
+        private void DrawIntegrationTags()
+        {
+            var usedWidth = 0f;
+            EditorGUILayout.BeginHorizontal();
+            foreach (var tag in new[] { string.Empty }.Concat(integrationTags))
+            {
+                var label = string.IsNullOrEmpty(tag) ? "All" : tag;
+                var width = EditorStyles.miniButton.CalcSize(new GUIContent(label)).x + 12f;
+                if (usedWidth > 0f && usedWidth + width > position.width - 32f)
+                {
+                    GUILayout.FlexibleSpace();
+                    EditorGUILayout.EndHorizontal();
+                    EditorGUILayout.BeginHorizontal();
+                    usedWidth = 0f;
+                }
+                var selected = string.Equals(integrationTag, tag, StringComparison.OrdinalIgnoreCase);
+                if (GUILayout.Toggle(selected, label, EditorStyles.miniButton, GUILayout.Width(width)) && !selected)
+                {
+                    integrationTag = tag;
+                    ResetIntegrationSearch();
+                }
+                usedWidth += width + 4f;
+            }
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawIntegrationPager()
+        {
+            var pageCount = Math.Max(1, (filteredIntegrations.Count + IntegrationsPerPage - 1) / IntegrationsPerPage);
+            integrationPage = Mathf.Clamp(integrationPage, 0, pageCount - 1);
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.LabelField($"Integrations ({filteredIntegrations.Count})", EditorStyles.boldLabel);
+                if (pageCount <= 1)
+                    return;
+                using (new EditorGUI.DisabledScope(integrationPage == 0))
+                    if (GUILayout.Button("‹", EditorStyles.miniButtonLeft, GUILayout.Width(24f)))
+                        ChangeIntegrationPage(integrationPage - 1);
+                GUILayout.Label($"{integrationPage + 1} / {pageCount}", EditorStyles.centeredGreyMiniLabel, GUILayout.Width(54f));
+                using (new EditorGUI.DisabledScope(integrationPage >= pageCount - 1))
+                    if (GUILayout.Button("›", EditorStyles.miniButtonRight, GUILayout.Width(24f)))
+                        ChangeIntegrationPage(integrationPage + 1);
+            }
+            if (Event.current.type == EventType.KeyDown && !EditorGUIUtility.editingTextField
+                && (Event.current.keyCode == KeyCode.PageDown || Event.current.keyCode == KeyCode.PageUp))
+            {
+                ChangeIntegrationPage(Mathf.Clamp(integrationPage + (Event.current.keyCode == KeyCode.PageDown ? 1 : -1), 0, pageCount - 1));
+                Event.current.Use();
+            }
+        }
+
+        private void ChangeIntegrationPage(int page)
+        {
+            integrationPage = page;
+            scroll = Vector2.zero;
+            Repaint();
+        }
+
+        private void ResetIntegrationSearch()
+        {
+            filteredIntegrations = null;
+            ChangeIntegrationPage(0);
+        }
+    }
+}

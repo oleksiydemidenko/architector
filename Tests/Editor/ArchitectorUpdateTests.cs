@@ -115,6 +115,36 @@ namespace Architector.Editor.Tests
             Assert.That(ArchitectorPackageUpdates.InstallBlocker(work), Does.Contain("active agent work session"));
         }
 
+        [TestCase("v0.2.4", "0.2.4", "0.2.4", true, true)]
+        [TestCase("v0.2.4", "0.2.4", null, true, true)]
+        [TestCase("v0.2.4", "0.2.4", "0.2.3", true, false)]
+        [TestCase("v0.2.4", "0.2.4", "0.2.4", false, false)]
+        [TestCase("v0.2.5", "0.2.4", "0.2.4", true, false)]
+        [TestCase("v0.2.4", "0.2.4-preview.1", null, true, false)]
+        [TestCase(null, "0.2.4", "0.2.4", true, false)]
+        [TestCase("v0.2.4", "invalid", null, true, false)]
+        public void CurrentStatusRequiresVerifiedVersionsAndTheMatchingServer(string latest, string installed, string lazy, bool server, bool expected)
+        {
+            var result = new ArchitectorUpdateState { latestTag = latest, checkedUtc = DateTime.UtcNow.ToString("O") };
+            Assert.That(ArchitectorPackageUpdates.InstallationCurrent(result, installed, lazy, server), Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void UncheckedFailedOrPendingChecksNeverClaimTheInstallationIsCurrent()
+        {
+            var result = new ArchitectorUpdateState { latestTag = "v0.2.4" };
+            Assert.That(ArchitectorPackageUpdates.InstallationCurrent(result, "0.2.4", null, true), Is.False);
+            result.checkedUtc = DateTime.UtcNow.ToString("O");
+            result.error = "HTTP 403";
+            Assert.That(ArchitectorPackageUpdates.InstallationCurrent(result, "0.2.4", null, true), Is.False);
+            result.error = null;
+            result.pendingVersion = "0.2.4";
+            Assert.That(ArchitectorPackageUpdates.InstallationCurrent(result, "0.2.4", null, true), Is.False);
+            result.pendingVersion = null;
+            result.availableTag = "v0.2.5";
+            Assert.That(ArchitectorPackageUpdates.InstallationCurrent(result, "0.2.4", null, true), Is.False);
+        }
+
         [Test]
         public void PackageRegistrationCompletesUpdatesWithoutAnAssemblyReload()
         {

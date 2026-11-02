@@ -20,7 +20,7 @@ namespace Architector.Editor
         {
         }
 
-        public ArchitectorFoldoutBox(GUIContent title, ref bool expanded)
+        public ArchitectorFoldoutBox(GUIContent title, ref bool expanded, Texture trailingIcon = null)
         {
             EnsureStyles();
             var rect = GUILayoutUtility.GetRect(0f, HeaderHeight, GUILayout.ExpandWidth(true));
@@ -33,6 +33,11 @@ namespace Architector.Editor
             var previousIndent = EditorGUI.indentLevel;
             EditorGUI.indentLevel = 0;
             expanded = EditorGUI.Foldout(foldoutRect, expanded, title, true, headerStyle);
+            if (trailingIcon != null)
+            {
+                var iconX = foldoutRect.x + headerStyle.CalcSize(title).x + 4f;
+                GUI.DrawTexture(new Rect(Mathf.Min(iconX, rect.xMax - 22f), rect.y + 5f, 16f, 16f), trailingIcon, ScaleMode.ScaleToFit);
+            }
             EditorGUI.indentLevel = previousIndent;
             if (Event.current.type == EventType.MouseDown && Event.current.button == 0 && rect.Contains(Event.current.mousePosition))
             {

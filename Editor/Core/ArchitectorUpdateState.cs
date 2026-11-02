@@ -10,6 +10,7 @@ namespace Architector.Editor
         public string serverAsset;
         public bool includePrereleases;
         public string checkedUtc;
+        public string latestTag;
         public string availableTag;
         public string releaseNotes;
         public string notice;

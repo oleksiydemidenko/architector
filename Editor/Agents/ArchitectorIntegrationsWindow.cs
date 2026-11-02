@@ -9,7 +9,7 @@ using UnityEngine;
 
 namespace Architector.Editor.Agents
 {
-    public sealed class ArchitectorIntegrationsWindow : EditorWindow
+    public sealed partial class ArchitectorIntegrationsWindow : EditorWindow
     {
         private const string Title = "Architector Integrations";
         private const string ExpandedKey = "Architector.Integrations.Expanded.";
@@ -50,6 +50,7 @@ namespace Architector.Editor.Agents
             minSize = new Vector2(560f, 420f);
             ArchitectorAgentPreferences.Changed += OnChanged;
             ArchitectorPackageUpdates.Changed += OnChanged;
+            ArchitectorIntegrationCatalog.Changed += OnChanged;
             if (!ArchitectorSession.TryGet(out var session, out loadError))
                 return;
             repository = session.Repository;
@@ -64,6 +65,7 @@ namespace Architector.Editor.Agents
         {
             ArchitectorAgentPreferences.Changed -= OnChanged;
             ArchitectorPackageUpdates.Changed -= OnChanged;
+            ArchitectorIntegrationCatalog.Changed -= OnChanged;
             if (repository != null)
                 repository.Changed -= OnChanged;
         }
@@ -72,6 +74,8 @@ namespace Architector.Editor.Agents
         {
             probes.Clear();
             setupItems = null;
+            catalog = null;
+            filteredIntegrations = null;
             Repaint();
         }
 
@@ -108,35 +112,15 @@ namespace Architector.Editor.Agents
                 return;
             }
 
-            scroll = EditorGUILayout.BeginScrollView(scroll);
             using (new EditorGUILayout.VerticalScope(ArchitectorFoldoutBox.ContentStyle))
             {
-                EditorGUILayout.LabelField("Choose how agents reach Architector. The Architector server comes with the package; the others are optional bridges.", EditorStyles.wordWrappedLabel);
+                DrawSetupCheck();
                 if (packageRequest != null)
                     EditorGUILayout.HelpBox("Unity is updating the package.", MessageType.Info);
                 if (!string.IsNullOrEmpty(packageError))
                     EditorGUILayout.HelpBox(packageError, MessageType.Error);
-                EditorGUILayout.Space(6f);
-                DrawSetupCheck();
-                foreach (var descriptor in ArchitectorAgentIntegrationRegistry.Descriptors)
-                {
-                    var open = SessionState.GetBool(ExpandedKey + descriptor.id, false);
-                    using (var box = new ArchitectorFoldoutBox(descriptor.displayName, ref open))
-                    {
-                        if (box.Expanded)
-                        {
-                            if (descriptor.builtIn)
-                                DrawServer();
-                            else
-                                DrawBridge(descriptor);
-                        }
-                    }
-                    SessionState.SetBool(ExpandedKey + descriptor.id, open);
-                    if (descriptor.builtIn)
-                        DrawOptionalModes();
-                }
+                DrawIntegrationList();
             }
-            EditorGUILayout.EndScrollView();
         }
 
         private void DrawSetupCheck()
@@ -158,20 +142,6 @@ namespace Architector.Editor.Agents
             }
             if (GUILayout.Button("Check Again", EditorStyles.miniButton, GUILayout.Width(100f)))
                 setupItems = null;
-        }
-
-        private void DrawOptionalModes()
-        {
-            foreach (var mode in ArchitectorAgentWorkflowModes.Optional)
-            {
-                var open = SessionState.GetBool(ExpandedKey + mode.Id, false);
-                using (var box = new ArchitectorFoldoutBox($"{mode.DisplayName} Mode", ref open))
-                {
-                    if (box.Expanded)
-                        DrawOptionalMode(mode);
-                }
-                SessionState.SetBool(ExpandedKey + mode.Id, open);
-            }
         }
 
         private void DrawOptionalMode(ArchitectorOptionalWorkflowMode mode)

@@ -19,6 +19,7 @@ namespace Architector.Editor
 
         public static bool IsInstallingServer { get; private set; }
         public static bool IsReloading { get; private set; }
+        public static event Action ServerInstallationChanged;
 
         static ArchitectorReleaseAssets()
         {
@@ -86,6 +87,8 @@ namespace Architector.Editor
             {
                 IsInstallingServer = false;
                 File.Delete(partial);
+                if (!IsReloading)
+                    ServerInstallationChanged?.Invoke();
             }
         }
 

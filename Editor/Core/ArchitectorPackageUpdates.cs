@@ -25,10 +25,13 @@ namespace Architector.Editor
         private static AddAndRemoveRequest installRequest;
         private static Request integrationRequest;
         private static bool verifying;
+        private static bool matchingServerInstalled;
+        private static string installedLazyVersion;
 
         static ArchitectorPackageUpdates()
         {
             Events.registeredPackages += OnPackagesRegistered;
+            ArchitectorReleaseAssets.ServerInstallationChanged += RefreshInstallation;
         }
 
         public static event Action Changed;
@@ -38,12 +41,21 @@ namespace Architector.Editor
         public static bool IsInstalling => verifying || installRequest != null;
         public static bool IsBusy => IsChecking || IsInstalling || ArchitectorReleaseAssets.IsInstallingServer || integrationRequest is { IsCompleted: false };
         public static bool UpdateAvailable => !string.IsNullOrEmpty(State.availableTag) && SourceWarning.Length == 0;
+        public static bool IsCurrent => !IsBusy && SourceWarning.Length == 0
+            && InstallationCurrent(State, ArchitectorPackagePaths.Version, installedLazyVersion, matchingServerInstalled);
         public static string ReleaseUrl => "https://github.com/oleksiydemidenko/architector/releases/tag/" + Uri.EscapeDataString(State.availableTag ?? string.Empty);
         private static string CacheKey => PreferenceKey + Application.dataPath;
 
         public static void TrackPackageOperation(Request request)
         {
             integrationRequest = request;
+        }
+
+        public static void RefreshInstallation()
+        {
+            installedLazyVersion = PackageInfo.GetAllRegisteredPackages().FirstOrDefault(package => package.name == LazyModeName)?.version;
+            matchingServerInstalled = File.Exists(ArchitectorPackagePaths.ServerBinaryPath);
+            Changed?.Invoke();
         }
 
         public static bool AutomaticChecks
@@ -116,7 +128,7 @@ namespace Architector.Editor
                 {
                     var name = (string)tag["name"];
                     if (name != null && name.StartsWith("v", StringComparison.Ordinal)
-                        && ArchitectorUpdateVersion.TryParse(name, out var version) && version.CompareTo(installed) > 0)
+                        && ArchitectorUpdateVersion.TryParse(name, out var version))
                         tags.Add((name, version));
                 }
                 var unavailable = 0;
@@ -127,18 +139,24 @@ namespace Architector.Editor
                         continue;
                     if (!ReleaseReady(release, ArchitectorReleaseAssets.ServerFileName, IncludePrereleases))
                     {
-                        unavailable++;
+                        if (candidate.Version.CompareTo(installed) > 0)
+                            unavailable++;
                         continue;
                     }
                     if (!await ValidateVersion(candidate.Tag))
                     {
-                        unavailable++;
+                        if (candidate.Version.CompareTo(installed) > 0)
+                            unavailable++;
                         continue;
                     }
-                    state.availableTag = candidate.Tag;
-                    state.releaseNotes = ChangelogBetween(
-                        await ArchitectorReleaseAssets.GetText(RawUrl(candidate.Tag, "CHANGELOG.md")),
-                        ArchitectorPackagePaths.Version, candidate.Tag);
+                    state.latestTag = candidate.Tag;
+                    if (candidate.Version.CompareTo(installed) > 0)
+                    {
+                        state.availableTag = candidate.Tag;
+                        state.releaseNotes = ChangelogBetween(
+                            await ArchitectorReleaseAssets.GetText(RawUrl(candidate.Tag, "CHANGELOG.md")),
+                            ArchitectorPackagePaths.Version, candidate.Tag);
+                    }
                     break;
                 }
                 state.notice = unavailable > 0
@@ -148,6 +166,7 @@ namespace Architector.Editor
             catch (Exception exception)
             {
                 state.availableTag = null;
+                state.latestTag = null;
                 state.error = "Could not check for updates: " + exception.Message;
             }
             finally
@@ -157,7 +176,7 @@ namespace Architector.Editor
                 {
                     state.checkedUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture);
                     Save();
-                    Changed?.Invoke();
+                    RefreshInstallation();
                 }
             }
         }
@@ -227,6 +246,15 @@ namespace Architector.Editor
             var assets = release["assets"] as JArray;
             return assets != null && new[] { serverFile, "checksums.txt" }
                 .All(name => assets.Any(asset => (string)asset["name"] == name && (string)asset["state"] == "uploaded"));
+        }
+
+        public static bool InstallationCurrent(ArchitectorUpdateState result, string installed, string lazyVersion, bool serverInstalled)
+        {
+            return result != null && !string.IsNullOrEmpty(result.checkedUtc) && string.IsNullOrEmpty(result.error)
+                && string.IsNullOrEmpty(result.availableTag) && string.IsNullOrEmpty(result.pendingVersion)
+                && ArchitectorUpdateVersion.TryParse(result.latestTag, out var latest)
+                && ArchitectorUpdateVersion.TryParse(installed, out var current) && current.CompareTo(latest) >= 0
+                && (lazyVersion == null || lazyVersion == installed) && serverInstalled;
         }
 
         public static string ChangelogBetween(string text, string installed, string target)
@@ -316,6 +344,8 @@ namespace Architector.Editor
                 return current;
             if (!string.IsNullOrEmpty(saved.pendingVersion) && saved.pendingVersion == current.installedVersion)
             {
+                current.latestTag = saved.latestTag ?? "v" + current.installedVersion;
+                current.checkedUtc = saved.checkedUtc;
                 var lazy = PackageInfo.GetAllRegisteredPackages().FirstOrDefault(package => package.name == LazyModeName);
                 current.notice = lazy != null && lazy.version != current.installedVersion
                     ? "Architector was updated, but Lazy Mode has a different version. Check Package Manager."
@@ -324,7 +354,8 @@ namespace Architector.Editor
                 return current;
             }
             return saved.installedVersion == current.installedVersion && saved.unityVersion == current.unityVersion
-                && saved.serverAsset == current.serverAsset && saved.includePrereleases == current.includePrereleases ? saved : current;
+                && saved.serverAsset == current.serverAsset && saved.includePrereleases == current.includePrereleases
+                && (string.IsNullOrEmpty(saved.checkedUtc) || !string.IsNullOrEmpty(saved.latestTag) || !string.IsNullOrEmpty(saved.error)) ? saved : current;
         }
 
         private static void Save() => EditorPrefs.SetString(CacheKey, JsonUtility.ToJson(State));
@@ -338,7 +369,7 @@ namespace Architector.Editor
         private static void RefreshPackages()
         {
             state = Restore();
-            Changed?.Invoke();
+            RefreshInstallation();
         }
 
         private static void PollInstall()

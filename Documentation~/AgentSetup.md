@@ -37,11 +37,17 @@ Another MCP server needs a small adapter: see [Adding an Agent Integration](Addi
 
 Open **Window > Architector > Settings > Update**. It checks when Settings opens, at most once a day if **Check Automatically** is on. **Check for Updates** checks immediately. **Include Prereleases** is on by default while Architector is in development. A ready update opens the foldout and marks it with a warning icon; you can collapse it again.
 
-The section shows the installed and available versions and the changelog entries between them. It offers a release only after its server and checksum files are published for your system and its Unity requirements are satisfied. **Update** updates Architector and an already installed Lazy Mode package together, then Unity recompiles. Finish text edits and end agent work before updating. Play Mode, compilation, unsaved Editor windows and other installations block the operation.
+The section shows the installed version and the latest compatible published version under **Available**, including when both are the same. A green check after the Update header means the release check succeeded, the packages are current and the matching MCP server is installed. An optional Lazy Mode package must match Architector when installed. An unchecked or failed check does not show the green check.
+
+It offers an update only after its server and checksum files are published for your system and its Unity requirements are satisfied. **Update** updates Architector and an already installed Lazy Mode package together; Unity reloads assemblies when scripts change. Finish text edits and end agent work before updating. Play Mode, compilation, unsaved Editor windows and other installations block the operation.
 
 Install the matching server and reconnect clients in **Integrations** afterward. Server downloads are checked against the release's SHA-256 checksum before installation. None of these installations or client changes happen automatically. Commit `Packages/manifest.json` and `Packages/packages-lock.json` to share the package version with the team. Agent Checks is a separate package and is not changed by this updater.
 
 A `file:` or embedded installation is shown as a local clone, with no update offer. Update that clone with Git; its path is local to that machine. Update preferences and cached results are local Editor preferences and never modify the architecture or approval state.
+
+## Integration Catalog
+
+**Integrations** keeps Setup Check at the top and lists extensions and MCP transports below it. Lazy Mode comes before the Architector server. Entries expand to show their existing installation, activation and connection controls. Search names or tags, combine terms such as `MCP Coplay`, or use `tag:Extension` and `#MCP`. The tag buttons combine with text search. Lists longer than six entries have page controls and support PageUp/PageDown when you are not editing text. Searching resets to the first page and preserves each entry's expanded state.
 
 ## 2. Tell The Agent
 

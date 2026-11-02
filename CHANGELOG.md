@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Update shows the latest compatible release under Available even when it is already installed. A green check after the header confirms a successful check, current packages and the matching installed MCP server.
+- Integrations keeps Setup Check above a searchable catalog with tag buttons, name/tag queries and paging. Lazy Mode appears before the Architector MCP server.
+- Extensions can register catalog entries with stable IDs, tags and detail controls without changing the Integrations window. MCP probes use the same catalog and can declare extra tags.
+
 ## 0.2.4
 
 - Package version labels and update completion refresh after Package Manager registers a change, even when Unity skips assembly reload because no scripts changed.

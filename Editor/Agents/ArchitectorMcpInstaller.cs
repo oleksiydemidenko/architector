@@ -56,11 +56,9 @@ namespace Architector.Editor.Agents
 
         public static string Version => ArchitectorPackagePaths.Version;
         public static string ProjectRoot => Path.GetDirectoryName(Application.dataPath);
-        public static string BinaryPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".architector", "mcp", Version, FileName);
+        public static string BinaryPath => ArchitectorPackagePaths.ServerBinaryPath;
         public static bool IsInstalled => File.Exists(BinaryPath);
         public static string DownloadUrl => ArchitectorReleaseAssets.Url("v" + Version, ArchitectorReleaseAssets.ServerFileName);
-        private static string FileName => "architector-mcp" + Extension;
-        private static string Extension => Application.platform == RuntimePlatform.WindowsEditor ? ".exe" : string.Empty;
 
         public static async void Install(Action<string> finished)
         {

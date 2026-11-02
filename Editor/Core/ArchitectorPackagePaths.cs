@@ -1,4 +1,7 @@
+using System;
+using System.IO;
 using UnityEditor.PackageManager;
+using UnityEngine;
 
 namespace Architector.Editor
 {
@@ -15,6 +18,8 @@ namespace Architector.Editor
 
         public static string Root => root ??= Resolve();
         public static string Version => version ??= PackageInfo.FindForAssembly(typeof(ArchitectorPackagePaths).Assembly)?.version ?? "0.0.0";
+        public static string ServerBinaryPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".architector", "mcp", Version, "architector-mcp" + (Application.platform == RuntimePlatform.WindowsEditor ? ".exe" : string.Empty));
         public static string DependencyEvidenceProject =>
             (PackageInfo.FindForAssembly(typeof(ArchitectorPackagePaths).Assembly)?.resolvedPath ?? SourceRoot).Replace('\\', '/') + "/Tools~/DependencyEvidence";
         public static string Icon(string fileName) => $"{Root}/Editor/Icons/{fileName}";

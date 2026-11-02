@@ -13,7 +13,13 @@ namespace Architector.Editor
 
         private void CheckForUpdatesOnOpen()
         {
+            ArchitectorPackageUpdates.RefreshInstallation();
             ArchitectorPackageUpdates.EnsureChecked();
+        }
+
+        private void OnFocus()
+        {
+            ArchitectorPackageUpdates.RefreshInstallation();
         }
 
         private void OnUpdatesChanged()
@@ -33,13 +39,14 @@ namespace Architector.Editor
             var title = available
                 ? new GUIContent("Update — " + ArchitectorPackageUpdates.State.availableTag + " available", EditorGUIUtility.IconContent("console.warnicon.sml").image)
                 : new GUIContent("Update");
-            using var box = new ArchitectorFoldoutBox(title, ref updateExpanded);
+            using var box = new ArchitectorFoldoutBox(title, ref updateExpanded,
+                ArchitectorPackageUpdates.IsCurrent ? EditorGUIUtility.IconContent("TestPassed").image : null);
             if (!box.Expanded)
                 return;
 
             var state = ArchitectorPackageUpdates.State;
             EditorGUILayout.LabelField("Installed", ArchitectorPackagePaths.Version);
-            EditorGUILayout.LabelField("Available", available ? state.availableTag : "—");
+            EditorGUILayout.LabelField("Available", state.latestTag ?? "—");
             if (DateTime.TryParse(state.checkedUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var checkedAt))
                 EditorGUILayout.LabelField("Last Check", checkedAt.ToLocalTime().ToString("g", CultureInfo.CurrentCulture));
             using (new EditorGUI.DisabledScope(ArchitectorPackageUpdates.IsBusy))
