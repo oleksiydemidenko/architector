@@ -22,7 +22,6 @@ namespace Architector.Editor
         private bool darkPaletteExpanded;
         private bool lightPaletteExpanded;
         [NonSerialized] private bool aiIntegrationExpanded = true;
-        [NonSerialized] private bool arrangeExpanded;
         private const string WorkflowControlName = "ArchitectorAgentWorkflow";
         private double workflowHighlightUntil;
         private bool workflowFocusPending;
@@ -129,10 +128,9 @@ namespace Architector.Editor
                 using (new LabelWidthScope(Mathf.Clamp(position.width * 0.52f, 190f, 280f)))
                 {
                     DrawSourceIndex(draft.sourceIndex);
-                    DrawGeometry(draft.geometry);
+                    DrawGeometry(draft.geometry, draft.arrange);
                     DrawPalette(draft.palette);
                     DrawAiIntegration(draft.agent);
-                    DrawArrange(draft.arrange);
                     DrawOptimization(draft.optimization);
                     DrawUtilities();
                 }
@@ -186,7 +184,7 @@ namespace Architector.Editor
             }
         }
 
-        private void DrawGeometry(ArchitectorGeometrySettings geometry)
+        private void DrawGeometry(ArchitectorGeometrySettings geometry, ArchitectorArrangeSettings arrange)
         {
             using var box = new ArchitectorFoldoutBox("Workspace Geometry", ref geometryExpanded);
             if (!box.Expanded)
@@ -194,14 +192,13 @@ namespace Architector.Editor
             geometry.minimumNodeGap = EditorGUILayout.FloatField("Minimum Node Gap", geometry.minimumNodeGap);
             geometry.gridSize = EditorGUILayout.FloatField("Grid Size", geometry.gridSize);
             geometry.snapToGrid = EditorGUILayout.Toggle("Snap To Grid", geometry.snapToGrid);
+            EditorGUILayout.Space(6f);
+            EditorGUILayout.LabelField("Arrange", EditorStyles.boldLabel);
+            DrawArrange(arrange);
         }
 
         private void DrawArrange(ArchitectorArrangeSettings arrange)
         {
-            using var box = new ArchitectorFoldoutBox("Arrange", ref arrangeExpanded);
-            if (!box.Expanded)
-                return;
-
             arrange.maxGroupRelationships = EditorGUILayout.IntSlider(
                 new GUIContent(
                     "Group Relationships",

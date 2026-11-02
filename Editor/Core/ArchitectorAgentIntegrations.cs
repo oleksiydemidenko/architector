@@ -22,6 +22,7 @@ namespace Architector.Editor
         public string documentationUrl = string.Empty;
         public string installUrl = string.Empty;
         public string[] tags = { "MCP" };
+        public IArchitectorIntegrationUpdateProvider updates;
         public bool builtIn;
     }
 

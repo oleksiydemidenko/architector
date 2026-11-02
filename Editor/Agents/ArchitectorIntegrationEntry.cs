@@ -6,7 +6,8 @@ namespace Architector.Editor.Agents
 {
     public sealed class ArchitectorIntegrationEntry
     {
-        public ArchitectorIntegrationEntry(string id, string displayName, IEnumerable<string> tags, Action drawDetails, int order = 0)
+        public ArchitectorIntegrationEntry(string id, string displayName, IEnumerable<string> tags, Action drawDetails, int order = 0,
+            IArchitectorIntegrationUpdateProvider updates = null)
         {
             if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(displayName))
                 throw new ArgumentException("An integration needs an ID and display name.");
@@ -18,6 +19,9 @@ namespace Architector.Editor.Agents
             Tags = Array.AsReadOnly(labels);
             DrawDetails = drawDetails ?? throw new ArgumentNullException(nameof(drawDetails));
             Order = order;
+            Updates = updates;
+            if (updates != null)
+                ArchitectorIntegrationUpdates.Register(updates);
         }
 
         public string Id { get; }
@@ -25,5 +29,6 @@ namespace Architector.Editor.Agents
         public IReadOnlyList<string> Tags { get; }
         public Action DrawDetails { get; }
         public int Order { get; }
+        public IArchitectorIntegrationUpdateProvider Updates { get; }
     }
 }

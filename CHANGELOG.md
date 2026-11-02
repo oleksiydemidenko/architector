@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Package updates automatically install or repair the matching SHA-256-verified MCP server after reload, also when received through Git. Existing default Codex/Claude connections for the project move to the new server; custom connections are preserved. Setup failures expose a retry action and retain the previous version.
+- Added Auto Cleanup, on by default, for unused owned server versions. Current/previous versions, registered projects, known client references and running binaries are retained; unknown files and symbolic-link paths are skipped.
+- Integrations share an optional update-provider contract and common status, revalidation, guarded installation, error/retry handling and reload recovery. Architector and Lazy Mode use one provider.
+- Arrange settings are inside Workspace Geometry.
+
 ## 0.2.5
 
 - Update shows the latest compatible release under Available even when it is already installed. A green check after the header confirms a successful check, current packages and the matching installed MCP server.

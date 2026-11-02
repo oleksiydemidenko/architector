@@ -16,5 +16,7 @@ namespace Architector.Editor
         public string notice;
         public string error;
         public string pendingVersion;
+        public string serverError;
+        public string serverNotice;
     }
 }

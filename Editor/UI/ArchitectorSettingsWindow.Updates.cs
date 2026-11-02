@@ -13,6 +13,12 @@ namespace Architector.Editor
 
         private void CheckForUpdatesOnOpen()
         {
+            if (ArchitectorPackageUpdates.IsBusy || ArchitectorIntegrationUpdates.IsBusy)
+            {
+                EditorApplication.delayCall -= CheckForUpdatesOnOpen;
+                EditorApplication.delayCall += CheckForUpdatesOnOpen;
+                return;
+            }
             ArchitectorPackageUpdates.RefreshInstallation();
             ArchitectorPackageUpdates.EnsureChecked();
         }
@@ -49,7 +55,7 @@ namespace Architector.Editor
             EditorGUILayout.LabelField("Available", state.latestTag ?? "—");
             if (DateTime.TryParse(state.checkedUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var checkedAt))
                 EditorGUILayout.LabelField("Last Check", checkedAt.ToLocalTime().ToString("g", CultureInfo.CurrentCulture));
-            using (new EditorGUI.DisabledScope(ArchitectorPackageUpdates.IsBusy))
+            using (new EditorGUI.DisabledScope(ArchitectorPackageUpdates.IsBusy || ArchitectorIntegrationUpdates.IsBusy))
             {
                 var automatic = EditorGUILayout.Toggle("Check Automatically", ArchitectorPackageUpdates.AutomaticChecks);
                 if (automatic != ArchitectorPackageUpdates.AutomaticChecks)
@@ -57,6 +63,9 @@ namespace Architector.Editor
                 var prereleases = EditorGUILayout.Toggle("Include Prereleases", ArchitectorPackageUpdates.IncludePrereleases);
                 if (prereleases != ArchitectorPackageUpdates.IncludePrereleases)
                     ArchitectorPackageUpdates.IncludePrereleases = prereleases;
+                var cleanup = EditorGUILayout.Toggle(new GUIContent("Auto Cleanup", "Remove unused server versions after setup; retain current, previous, referenced and running versions."), ArchitectorPackageUpdates.AutoCleanup);
+                if (cleanup != ArchitectorPackageUpdates.AutoCleanup)
+                    ArchitectorPackageUpdates.AutoCleanup = cleanup;
             }
 
             var sourceWarning = ArchitectorPackageUpdates.SourceWarning;
@@ -66,6 +75,15 @@ namespace Architector.Editor
                 EditorGUILayout.HelpBox(state.error, MessageType.Error);
             if (!string.IsNullOrEmpty(state.notice))
                 EditorGUILayout.HelpBox(state.notice, MessageType.Info);
+            if (!string.IsNullOrEmpty(state.serverNotice))
+                EditorGUILayout.HelpBox(state.serverNotice, MessageType.Info);
+            if (!string.IsNullOrEmpty(state.serverError))
+            {
+                EditorGUILayout.HelpBox(state.serverError, MessageType.Error);
+                using (new EditorGUI.DisabledScope(ArchitectorPackageUpdates.IsBusy))
+                    if (GUILayout.Button("Retry Server Setup"))
+                        ArchitectorPackageUpdates.RetryServerMaintenance();
+            }
             if (ArchitectorPackageUpdates.IsBusy)
                 EditorGUILayout.HelpBox(ArchitectorPackageUpdates.IsChecking ? "Checking releases…"
                     : ArchitectorPackageUpdates.IsInstalling ? "Updating Architector…" : "Another installation is in progress…", MessageType.Info);
@@ -73,7 +91,7 @@ namespace Architector.Editor
             var blocker = ArchitectorPackageUpdates.InstallBlocker(aiWork);
             using (new EditorGUILayout.HorizontalScope())
             {
-                using (new EditorGUI.DisabledScope(ArchitectorPackageUpdates.IsBusy || sourceWarning.Length > 0
+                using (new EditorGUI.DisabledScope(ArchitectorPackageUpdates.IsBusy || ArchitectorIntegrationUpdates.IsBusy || sourceWarning.Length > 0
                     || EditorApplication.isCompiling || EditorApplication.isUpdating))
                     if (GUILayout.Button("Check for Updates"))
                         ArchitectorPackageUpdates.Check();
@@ -86,7 +104,7 @@ namespace Architector.Editor
             if (available && blocker.Length > 0)
                 EditorGUILayout.HelpBox(blocker, MessageType.Info);
             EditorGUILayout.HelpBox(
-                "Installation is manual. An installed Lazy Mode package is updated together with Architector. Updating recompiles the Editor. Afterward, open Integrations to install the matching MCP server and reconnect your clients. Commit the package manifest and lock file to share the update with the team.",
+                "Update installs Architector, an installed Lazy Mode and the matching MCP server. Existing default Codex/Claude connections are moved to the new server; restart those clients afterward. Commit the package manifest and lock file to share the package version.",
                 MessageType.None);
             if (GUILayout.Button("Open Integrations", EditorStyles.miniButton))
                 OpenIntegrations();
@@ -103,7 +121,7 @@ namespace Architector.Editor
         {
             if (!EditorUtility.DisplayDialog(
                     "Update Architector",
-                    "Finish any unsaved text edits before continuing. Unity will update Architector and its installed Lazy Mode package, then recompile and reload assemblies. The MCP server and client connections are updated separately in Integrations.",
+                    "Finish unsaved text edits before continuing. Unity will update Architector and installed Lazy Mode, then automatically install the matching MCP server and update existing default Codex/Claude connections. Restart those clients afterward.",
                     "Update", "Cancel"))
                 return;
             GUI.FocusControl(null);

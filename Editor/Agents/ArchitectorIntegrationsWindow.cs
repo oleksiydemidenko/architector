@@ -51,6 +51,7 @@ namespace Architector.Editor.Agents
             ArchitectorAgentPreferences.Changed += OnChanged;
             ArchitectorPackageUpdates.Changed += OnChanged;
             ArchitectorIntegrationCatalog.Changed += OnChanged;
+            ArchitectorIntegrationUpdates.Changed += Repaint;
             if (!ArchitectorSession.TryGet(out var session, out loadError))
                 return;
             repository = session.Repository;
@@ -66,6 +67,7 @@ namespace Architector.Editor.Agents
             ArchitectorAgentPreferences.Changed -= OnChanged;
             ArchitectorPackageUpdates.Changed -= OnChanged;
             ArchitectorIntegrationCatalog.Changed -= OnChanged;
+            ArchitectorIntegrationUpdates.Changed -= Repaint;
             if (repository != null)
                 repository.Changed -= OnChanged;
         }

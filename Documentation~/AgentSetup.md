@@ -41,9 +41,15 @@ The section shows the installed version and the latest compatible published vers
 
 It offers an update only after its server and checksum files are published for your system and its Unity requirements are satisfied. **Update** updates Architector and an already installed Lazy Mode package together; Unity reloads assemblies when scripts change. Finish text edits and end agent work before updating. Play Mode, compilation, unsaved Editor windows and other installations block the operation.
 
-Install the matching server and reconnect clients in **Integrations** afterward. Server downloads are checked against the release's SHA-256 checksum before installation. None of these installations or client changes happen automatically. Commit `Packages/manifest.json` and `Packages/packages-lock.json` to share the package version with the team. Agent Checks is a separate package and is not changed by this updater.
+After a package update, Architector automatically installs or repairs the matching server, including after `git pull`. It waits for compilation, package operations and active agent work to finish. Downloads must pass the release's SHA-256 check. Existing default Codex/Claude registrations for this project are moved to the matching server; restart those clients afterward. Registrations with custom arguments, environment or working directory, and registrations for other projects, are left for their owner to manage. A failed move attempts to restore the previous registration. Initial connections and manual-client configuration remain in **Integrations**.
+
+If automatic server setup fails, Update shows the error and **Retry Server Setup**. The previous server is retained; failed setup is not retried in a loop. **Install Server** in Integrations remains available for repair. Commit `Packages/manifest.json` and `Packages/packages-lock.json` to share the package version with the team. Agent Checks is a separate package and is not changed by this updater.
+
+**Auto Cleanup** is on by default. After successful server setup it removes unused recognized server versions, keeping the current/previous versions, registered project references, known client references and running servers. The local `.architector/mcp/.projects` records track project usage. Unknown files and symbolic-link paths are preserved; cleanup problems are shown without failing a successful installation. This does not clear Unity's general package cache. Projects or manually configured clients unknown to this machine's records cannot be fully discovered; keep a needed version referenced or disable Auto Cleanup when managing such installations externally.
 
 A `file:` or embedded installation is shown as a local clone, with no update offer. Update that clone with Git; its path is local to that machine. Update preferences and cached results are local Editor preferences and never modify the architecture or approval state.
+
+Arrange settings are under **Settings > Workspace Geometry > Arrange**.
 
 ## Integration Catalog
 

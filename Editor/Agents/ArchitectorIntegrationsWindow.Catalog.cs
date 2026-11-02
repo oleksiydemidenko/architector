@@ -22,10 +22,12 @@ namespace Architector.Editor.Agents
                 return;
             catalog = new List<ArchitectorIntegrationEntry>();
             foreach (var mode in ArchitectorAgentWorkflowModes.Optional)
-                catalog.Add(new ArchitectorIntegrationEntry(mode.Id, mode.DisplayName + " Mode", new[] { "Extension" }, () => DrawOptionalMode(mode)));
+                catalog.Add(new ArchitectorIntegrationEntry(mode.Id, mode.DisplayName + " Mode", new[] { "Extension" },
+                    () => DrawOptionalMode(mode), updates: ArchitectorPackageUpdateProvider.Instance));
             foreach (var descriptor in ArchitectorAgentIntegrationRegistry.Descriptors)
                 catalog.Add(new ArchitectorIntegrationEntry(descriptor.id, descriptor.displayName, descriptor.tags,
-                    () => { if (descriptor.builtIn) DrawServer(); else DrawBridge(descriptor); }, descriptor.builtIn ? 0 : 10));
+                    () => { if (descriptor.builtIn) DrawServer(); else DrawBridge(descriptor); }, descriptor.builtIn ? 0 : 10,
+                    descriptor.builtIn ? ArchitectorPackageUpdateProvider.Instance : descriptor.updates));
             catalog.AddRange(ArchitectorIntegrationCatalog.Entries);
             integrationTags = catalog.SelectMany(entry => entry.Tags).Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(tag => tag, StringComparer.OrdinalIgnoreCase).ToArray();
@@ -62,11 +64,51 @@ namespace Architector.Editor.Agents
                 using (var box = new ArchitectorFoldoutBox(entry.DisplayName + "   ·   " + string.Join(", ", entry.Tags), ref expanded))
                 {
                     if (box.Expanded)
+                    {
                         entry.DrawDetails();
+                        DrawIntegrationUpdates(entry);
+                    }
                 }
                 SessionState.SetBool(ExpandedKey + entry.Id, expanded);
             }
             EditorGUILayout.EndScrollView();
+        }
+
+        private void DrawIntegrationUpdates(ArchitectorIntegrationEntry entry)
+        {
+            if (entry.Updates == null)
+                return;
+            var state = ArchitectorIntegrationUpdates.State(entry.Updates.Id);
+            EditorGUILayout.Space(6f);
+            EditorGUILayout.LabelField("Updates", EditorStyles.boldLabel);
+            if (state.Update != null)
+            {
+                EditorGUILayout.LabelField("Installed", state.Update.installedVersion ?? "—");
+                EditorGUILayout.LabelField("Available", state.Update.availableVersion ?? "—");
+                if (!string.IsNullOrEmpty(state.Update.details))
+                    EditorGUILayout.HelpBox(state.Update.details, state.Update.compatible ? MessageType.Info : MessageType.Warning);
+            }
+            if (!string.IsNullOrEmpty(state.Error))
+                EditorGUILayout.HelpBox(state.Error, MessageType.Error);
+            if (!string.IsNullOrEmpty(state.Notice))
+                EditorGUILayout.HelpBox(state.Notice, MessageType.Info);
+            if (state.Checking || state.Installing)
+                EditorGUILayout.LabelField(state.Checking ? "Checking…" : "Updating…");
+            using (new EditorGUILayout.HorizontalScope())
+            using (new EditorGUI.DisabledScope(ArchitectorIntegrationUpdates.IsBusy || ArchitectorPackageUpdates.IsBusy))
+            {
+                if (GUILayout.Button("Check for Updates"))
+                    ArchitectorIntegrationUpdates.Check(entry.Updates);
+                using (new EditorGUI.DisabledScope(state.Update?.Available != true || ArchitectorPackageUpdates.OperationBlocker(aiWork).Length > 0))
+                    if (GUILayout.Button("Update"))
+                    {
+                        if (EditorUtility.DisplayDialog("Update " + entry.DisplayName,
+                                "Install " + state.Update.availableVersion + "? Unity may reload assemblies.", "Update", "Cancel"))
+                            ArchitectorIntegrationUpdates.Install(entry.Updates, aiWork);
+                    }
+            }
+            if (!string.IsNullOrEmpty(state.Update?.releaseNotes))
+                EditorGUILayout.LabelField(state.Update.releaseNotes, EditorStyles.wordWrappedLabel);
         }
 
         private void DrawIntegrationTags()

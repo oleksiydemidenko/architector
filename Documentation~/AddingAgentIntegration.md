@@ -19,6 +19,12 @@ ArchitectorIntegrationCatalog.Register(new ArchitectorIntegrationEntry(
 
 The callback draws only that entry's expanded details with Unity Editor GUI. Use a stable, unique ID and at least one tag. Duplicate IDs, including transport/workflow IDs, are rejected. `Unregister(id)` removes a dynamic entry. Registration raises `Changed`, so open windows refresh automatically; registered entries join the same search, tag filters and pagination. Browsing an entry must not install packages, activate a workflow, start a server or change client connections. Those actions belong to explicit controls in its details. Existing MCP transports continue to use their probes, and optional workflow modes continue to use their own mode registration.
 
+## Use the shared update mechanism
+
+Implement `IArchitectorIntegrationUpdateProvider` from `Architector.Editor`. Its stable `Id` identifies one update operation, and multiple entries can share the same provider instance for grouped updates. `CheckAsync` returns an `ArchitectorIntegrationUpdate` with installed/available semantic versions, compatibility, details and optional release notes. `UpdateAsync` performs the source-specific installation and reports failure through its task. It must complete only after the requested version is registered, or let assembly reload interrupt it; it must not install while checking.
+
+Pass the provider as the entry constructor's `updates` argument, or set a transport descriptor's `updates` field. The catalog adds common check/update controls and reports progress and errors. The coordinator rechecks compatibility before installation, enforces active-work, Editor and package-operation guards, stores the requested version locally and acknowledges completion after reload without repeating installation. Provider authors own discovery, Unity/Architector compatibility and installation details; the host owns the shared workflow. `ArchitectorPackageUpdateProvider` is the built-in example, used by both Architector and Lazy Mode. `ArchitectorIntegrationUpdates.Unregister(id)` releases a dynamic provider after its operations finish.
+
 ## 2. Isolate package references
 
 Put all compile-time references to the external package in a dedicated assembly definition. Use an asmdef Version Define and matching Define Constraint so the adapter assembly is omitted when the package is absent or too old. Core, persistence, and UI assemblies must never reference package APIs.

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using UnityEngine;
 
 namespace Architector.Editor.Agents
@@ -62,17 +63,50 @@ namespace Architector.Editor.Agents
 
         public static async void Install(Action<string> finished)
         {
-            string error = null;
-            try
+            if (ArchitectorPackageUpdates.IsBusy || ArchitectorIntegrationUpdates.IsBusy)
             {
-                await ArchitectorReleaseAssets.InstallServer("v" + Version, BinaryPath);
+                finished("Wait for the current package or server operation to finish.");
+                return;
             }
-            catch (Exception exception)
-            {
-                error = exception.Message;
-            }
+            var operation = ArchitectorServerMaintenance.InstallAsync(true);
+            ArchitectorPackageUpdates.TrackFollowUp(operation);
+            var error = await operation;
             if (!ArchitectorReleaseAssets.IsReloading)
                 finished(error);
+        }
+
+        public static string ManagedRegistrationBinary(string details, string project, string cacheRoot)
+        {
+            var normalized = (details ?? string.Empty).Replace("\\\\", "\\").Replace('\\', '/');
+            var command = Regex.Match(normalized, @"(?im)^\s*command:\s*(.+)$");
+            var args = Regex.Match(normalized, @"(?im)^\s*args:\s*(.+)$");
+            if (!command.Success || !args.Success
+                || args.Groups[1].Value.Replace("\"", string.Empty).Trim() != "--project " + project.Replace('\\', '/')
+                || Regex.IsMatch(normalized, @"(?im)^\s*(env|env_vars|cwd):\s*(?!-\s*$)\S"))
+                return null;
+            var binary = command.Groups[1].Value.Trim().Trim('"');
+            var directory = Path.GetDirectoryName(binary);
+            var parent = directory == null ? null : Path.GetDirectoryName(directory);
+            return string.Equals(parent?.Replace('\\', '/'), cacheRoot.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase)
+                && ArchitectorUpdateVersion.TryParse(Path.GetFileName(directory), out _)
+                && (Path.GetFileName(binary) == "architector-mcp.exe" || Path.GetFileName(binary) == "architector-mcp") ? binary : null;
+        }
+
+        public static string RetargetClient(ArchitectorMcpClient client, string previous, string binary, string root)
+        {
+            var cli = FindCli(client.Command);
+            if (cli == null)
+                return "Command line tool is unavailable.";
+            var removed = RunCli(cli, client.RemoveArguments, root);
+            if (!removed.success)
+                return removed.output;
+            var added = RunCli(cli, string.Format(client.AddArguments, binary, root), root);
+            var confirmed = added.success ? CheckClient(client, binary, root) : new ArchitectorMcpClientState(ArchitectorMcpClientStates.Failed, added.output);
+            if (confirmed.State == ArchitectorMcpClientStates.Connected)
+                return null;
+            RunCli(cli, client.RemoveArguments, root);
+            var restored = RunCli(cli, string.Format(client.AddArguments, previous, root), root);
+            return confirmed.Details + (restored.success ? " Previous registration restored." : " Previous registration could not be restored: " + restored.output);
         }
 
         public static ArchitectorMcpClientState CheckClient(ArchitectorMcpClient client, string binary, string root)

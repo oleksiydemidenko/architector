@@ -82,6 +82,7 @@ namespace Architector.Editor
                     File.Replace(partial, target, null);
                 else
                     File.Move(partial, target);
+                File.WriteAllText(target + ".sha256", checksum);
             }
             finally
             {

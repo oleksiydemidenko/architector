@@ -27,6 +27,8 @@ namespace Architector.Editor
         private static bool verifying;
         private static bool matchingServerInstalled;
         private static string installedLazyVersion;
+        private static TaskCompletionSource<bool> installCompletion;
+        private static Task followUp;
 
         static ArchitectorPackageUpdates()
         {
@@ -35,13 +37,15 @@ namespace Architector.Editor
         }
 
         public static event Action Changed;
+        public static event Action ServerMaintenanceRequested;
 
         public static ArchitectorUpdateState State => state ??= Restore();
         public static bool IsChecking { get; private set; }
         public static bool IsInstalling => verifying || installRequest != null;
-        public static bool IsBusy => IsChecking || IsInstalling || ArchitectorReleaseAssets.IsInstallingServer || integrationRequest is { IsCompleted: false };
+        public static bool IsBusy => IsChecking || IsInstalling || ArchitectorReleaseAssets.IsInstallingServer
+            || integrationRequest is { IsCompleted: false } || followUp is { IsCompleted: false };
         public static bool UpdateAvailable => !string.IsNullOrEmpty(State.availableTag) && SourceWarning.Length == 0;
-        public static bool IsCurrent => !IsBusy && SourceWarning.Length == 0
+        public static bool IsCurrent => !IsBusy && string.IsNullOrEmpty(State.serverError) && SourceWarning.Length == 0
             && InstallationCurrent(State, ArchitectorPackagePaths.Version, installedLazyVersion, matchingServerInstalled);
         public static string ReleaseUrl => "https://github.com/oleksiydemidenko/architector/releases/tag/" + Uri.EscapeDataString(State.availableTag ?? string.Empty);
         private static string CacheKey => PreferenceKey + Application.dataPath;
@@ -49,6 +53,29 @@ namespace Architector.Editor
         public static void TrackPackageOperation(Request request)
         {
             integrationRequest = request;
+        }
+
+        public static void TrackFollowUp(Task operation) => followUp = operation;
+
+        public static bool AutoCleanup
+        {
+            get => EditorPrefs.GetBool(PreferenceKey + "AutoCleanup", true);
+            set
+            {
+                EditorPrefs.SetBool(PreferenceKey + "AutoCleanup", value);
+                if (value)
+                    ServerMaintenanceRequested?.Invoke();
+            }
+        }
+
+        public static void RetryServerMaintenance() => ServerMaintenanceRequested?.Invoke();
+
+        public static void ReportServerMaintenance(string error, string notice)
+        {
+            State.serverError = error;
+            State.serverNotice = notice;
+            Save();
+            RefreshInstallation();
         }
 
         public static void RefreshInstallation()
@@ -109,7 +136,9 @@ namespace Architector.Editor
             Check();
         }
 
-        public static async void Check()
+        public static void Check() => ArchitectorIntegrationUpdates.Check(ArchitectorPackageUpdateProvider.Instance);
+
+        public static async Task CheckAsync()
         {
             if (IsBusy || SourceWarning.Length > 0)
                 return;
@@ -183,6 +212,14 @@ namespace Architector.Editor
 
         public static string InstallBlocker(ArchitectorAiWorkCoordinator work)
         {
+            if (ArchitectorIntegrationUpdates.IsBusy)
+                return "Wait for the current integration update to finish.";
+            var blocker = OperationBlocker(work);
+            return blocker.Length > 0 ? blocker : SourceWarning;
+        }
+
+        public static string OperationBlocker(ArchitectorAiWorkCoordinator work)
+        {
             if (IsBusy)
                 return "Wait for the current check or package operation to finish.";
             if (work == null)
@@ -193,12 +230,23 @@ namespace Architector.Editor
                 return "Exit Play Mode and wait for compilation and asset import to finish.";
             if (Resources.FindObjectsOfTypeAll<EditorWindow>().Any(window => window.hasUnsavedChanges))
                 return "Save unsaved Editor window changes before updating.";
-            return SourceWarning;
+            return string.Empty;
         }
 
-        public static async void Install(ArchitectorAiWorkCoordinator work)
+        public static void Install(ArchitectorAiWorkCoordinator work)
         {
-            var blocker = InstallBlocker(work);
+            if (ArchitectorIntegrationUpdates.IsBusy)
+                return;
+            var provider = ArchitectorPackageUpdateProvider.Instance;
+            ArchitectorIntegrationUpdates.State(provider.Id).Update = provider.Snapshot();
+            ArchitectorIntegrationUpdates.Install(provider, work);
+        }
+
+        internal static async Task InstallAsync(ArchitectorAiWorkCoordinator work)
+        {
+            var blocker = OperationBlocker(work);
+            if (blocker.Length == 0)
+                blocker = SourceWarning;
             if (blocker.Length > 0 || !UpdateAvailable)
                 return;
             var tag = State.availableTag;
@@ -211,7 +259,7 @@ namespace Architector.Editor
                 if (!ReleaseReady(release, ArchitectorReleaseAssets.ServerFileName, IncludePrereleases) || !await ValidateVersion(tag))
                     throw new InvalidDataException("This release is no longer ready or compatible. Check for updates again.");
                 verifying = false;
-                blocker = InstallBlocker(work);
+                blocker = OperationBlocker(work);
                 if (blocker.Length > 0)
                     throw new InvalidOperationException(blocker);
                 var urls = new List<string> { RepositoryUrl + "#" + tag };
@@ -219,8 +267,14 @@ namespace Architector.Editor
                     urls.Add(RepositoryUrl + "?path=/LazyMode~#" + tag);
                 state.pendingVersion = tag.Substring(1);
                 Save();
+                installCompletion = new TaskCompletionSource<bool>();
                 installRequest = Client.AddAndRemove(urls.ToArray(), Array.Empty<string>());
                 EditorApplication.update += PollInstall;
+                await installCompletion.Task;
+                for (var attempt = 0; attempt < 200 && ArchitectorPackagePaths.Version != tag.Substring(1); attempt++)
+                    await Task.Delay(100);
+                if (ArchitectorPackagePaths.Version != tag.Substring(1))
+                    throw new InvalidOperationException("Package registration did not confirm the requested version.");
             }
             catch (Exception exception)
             {
@@ -230,6 +284,7 @@ namespace Architector.Editor
                     state.error = "Could not update Architector: " + exception.Message;
                     Save();
                 }
+                throw;
             }
             finally
             {
@@ -325,7 +380,9 @@ namespace Architector.Editor
             installedVersion = ArchitectorPackagePaths.Version,
             unityVersion = Application.unityVersion,
             serverAsset = ArchitectorReleaseAssets.ServerFileName,
-            includePrereleases = IncludePrereleases
+            includePrereleases = IncludePrereleases,
+            serverError = state?.installedVersion == ArchitectorPackagePaths.Version ? state.serverError : null,
+            serverNotice = state?.installedVersion == ArchitectorPackagePaths.Version ? state.serverNotice : null
         };
 
         private static ArchitectorUpdateState Restore()
@@ -349,7 +406,7 @@ namespace Architector.Editor
                 var lazy = PackageInfo.GetAllRegisteredPackages().FirstOrDefault(package => package.name == LazyModeName);
                 current.notice = lazy != null && lazy.version != current.installedVersion
                     ? "Architector was updated, but Lazy Mode has a different version. Check Package Manager."
-                    : "Update installed. Open Integrations to install the matching MCP server and reconnect your clients. Commit the package manifest and lock file to share this version with the team.";
+                    : "Package updated. The matching MCP server will be installed automatically. Commit the package manifest and lock file to share this version with the team.";
                 EditorPrefs.SetString(CacheKey, JsonUtility.ToJson(current));
                 return current;
             }
@@ -387,10 +444,17 @@ namespace Architector.Editor
             {
                 state = Restore();
                 if (!string.IsNullOrEmpty(state.pendingVersion))
-                    state.notice = "Unity is applying the update. Afterward, install the matching server in Integrations and commit the package manifest and lock file.";
+                    state.notice = "Unity is applying the update. The matching MCP server will be installed automatically.";
                 Save();
             }
+            var completion = installCompletion;
+            var error = installRequest.Status == StatusCode.Failure ? installRequest.Error.message : null;
             installRequest = null;
+            installCompletion = null;
+            if (error == null)
+                completion?.TrySetResult(true);
+            else
+                completion?.TrySetException(new InvalidOperationException(error));
             Changed?.Invoke();
         }
     }

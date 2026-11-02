@@ -175,7 +175,7 @@ namespace Architector.Editor.Tests
                 Assert.That(ArchitectorPackageUpdates.State.installedVersion, Is.EqualTo(installed));
                 Assert.That(ArchitectorPackageUpdates.State.pendingVersion, Is.Null);
                 Assert.That(ArchitectorPackageUpdates.State.availableTag, Is.Null);
-                Assert.That(ArchitectorPackageUpdates.State.notice, Does.Contain("Update installed"));
+                Assert.That(ArchitectorPackageUpdates.State.notice, Does.Contain("Package updated"));
             }
             finally
             {
