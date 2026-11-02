@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.6
 
 - Package updates automatically install or repair the matching SHA-256-verified MCP server after reload, also when received through Git. Existing default Codex/Claude connections for the project move to the new server; custom connections are preserved. Setup failures expose a retry action and retain the previous version.
 - Added Auto Cleanup, on by default, for unused owned server versions. Current/previous versions, registered projects, known client references and running binaries are retained; unknown files and symbolic-link paths are skipped.
