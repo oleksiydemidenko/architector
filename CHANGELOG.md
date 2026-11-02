@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.5
 
 - Update shows the latest compatible release under Available even when it is already installed. A green check after the header confirms a successful check, current packages and the matching installed MCP server.
 - Integrations keeps Setup Check above a searchable catalog with tag buttons, name/tag queries and paging. Lazy Mode appears before the Architector MCP server.
