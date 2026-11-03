@@ -46,6 +46,18 @@ namespace Architector.Editor.Tests
         }
 
         [Test]
+        public void DependencyCyclesArrangeWithoutOverlap()
+        {
+            var nodes = new List<ArchitectorArrangeNode> { Node("a"), Node("b"), Node("c"), Node("d") };
+            var edges = new List<ArchitectorArrangeEdge> { Edge("a", "b"), Edge("b", "a"), Edge("b", "c"), Edge("c", "d"), Edge("d", "b") };
+
+            var positions = ArchitectorGraphArranger.Arrange(nodes, edges, Gap, Grid, 16);
+
+            Assert.That(positions.Keys, Is.EquivalentTo(new[] { "a", "b", "c", "d" }));
+            AssertNoOverlap(nodes, positions);
+        }
+
+        [Test]
         public void HubStaysInTheMiddleWithBalancedSidesAndItsChainBelow()
         {
             var nodes = new List<ArchitectorArrangeNode> { Node("module"), Node("parameter"), Node("data"), Node("handler") };

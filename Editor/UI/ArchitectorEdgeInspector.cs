@@ -61,9 +61,13 @@ namespace Architector.Editor
                 }
                 EditorGUILayout.Space(8f);
                 EditorGUILayout.HelpBox(
-                    edge.kind == ArchitectorEdgeKinds.Dependency
-                        ? "Dependency relationships must remain acyclic."
-                        : "Runtime relationships may be reversed or cyclic.",
+                    edge.kind != ArchitectorEdgeKinds.Dependency
+                        ? "Runtime relationships may be reversed or cyclic."
+                        : repository.Settings.rules.dependencyCycles == ArchitectorDependencyCyclePolicy.Reject
+                            ? "Dependency relationships must remain acyclic."
+                            : repository.FindDependencyCycles().Any(cycle => cycle.Contains(edge))
+                                ? "This dependency is part of a cycle. The project reports cycles instead of rejecting them."
+                                : "The project reports dependency cycles instead of rejecting them.",
                     MessageType.None);
             }
         }

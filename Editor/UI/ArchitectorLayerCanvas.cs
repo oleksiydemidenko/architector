@@ -144,6 +144,8 @@ namespace Architector.Editor
             hideRoutesWhileDragging = repository.Settings.optimization.hideRoutesWhileDragging;
             routeInBackground = repository.Settings.optimization.routeInBackground;
             var merging = repository.Settings.optimization.relationshipMerging;
+            var geometry = repository.Settings.geometry;
+            edgeRouter.CellSize = geometry.snapToGrid ? geometry.gridSize : 0f;
             if (relationshipMerging != merging)
             {
                 relationshipMerging = merging;
@@ -1387,7 +1389,7 @@ namespace Architector.Editor
         private void StartRouteJob(Dictionary<string, Rect> rects, List<ArchitectorRouteRequest> requests)
         {
             routeJob?.Cancel();
-            routeJob = new ArchitectorRouteJob(rects, requests, EdgeCornerRadius, EdgeBridgeRadius, relationshipMerging);
+            routeJob = new ArchitectorRouteJob(rects, requests, EdgeCornerRadius, EdgeBridgeRadius, relationshipMerging, edgeRouter.CellSize);
             if (watchingRouteJob)
                 return;
             watchingRouteJob = true;

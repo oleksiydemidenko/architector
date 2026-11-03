@@ -65,6 +65,7 @@ namespace Architector.Editor
         public ArchitectorGeometrySettings geometry = new();
         public ArchitectorOptimizationSettings optimization = new();
         public ArchitectorArrangeSettings arrange = new();
+        public ArchitectorRuleSettings rules = new();
         public ArchitectorPaletteSettings palette = new();
         public ArchitectorAgentSettings agent = new();
     }
@@ -114,6 +115,12 @@ namespace Architector.Editor
         public float minimumNodeGap = 48f;
         public float gridSize = 16f;
         public bool snapToGrid = true;
+    }
+
+    [Serializable]
+    public sealed class ArchitectorRuleSettings
+    {
+        public ArchitectorDependencyCyclePolicy dependencyCycles;
     }
 
     [Serializable]

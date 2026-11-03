@@ -110,7 +110,7 @@ namespace Architector.Editor
             return $"{path}/{title}";
         }
 
-        private static IEnumerable<ArchitectorLayerRecord> OrderedLayers(ArchitectorProjectDocument project)
+        internal static IEnumerable<ArchitectorLayerRecord> OrderedLayers(ArchitectorProjectDocument project)
         {
             var groups = project.groups.ToDictionary(group => group.id, StringComparer.Ordinal);
             var layers = project.layers.ToDictionary(layer => layer.id, StringComparer.Ordinal);

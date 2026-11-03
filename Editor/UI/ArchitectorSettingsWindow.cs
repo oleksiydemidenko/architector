@@ -14,6 +14,7 @@ namespace Architector.Editor
         private Vector2 scroll;
         [NonSerialized] private bool sourceIndexExpanded;
         [NonSerialized] private bool geometryExpanded;
+        [NonSerialized] private bool rulesExpanded;
         [NonSerialized] private bool paletteExpanded;
         [NonSerialized] private bool utilitiesExpanded = true;
         private bool includedRootsExpanded = true;
@@ -128,6 +129,7 @@ namespace Architector.Editor
                 using (new LabelWidthScope(Mathf.Clamp(position.width * 0.52f, 190f, 280f)))
                 {
                     DrawSourceIndex(draft.sourceIndex);
+                    DrawRules(draft.rules);
                     DrawGeometry(draft.geometry, draft.arrange);
                     DrawPalette(draft.palette);
                     DrawAiIntegration(draft.agent);
@@ -159,6 +161,20 @@ namespace Architector.Editor
                 using (new EditorGUI.IndentLevelScope())
                     DrawPathList(sourceIndex.excludedRoots, "Assets/Plugins");
             }
+        }
+
+        private void DrawRules(ArchitectorRuleSettings rules)
+        {
+            using var box = new ArchitectorFoldoutBox("Rules", ref rulesExpanded);
+            if (!box.Expanded)
+                return;
+            rules.dependencyCycles = (ArchitectorDependencyCyclePolicy)EditorGUILayout.Popup(
+                new GUIContent("Dependency Cycles", "Reject refuses any change that closes a cycle of dependency relationships. Report keeps cycles that exist in the code, so the map can show every real dependency, and lists them as conformance warnings. Reject can be chosen again only after the cycles are removed. Shared with the team."),
+                (int)rules.dependencyCycles,
+                new[] { "Reject", "Report" });
+            var cycles = repository.FindDependencyCycles();
+            if (cycles.Count > 0)
+                EditorGUILayout.HelpBox($"The graph has {cycles.Count} dependency cycles. Layer Inspector and conformance list them.", MessageType.None);
         }
 
         private static void DrawPathList(List<string> paths, string newValue)
@@ -466,6 +482,7 @@ namespace Architector.Editor
                     settings.geometry = draft.geometry;
                     settings.optimization = draft.optimization;
                     settings.arrange = draft.arrange;
+                    settings.rules = draft.rules;
                     settings.palette = draft.palette;
                     settings.agent = draft.agent;
                 });

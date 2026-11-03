@@ -42,6 +42,7 @@ namespace Architector.Editor
                 throw new ArchitectorDataException("Settings sections are required.");
             settings.optimization ??= new ArchitectorOptimizationSettings();
             settings.arrange ??= new ArchitectorArrangeSettings();
+            settings.rules ??= new ArchitectorRuleSettings();
             settings.palette ??= new ArchitectorPaletteSettings();
             settings.agent ??= new ArchitectorAgentSettings();
             settings.agent.integrations ??= new List<ArchitectorAgentIntegrationRecord>();
@@ -63,6 +64,8 @@ namespace Architector.Editor
                 throw new ArchitectorDataException("Member parent depth must be 0, 1, 2 or -1 for all parents.");
             if (!Enum.IsDefined(typeof(ArchitectorRelationshipMerging), settings.optimization.relationshipMerging))
                 throw new ArchitectorDataException("Unknown relationship merging mode.");
+            if (!Enum.IsDefined(typeof(ArchitectorDependencyCyclePolicy), settings.rules.dependencyCycles))
+                throw new ArchitectorDataException("Unknown dependency cycle policy.");
             var integrationIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (var integration in settings.agent.integrations)
             {
@@ -318,43 +321,24 @@ namespace Architector.Editor
                     $"{relationship.kind}:{EndpointKey(relationship.sourceLayerId, relationship.sourceNodeId)}->{EndpointKey(relationship.targetLayerId, relationship.targetNodeId)}",
                     "directed relationship");
             }
-            EnsureRepositoryAcyclic(
-                nodesByEndpoint.Keys,
-                relationships.Where(relationship => string.Equals(
-                    relationship.kind,
-                    ArchitectorEdgeKinds.Dependency,
-                    StringComparison.Ordinal)));
+            if (settings.rules.dependencyCycles == ArchitectorDependencyCyclePolicy.Reject)
+                EnsureRepositoryAcyclic(project, layers, relationships);
 
             return portalsByPair.Count;
         }
 
         private static void EnsureRepositoryAcyclic(
-            IEnumerable<string> endpoints,
+            ArchitectorProjectDocument project,
+            IReadOnlyDictionary<string, ArchitectorLayerDocuments> layers,
             IEnumerable<ArchitectorEdgeRecord> relationships)
         {
-            var indegree = endpoints.ToDictionary(endpoint => endpoint, _ => 0, StringComparer.Ordinal);
-            var outgoing = endpoints.ToDictionary(endpoint => endpoint, _ => new List<string>(), StringComparer.Ordinal);
-            foreach (var relationship in relationships)
-            {
-                var source = EndpointKey(relationship.sourceLayerId, relationship.sourceNodeId);
-                var target = EndpointKey(relationship.targetLayerId, relationship.targetNodeId);
-                indegree[target]++;
-                outgoing[source].Add(target);
-            }
-            var ready = new Queue<string>(indegree.Where(pair => pair.Value == 0).Select(pair => pair.Key));
-            var visited = 0;
-            while (ready.Count > 0)
-            {
-                var current = ready.Dequeue();
-                visited++;
-                foreach (var target in outgoing[current])
-                {
-                    if (--indegree[target] == 0)
-                        ready.Enqueue(target);
-                }
-            }
-            if (visited != indegree.Count)
-                throw new ArchitectorDataException("Dependency relationships must form an acyclic project graph.");
+            var endpoints = ArchitectorDependencyCycles.InExplorerOrder(project).SelectMany(layer => layers[layer.id].semantic.nodes
+                .Select(node => new ArchitectorEndpoint(layer.id, node.id)));
+            var cycle = ArchitectorDependencyCycles.Find(endpoints, relationships).FirstOrDefault();
+            if (cycle == null)
+                return;
+            throw new ArchitectorDataException(
+                $"Dependency relationships must form an acyclic project graph. Cycle: {cycle.Describe((layerId, nodeId) => ArchitectorDependencyCycles.Caption(project, layers, layerId, nodeId))}.");
         }
 
         private static string EndpointKey(string layerId, string nodeId) => $"{layerId}\u001f{nodeId}";

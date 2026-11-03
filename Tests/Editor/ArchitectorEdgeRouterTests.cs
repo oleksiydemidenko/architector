@@ -29,6 +29,77 @@ namespace Architector.Editor.Tests
                 yield return (route[index - 1], route[index]);
         }
 
+        private static Dictionary<string, Rect> CellColumns()
+        {
+            return new Dictionary<string, Rect>
+            {
+                ["a"] = new(0f, 0f, 300f, 150f),
+                ["b"] = new(0f, 450f, 300f, 150f),
+                ["c"] = new(0f, 900f, 300f, 150f),
+                ["wall"] = new(375f, 0f, 150f, 1050f),
+                ["d"] = new(600f, 0f, 300f, 150f),
+                ["e"] = new(600f, 450f, 300f, 150f),
+                ["f"] = new(600f, 900f, 300f, 150f)
+            };
+        }
+
+        private static float[] GapLanes(Dictionary<string, List<Vector2>> routes)
+        {
+            return routes.Values
+                .SelectMany(Segments)
+                .Where(segment => Mathf.Approximately(segment.start.x, segment.end.x) && segment.start.x > 300f && segment.start.x < 375f)
+                .Select(segment => segment.start.x)
+                .Distinct()
+                .OrderBy(x => x)
+                .ToArray();
+        }
+
+        [Test]
+        public void OneRouteInACellRunsOnTheCellCenter()
+        {
+            var requests = new[] { new ArchitectorRouteRequest("ac", "a", "c", "right", "right") };
+
+            var routes = new ArchitectorEdgeRouter { CellSize = 75f }.Route(CellColumns(), requests);
+
+            Assert.That(GapLanes(routes), Is.EqualTo(new[] { 337.5f }));
+        }
+
+        [Test]
+        public void RoutesSharingACellSpreadEvenlyInsideIt()
+        {
+            var requests = new[]
+            {
+                new ArchitectorRouteRequest("ac", "a", "c", "right", "right"),
+                new ArchitectorRouteRequest("bc", "b", "c", "right", "right"),
+                new ArchitectorRouteRequest("ab", "a", "b", "right", "right")
+            };
+
+            var lanes = GapLanes(new ArchitectorEdgeRouter { CellSize = 75f }.Route(CellColumns(), requests));
+
+            Assert.That(lanes.Length, Is.EqualTo(3));
+            Assert.That(lanes.First(), Is.GreaterThan(300f + 10f));
+            Assert.That(lanes.Last(), Is.LessThan(375f - 10f));
+            for (var index = 1; index < lanes.Length; index++)
+                Assert.That(lanes[index] - lanes[index - 1], Is.EqualTo(lanes[1] - lanes[0]).Within(0.01f).And.GreaterThanOrEqualTo(18f));
+        }
+
+        [TestCase(16f)]
+        [TestCase(70f)]
+        public void SmallOrMismatchedCellsKeepTheCorridorRouting(float cellSize)
+        {
+            var requests = new[]
+            {
+                new ArchitectorRouteRequest("ac", "a", "c", "right", "right"),
+                new ArchitectorRouteRequest("bc", "b", "c", "right", "right")
+            };
+
+            var withCells = new ArchitectorEdgeRouter { CellSize = cellSize }.Route(CellColumns(), requests);
+            var without = new ArchitectorEdgeRouter().Route(CellColumns(), requests);
+
+            foreach (var request in requests)
+                Assert.That(withCells[request.Id], Is.EqualTo(without[request.Id]));
+        }
+
         [Test]
         public void RoutesAreOrthogonalAndKeepOutOfUnrelatedNodes()
         {

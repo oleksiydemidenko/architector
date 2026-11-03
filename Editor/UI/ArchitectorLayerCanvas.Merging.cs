@@ -84,9 +84,7 @@ namespace Architector.Editor
                 return false;
             if (hiddenRouteNodeIds.Count == 0)
                 return true;
-            return edgeNetwork.Strokes.Count(branch => branch.Points.Last() == stroke.Points[0]
-                && branch.EdgeIds.Any(id => Array.IndexOf(stroke.EdgeIds, id) >= 0
-                    && mergedEdgesById.TryGetValue(id, out var edge) && !IsRouteHidden(edge))) > 1;
+            return edgeNetwork.IsJunction(stroke, id => mergedEdgesById.TryGetValue(id, out var edge) && !IsRouteHidden(edge));
         }
 
         private void DrawMergedEdges(ArchitectorLayerDocuments documents, ArchitectorThemePaletteSettings palette, Rect viewRect)

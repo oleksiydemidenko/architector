@@ -37,9 +37,13 @@ namespace Architector.Editor
         private const float HeuristicWeight = 1.001f;
         private const float SecondarySideCost = 24f;
         private const float SideLoadCost = 8f;
-        private const float PortSpacing = 14f;
         private const float PortMargin = 10f;
         private const float TrackSpacing = 10f;
+        private const float LaneSpacing = 24f;
+        private const float NarrowCorridor = 160f;
+        private const float MinimumCell = 48f;
+        private const int CellCapacity = 3;
+        private const float SharedCellCost = 0.5f;
         private const float MinimumSegment = 6f;
         private const float NodeMargin = 5f;
         private const int CornerSteps = 4;
@@ -73,6 +77,17 @@ namespace Architector.Editor
         private int heapCount;
         private int arrivalIndex;
         private CancellationToken cancellation;
+        private float cell;
+
+        public float CellSize { get; set; }
+
+        private void UseCells(IReadOnlyDictionary<string, Rect> nodes)
+        {
+            bool OnCell(float value) => Mathf.Abs(value / CellSize - Mathf.Round(value / CellSize)) < 0.001f;
+            cell = CellSize >= MinimumCell && nodes.Count > 0 && nodes.Values.All(rect => OnCell(rect.xMin) && OnCell(rect.yMin) && OnCell(rect.xMax) && OnCell(rect.yMax))
+                ? CellSize
+                : 0f;
+        }
 
         public Dictionary<string, List<Vector2>> Route(
             IReadOnlyDictionary<string, Rect> nodes,
@@ -81,7 +96,17 @@ namespace Architector.Editor
             CancellationToken cancellation = default)
         {
             this.cancellation = cancellation;
+            UseCells(nodes);
             return Solve(nodes, WorkRoutes(nodes, requests), Array.Empty<WorkRoute>(), untangle);
+        }
+
+        public Dictionary<string, List<Vector2>> RouteRough(
+            IReadOnlyDictionary<string, Rect> nodes,
+            IReadOnlyList<ArchitectorRouteRequest> requests)
+        {
+            cancellation = CancellationToken.None;
+            UseCells(nodes);
+            return Solve(nodes, WorkRoutes(nodes, requests), Array.Empty<WorkRoute>(), false, false);
         }
 
         public Dictionary<string, List<Vector2>> RouteMoved(
@@ -92,6 +117,7 @@ namespace Architector.Editor
             Vector2 delta)
         {
             cancellation = CancellationToken.None;
+            UseCells(nodes);
             var moved = new HashSet<string>(movedNodeIds, StringComparer.Ordinal);
             var work = new List<WorkRoute>();
             var frozen = new List<WorkRoute>();
@@ -179,13 +205,14 @@ namespace Architector.Editor
             IReadOnlyDictionary<string, Rect> nodes,
             IReadOnlyList<WorkRoute> routes,
             IReadOnlyList<WorkRoute> frozen,
-            bool untangle)
+            bool untangle,
+            bool separate = true)
         {
             var obstacles = nodes.Values.ToArray();
             BuildGrid(obstacles, routes);
             LoadFrozen(frozen);
             ChooseSides(routes);
-            AssignPorts(routes, frozen);
+            AssignPorts(routes, frozen, cell);
             BuildGrid(obstacles, routes);
             LoadFrozen(frozen);
             foreach (var route in routes)
@@ -200,8 +227,8 @@ namespace Architector.Editor
             var all = routes.Concat(frozen).ToList();
             if (untangle)
                 Untangle(routes, obstacles);
-            else
-                SeparateTracks(all, obstacles);
+            else if (separate)
+                SeparateTracks(all, obstacles, cell);
             var result = new Dictionary<string, List<Vector2>>(StringComparer.Ordinal);
             foreach (var route in all)
             {
@@ -444,13 +471,24 @@ namespace Architector.Editor
             var xValues = new List<float>(obstacles.Count * 3 + routes.Count * 2 + 2);
             var yValues = new List<float>(obstacles.Count * 3 + routes.Count * 2 + 2);
             var portsAssigned = routes.Count > 0 && routes[0].PortsAssigned;
+            if (cell > 0f && obstacles.Count > 0)
+            {
+                var first = Mathf.Floor(obstacles.Min(rect => rect.xMin) / cell) - 2;
+                var last = Mathf.Ceil(obstacles.Max(rect => rect.xMax) / cell) + 2;
+                for (var column = first; column < last; column++)
+                    xValues.Add((column + 0.5f) * cell);
+                first = Mathf.Floor(obstacles.Min(rect => rect.yMin) / cell) - 2;
+                last = Mathf.Ceil(obstacles.Max(rect => rect.yMax) / cell) + 2;
+                for (var row = first; row < last; row++)
+                    yValues.Add((row + 0.5f) * cell);
+            }
             foreach (var rect in obstacles)
             {
                 xValues.Add(rect.xMin - Clearance);
                 xValues.Add(rect.xMax + Clearance);
                 yValues.Add(rect.yMin - Clearance);
                 yValues.Add(rect.yMax + Clearance);
-                if (parallelTracks)
+                if (parallelTracks && cell <= 0f)
                 {
                     xValues.Add(rect.xMin - Clearance - TrackSpacing);
                     xValues.Add(rect.xMax + Clearance + TrackSpacing);
@@ -522,6 +560,17 @@ namespace Architector.Editor
                         blocked[Cell(x, y) * 2 + 1] = true;
                 }
             }
+            if (cell <= 0f)
+                return;
+            foreach (var rect in obstacles)
+            {
+                foreach (var x in new[] { IndexOf(xs, rect.xMin - Clearance), IndexOf(xs, rect.xMax + Clearance) })
+                    for (var y = 0; y + 1 < height; y++)
+                        blocked[Cell(x, y) * 2 + 1] = true;
+                foreach (var y in new[] { IndexOf(ys, rect.yMin - Clearance), IndexOf(ys, rect.yMax + Clearance) })
+                    for (var x = 0; x + 1 < width; x++)
+                        blocked[Cell(x, y) * 2] = true;
+            }
         }
 
         private void ChooseSides(IReadOnlyList<WorkRoute> routes)
@@ -552,7 +601,7 @@ namespace Architector.Editor
                 route.Points = DirectRoute(route.Source, route.Target);
         }
 
-        private bool FindPath(WorkRoute route, IReadOnlyList<Terminal> sources, IReadOnlyList<Terminal> targets, bool separateNetworks = false)
+        private bool FindPath(WorkRoute route, IReadOnlyList<Terminal> sources, IReadOnlyList<Terminal> targets, bool separateNetworks = false, int capacity = 1)
         {
             var goalState = width * height * 4;
             var goalMinX = int.MaxValue;
@@ -661,14 +710,14 @@ namespace Architector.Editor
                             length = ys[y] - ys[nextY];
                             break;
                     }
-                    if (blocked[step] || separateNetworks && usage[step] > 0)
+                    if (blocked[step] || separateNetworks && usage[step] >= capacity)
                         continue;
 
                     var nextCell = nextY * width + nextX;
                     var cost = stateCost + length;
                     var shared = usage[step];
                     if (shared > 0)
-                        cost += length * OverlapCost * (shared < OverlapLimit ? shared : OverlapLimit);
+                        cost += length * (separateNetworks ? SharedCellCost : OverlapCost) * (shared < OverlapLimit ? shared : OverlapLimit);
                     if (next != direction)
                         cost += BendCost;
                     var crossed = next < Down ? verticalLoad[nextCell] : horizontalLoad[nextCell];
@@ -755,12 +804,18 @@ namespace Architector.Editor
             }
         }
 
-        private static void AssignPorts(IReadOnlyList<WorkRoute> routes, IReadOnlyList<WorkRoute> frozen, ISet<string> sharedTargets = null)
+        private static void AssignPorts(
+            IReadOnlyList<WorkRoute> routes,
+            IReadOnlyList<WorkRoute> frozen,
+            float cell,
+            ISet<string> sharedTargets = null,
+            ISet<string> sharedSources = null)
         {
             var groups = new Dictionary<(string node, string side), List<Endpoint>>();
             foreach (var route in routes.Concat(frozen))
             {
-                AddEndpoint(groups, route, true);
+                if (sharedSources == null || !sharedSources.Contains(route.Id))
+                    AddEndpoint(groups, route, true);
                 if (sharedTargets == null || !sharedTargets.Contains(route.Id))
                     AddEndpoint(groups, route, false);
             }
@@ -770,7 +825,7 @@ namespace Architector.Editor
                          .ThenBy(group => group.Key.node, StringComparer.Ordinal)
                          .ThenBy(group => group.Key.side, StringComparer.Ordinal))
             {
-                PlacePorts(group.Key.side, group.Value
+                PlacePorts(group.Key.side, cell, group.Value
                     .OrderBy(endpoint => endpoint.leaveKey)
                     .ThenBy(endpoint => endpoint.farKey)
                     .ThenBy(endpoint => endpoint.route.Id, StringComparer.Ordinal)
@@ -781,7 +836,7 @@ namespace Architector.Editor
                 route.PortsAssigned = true;
         }
 
-        private static void PlacePorts(string side, Endpoint[] endpoints)
+        private static void PlacePorts(string side, float cell, Endpoint[] endpoints)
         {
             var horizontal = IsHorizontalSide(side);
             var rect = endpoints[0].rect;
@@ -790,7 +845,7 @@ namespace Architector.Editor
             if (min > max)
                 min = max = horizontal ? rect.center.y : rect.center.x;
             var center = (min + max) * 0.5f;
-            var spacing = endpoints.Length < 2 ? 0f : Mathf.Min(PortSpacing, (max - min) / (endpoints.Length - 1));
+            var spacing = endpoints.Length < 2 ? 0f : Mathf.Min(LaneSpacing, (max - min) / (endpoints.Length - 1));
             var ordered = endpoints
                 .Select((endpoint, index) => (endpoint, position: endpoint.route.Frozen
                     ? Along(endpoint, horizontal)
@@ -806,6 +861,8 @@ namespace Architector.Editor
             var lows = ordered.Select(item => item.endpoint.route.Frozen ? item.position : min).ToArray();
             var highs = ordered.Select(item => item.endpoint.route.Frozen ? item.position : max).ToArray();
             Spread(positions, lows, highs, spacing);
+            if (cell > 0f && ordered.All(item => !item.endpoint.route.Frozen))
+                SnapPortsToCells(positions, horizontal ? rect.yMin : rect.xMin, horizontal ? rect.yMax : rect.xMax, cell);
             for (var index = 0; index < ordered.Length; index++)
             {
                 var endpoint = ordered[index].endpoint;
@@ -824,6 +881,31 @@ namespace Architector.Editor
                     endpoint.route.Target = terminal;
                     endpoint.route.TargetPortPlaced = true;
                 }
+            }
+        }
+
+        private static void SnapPortsToCells(float[] positions, float start, float end, float cell)
+        {
+            var cells = Mathf.Max(1, Mathf.RoundToInt((end - start) / cell));
+            var slots = new List<float>();
+            for (var index = 0; index < cells; index++)
+            {
+                var lanes = positions.Length <= cells ? 1 : positions.Length / cells + (index < positions.Length % cells ? 1 : 0);
+                var spacing = Mathf.Min(LaneSpacing, cell / (lanes + 1));
+                var center = start + (index + 0.5f) * cell;
+                for (var lane = 0; lane < lanes; lane++)
+                    slots.Add(center + (lane - (lanes - 1) * 0.5f) * spacing);
+            }
+            var previous = -1;
+            for (var index = 0; index < positions.Length; index++)
+            {
+                var latest = slots.Count - (positions.Length - index);
+                var nearest = previous + 1;
+                for (var slot = previous + 1; slot <= latest; slot++)
+                    if (Mathf.Abs(slots[slot] - positions[index]) < Mathf.Abs(slots[nearest] - positions[index]))
+                        nearest = slot;
+                positions[index] = slots[nearest];
+                previous = nearest;
             }
         }
 
@@ -899,7 +981,7 @@ namespace Architector.Editor
         {
             foreach (var route in routes)
                 route.GridPoints = new List<Vector2>(route.Points);
-            SeparateTracks(routes, obstacles);
+            SeparateTracks(routes, obstacles, cell);
             var crossings = TotalCrossings(routes);
             var attempts = 0;
             var rejected = new HashSet<(string first, string second)>();
@@ -924,7 +1006,7 @@ namespace Architector.Editor
                 }
                 foreach (var route in routes)
                     route.Points = new List<Vector2>(route.GridPoints);
-                SeparateTracks(routes, obstacles);
+                SeparateTracks(routes, obstacles, cell);
 
                 var next = TotalCrossings(routes);
                 if (next < crossings)
@@ -1046,31 +1128,24 @@ namespace Architector.Editor
                 endpoint.route.Target = terminal;
         }
 
-        private static void SeparateTracks(IReadOnlyList<WorkRoute> routes, IReadOnlyList<Rect> obstacles)
+        private static void SeparateTracks(IReadOnlyList<WorkRoute> routes, IReadOnlyList<Rect> obstacles, float cell)
         {
-            SeparateTracks(routes, obstacles, true);
-            SeparateTracks(routes, obstacles, false);
+            SeparateTracks(routes, obstacles, true, cell);
+            SeparateTracks(routes, obstacles, false, cell);
+            if (cell <= 0f)
+                return;
+            SeparateTracks(routes, obstacles, true, cell);
+            SeparateTracks(routes, obstacles, false, cell);
         }
 
-        private static void SeparateTracks(IEnumerable<WorkRoute> routes, IReadOnlyList<Rect> obstacles, bool horizontal)
+        private static void SeparateTracks(IEnumerable<WorkRoute> routes, IReadOnlyList<Rect> obstacles, bool horizontal, float cell)
         {
-            var segments = new List<TrackSegment>();
-            foreach (var route in routes)
-            {
-                Clean(route.Points);
-                var points = route.Points;
-                for (var index = 0; index + 1 < points.Count; index++)
-                {
-                    var start = points[index];
-                    var end = points[index + 1];
-                    if (horizontal != Mathf.Abs(start.y - end.y) < 0.01f)
-                        continue;
-                    var pinned = route.Frozen || index == 0 || index + 2 == points.Count;
-                    segments.Add(horizontal
-                        ? new TrackSegment(route, index, start.y, Mathf.Min(start.x, end.x), Mathf.Max(start.x, end.x), pinned)
-                        : new TrackSegment(route, index, start.x, Mathf.Min(start.y, end.y), Mathf.Max(start.y, end.y), pinned));
-                }
-            }
+            var routeList = routes as IReadOnlyList<WorkRoute> ?? routes.ToList();
+            if (cell > 0f)
+                PlaceCellLanes(CollectSegments(routeList, horizontal, true), routeList, horizontal, cell);
+            else
+                PlaceNarrowLanes(CollectSegments(routeList, horizontal), obstacles, horizontal);
+            var segments = CollectSegments(routeList, horizontal);
 
             segments.Sort((left, right) =>
             {
@@ -1106,6 +1181,286 @@ namespace Architector.Editor
                 bundleMax = Mathf.Max(bundleMax, segment.max);
             }
             PlaceTracks(bundle, obstacles, horizontal);
+        }
+
+        private static List<TrackSegment> CollectSegments(IReadOnlyList<WorkRoute> routes, bool horizontal, bool movablePorts = false)
+        {
+            var segments = new List<TrackSegment>();
+            foreach (var route in routes)
+            {
+                Clean(route.Points);
+                var points = route.Points;
+                for (var index = 0; index + 1 < points.Count; index++)
+                {
+                    var start = points[index];
+                    var end = points[index + 1];
+                    if (horizontal != Mathf.Abs(start.y - end.y) < 0.01f)
+                        continue;
+                    var pinned = route.Frozen || !movablePorts && (index == 0 || index + 2 == points.Count);
+                    segments.Add(horizontal
+                        ? new TrackSegment(route, index, start.y, Mathf.Min(start.x, end.x), Mathf.Max(start.x, end.x), pinned)
+                        : new TrackSegment(route, index, start.x, Mathf.Min(start.y, end.y), Mathf.Max(start.y, end.y), pinned));
+                }
+            }
+            return segments;
+        }
+
+        private sealed class LaneUnit
+        {
+            public readonly List<TrackSegment> Members = new();
+            public readonly HashSet<Vector2> Junctions = new();
+            public float Min = float.PositiveInfinity;
+            public float Max = float.NegativeInfinity;
+            public bool Pinned;
+            public float Position => Members[0].position;
+        }
+
+        private static void PlaceCellLanes(List<TrackSegment> segments, IReadOnlyList<WorkRoute> routes, bool horizontal, float cell)
+        {
+            var touching = new Dictionary<Vector2, List<(WorkRoute route, int index)>>();
+            void Touch(Vector2 point, WorkRoute route, int index)
+            {
+                if (!touching.TryGetValue(point, out var list))
+                    touching.Add(point, list = new List<(WorkRoute route, int index)>());
+                list.Add((route, index));
+            }
+            foreach (var route in routes.Where(route => route.Points.Count > 1))
+            {
+                if (route.SourceJunction)
+                    Touch(route.Points[0], route, 0);
+                if (route.TargetJunction)
+                    Touch(route.Points[route.Points.Count - 1], route, route.Points.Count - 1);
+            }
+
+            var units = new List<LaneUnit>();
+            var unitByJunction = new Dictionary<Vector2, LaneUnit>();
+            foreach (var segment in segments)
+            {
+                var points = segment.route.Points;
+                var ends = new List<Vector2>(2);
+                if (segment.index == 0 && segment.route.SourceJunction)
+                    ends.Add(points[0]);
+                if (segment.index + 2 == points.Count && segment.route.TargetJunction)
+                    ends.Add(points[points.Count - 1]);
+                LaneUnit unit = null;
+                foreach (var end in ends)
+                {
+                    if (!unitByJunction.TryGetValue(end, out var existing) || existing == unit)
+                        continue;
+                    if (unit == null)
+                    {
+                        unit = existing;
+                        continue;
+                    }
+                    unit.Members.AddRange(existing.Members);
+                    unit.Min = Mathf.Min(unit.Min, existing.Min);
+                    unit.Max = Mathf.Max(unit.Max, existing.Max);
+                    unit.Pinned |= existing.Pinned;
+                    foreach (var junction in existing.Junctions)
+                    {
+                        unit.Junctions.Add(junction);
+                        unitByJunction[junction] = unit;
+                    }
+                    units.Remove(existing);
+                }
+                if (unit == null)
+                {
+                    unit = new LaneUnit();
+                    units.Add(unit);
+                }
+                unit.Members.Add(segment);
+                unit.Min = Mathf.Min(unit.Min, segment.min);
+                unit.Max = Mathf.Max(unit.Max, segment.max);
+                unit.Pinned |= segment.pinned;
+                foreach (var end in ends)
+                {
+                    unit.Junctions.Add(end);
+                    unitByJunction[end] = unit;
+                }
+            }
+
+            foreach (var column in units.GroupBy(unit => Mathf.FloorToInt(unit.Position / cell)).OrderBy(group => group.Key))
+            {
+                var low = column.Key * cell;
+                var high = low + cell;
+                var bundle = new List<LaneUnit>();
+                var bundleMax = float.NegativeInfinity;
+                foreach (var unit in column.OrderBy(unit => unit.Min))
+                {
+                    if (bundle.Count > 0 && unit.Min >= bundleMax - 0.5f)
+                    {
+                        PlaceUnitLanes(bundle, low, high, horizontal, touching);
+                        bundle = new List<LaneUnit>();
+                        bundleMax = float.NegativeInfinity;
+                    }
+                    bundle.Add(unit);
+                    bundleMax = Mathf.Max(bundleMax, unit.Max);
+                }
+                PlaceUnitLanes(bundle, low, high, horizontal, touching);
+            }
+        }
+
+        private static void PlaceUnitLanes(
+            List<LaneUnit> bundle,
+            float low,
+            float high,
+            bool horizontal,
+            IReadOnlyDictionary<Vector2, List<(WorkRoute route, int index)>> touching)
+        {
+            if (bundle.Count == 0)
+                return;
+            bundle.Sort((left, right) =>
+            {
+                var position = left.Position.CompareTo(right.Position);
+                if (position != 0)
+                    return position;
+                var pinned = right.Pinned.CompareTo(left.Pinned);
+                return pinned != 0 ? pinned : CompareTracks(left.Members[0], right.Members[0], horizontal);
+            });
+            var spacing = Mathf.Min(LaneSpacing, (high - low) / (bundle.Count + 1));
+            var first = (low + high) * 0.5f - spacing * (bundle.Count - 1) * 0.5f;
+            var tracks = new float[bundle.Count];
+            var lows = new float[bundle.Count];
+            var highs = new float[bundle.Count];
+            for (var index = 0; index < bundle.Count; index++)
+            {
+                var unit = bundle[index];
+                tracks[index] = first + spacing * index;
+                if (unit.Pinned)
+                {
+                    lows[index] = highs[index] = unit.Position;
+                    continue;
+                }
+                lows[index] = low;
+                highs[index] = high;
+                foreach (var member in unit.Members)
+                {
+                    TrackBounds(member, horizontal, low, high, out var memberLow, out var memberHigh);
+                    lows[index] = Mathf.Max(lows[index], memberLow);
+                    highs[index] = Mathf.Min(highs[index], memberHigh);
+                }
+                foreach (var junction in unit.Junctions)
+                    foreach (var (route, at) in touching[junction])
+                    {
+                        var neighbor = route.Points[at == 0 ? 1 : at - 1];
+                        if (Mathf.Abs(Across(neighbor, horizontal) - Across(route.Points[at], horizontal)) > 0.01f)
+                            Limit(Across(neighbor, horizontal), unit.Position, MinimumSegment, ref lows[index], ref highs[index]);
+                    }
+                if (lows[index] > highs[index])
+                    lows[index] = highs[index] = unit.Position;
+            }
+            Spread(tracks, lows, highs, spacing);
+            for (var index = 0; index < bundle.Count; index++)
+            {
+                var unit = bundle[index];
+                if (unit.Pinned)
+                    continue;
+                foreach (var segment in unit.Members)
+                {
+                    var points = segment.route.Points;
+                    points[segment.index] = WithAcross(points[segment.index], tracks[index], horizontal);
+                    points[segment.index + 1] = WithAcross(points[segment.index + 1], tracks[index], horizontal);
+                }
+                foreach (var junction in unit.Junctions)
+                    foreach (var (route, at) in touching[junction])
+                        route.Points[at] = WithAcross(route.Points[at], tracks[index], horizontal);
+            }
+        }
+
+        private static void PlaceNarrowLanes(List<TrackSegment> segments, IReadOnlyList<Rect> obstacles, bool horizontal)
+        {
+            var narrow = new List<(TrackSegment segment, float low, float high)>();
+            foreach (var segment in segments)
+            {
+                var (low, high) = Corridor(segment.position, segment.min, segment.max, obstacles, horizontal);
+                if (!float.IsInfinity(low) && !float.IsInfinity(high) && high - low <= NarrowCorridor)
+                    narrow.Add((segment, low, high));
+            }
+            narrow.Sort((left, right) =>
+            {
+                var low = left.low.CompareTo(right.low);
+                return low != 0 ? low : left.segment.min.CompareTo(right.segment.min);
+            });
+            var group = new int[narrow.Count];
+            for (var index = 0; index < group.Length; index++)
+                group[index] = index;
+            int Root(int index)
+            {
+                while (group[index] != index)
+                    index = group[index] = group[group[index]];
+                return index;
+            }
+            for (var first = 0; first < narrow.Count; first++)
+                for (var second = first + 1; second < narrow.Count; second++)
+                {
+                    var left = narrow[first];
+                    var right = narrow[second];
+                    if (right.low >= left.high)
+                        break;
+                    if (right.segment.min < left.segment.max - 0.5f && left.segment.min < right.segment.max - 0.5f)
+                        group[Root(second)] = Root(first);
+                }
+            foreach (var bundle in Enumerable.Range(0, narrow.Count).GroupBy(Root).OrderBy(members => members.Key))
+                PlaceLanes(bundle.Select(index => narrow[index]).ToList(), horizontal);
+        }
+
+        private static (float low, float high) Corridor(float position, float min, float max, IReadOnlyList<Rect> obstacles, bool horizontal)
+        {
+            var low = float.NegativeInfinity;
+            var high = float.PositiveInfinity;
+            foreach (var rect in obstacles)
+            {
+                var alongMin = (horizontal ? rect.xMin : rect.yMin) - NodeMargin;
+                var alongMax = (horizontal ? rect.xMax : rect.yMax) + NodeMargin;
+                if (max <= alongMin || min >= alongMax)
+                    continue;
+                var acrossMin = (horizontal ? rect.yMin : rect.xMin) - NodeMargin;
+                var acrossMax = (horizontal ? rect.yMax : rect.xMax) + NodeMargin;
+                if (acrossMax <= position)
+                    low = Mathf.Max(low, acrossMax);
+                else if (acrossMin >= position)
+                    high = Mathf.Min(high, acrossMin);
+            }
+            return (low, high);
+        }
+
+        private static void PlaceLanes(List<(TrackSegment segment, float low, float high)> bundle, bool horizontal)
+        {
+            bundle.Sort((left, right) =>
+            {
+                var position = left.segment.position.CompareTo(right.segment.position);
+                if (position != 0)
+                    return position;
+                var pinned = right.segment.pinned.CompareTo(left.segment.pinned);
+                return pinned != 0 ? pinned : CompareTracks(left.segment, right.segment, horizontal);
+            });
+            var low = bundle.Max(item => item.low);
+            var high = bundle.Min(item => item.high);
+            if (low >= high)
+            {
+                low = bundle.Min(item => item.low);
+                high = bundle.Max(item => item.high);
+            }
+            var spacing = Mathf.Min(LaneSpacing, (high - low) / (bundle.Count + 1));
+            var first = (low + high) * 0.5f - spacing * (bundle.Count - 1) * 0.5f;
+            var tracks = new float[bundle.Count];
+            var lows = new float[bundle.Count];
+            var highs = new float[bundle.Count];
+            for (var index = 0; index < bundle.Count; index++)
+            {
+                tracks[index] = first + spacing * index;
+                TrackBounds(bundle[index].segment, horizontal, bundle[index].low, bundle[index].high, out lows[index], out highs[index]);
+            }
+            Spread(tracks, lows, highs, spacing);
+            for (var index = 0; index < bundle.Count; index++)
+            {
+                var segment = bundle[index].segment;
+                if (segment.pinned)
+                    continue;
+                var points = segment.route.Points;
+                points[segment.index] = WithAcross(points[segment.index], tracks[index], horizontal);
+                points[segment.index + 1] = WithAcross(points[segment.index + 1], tracks[index], horizontal);
+            }
         }
 
         private static void PlaceTracks(List<TrackSegment> bundle, IReadOnlyList<Rect> obstacles, bool horizontal)
@@ -1144,7 +1499,7 @@ namespace Architector.Editor
                     high = Mathf.Min(high, acrossMin);
             }
 
-            var spacing = TrackSpacing;
+            var spacing = LaneSpacing;
             var total = spacing * (bundle.Count - 1);
             if (high - low < total)
             {
@@ -1185,8 +1540,10 @@ namespace Architector.Editor
             high = corridorHigh;
             var beforeLength = segment.index == 1 && !segment.route.SourceJunction ? Clearance : MinimumSegment;
             var afterLength = segment.index + 3 == points.Count && !segment.route.TargetJunction ? Clearance : MinimumSegment;
-            Limit(Across(points[segment.index - 1], horizontal), segment.position, beforeLength, ref low, ref high);
-            Limit(Across(points[segment.index + 2], horizontal), segment.position, afterLength, ref low, ref high);
+            if (segment.index > 0)
+                Limit(Across(points[segment.index - 1], horizontal), segment.position, beforeLength, ref low, ref high);
+            if (segment.index + 2 < points.Count)
+                Limit(Across(points[segment.index + 2], horizontal), segment.position, afterLength, ref low, ref high);
             if (low > high)
                 low = high = segment.position;
         }

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
@@ -924,6 +925,102 @@ namespace Architector.Editor.Tests
                 thirdLayer, thirdNode, firstLayer, firstNode, ArchitectorEdgeKinds.Dependency));
             Assert.DoesNotThrow(() => repository.CreateCrossLayerEdge(
                 thirdLayer, thirdNode, firstLayer, firstNode, ArchitectorEdgeKinds.Event));
+        }
+
+        [Test]
+        public void RejectedDependencyCycleNamesItsPath()
+        {
+            var firstLayer = repository.CreateLayer(string.Empty, "First");
+            var secondLayer = repository.CreateLayer(string.Empty, "Second");
+            var firstNode = repository.CreateEmptyNode(firstLayer, 0f, 0f);
+            var secondNode = repository.CreateEmptyNode(secondLayer, 0f, 0f);
+            repository.CreateCrossLayerEdge(firstLayer, firstNode, secondLayer, secondNode, ArchitectorEdgeKinds.Dependency);
+
+            var exception = Assert.Throws<ArchitectorDataException>(() => repository.CreateCrossLayerEdge(
+                secondLayer, secondNode, firstLayer, firstNode, ArchitectorEdgeKinds.Dependency));
+
+            Assert.That(exception.Message, Does.Contain("Cycle: First/New Node → Second/New Node → First/New Node"));
+            Assert.That(repository.FindDependencyCycles(), Is.Empty);
+        }
+
+        [Test]
+        public void ReportedDependencyCyclesAreSavedWithinAndAcrossLayersAndCanBeApproved()
+        {
+            repository.UpdateSettings("Report Cycles", settings =>
+                settings.rules.dependencyCycles = ArchitectorDependencyCyclePolicy.Report);
+            var localLayer = repository.CreateLayer(string.Empty, "Local");
+            var localFirst = repository.CreateEmptyNode(localLayer, 0f, 0f);
+            var localSecond = repository.CreateEmptyNode(localLayer, 600f, 0f);
+            repository.CreateEdge(localLayer, localFirst, localSecond, ArchitectorEdgeKinds.Dependency, "left");
+            repository.CreateEdge(localLayer, localSecond, localFirst, ArchitectorEdgeKinds.Dependency, "right");
+            var firstLayer = repository.CreateLayer(string.Empty, "First");
+            var secondLayer = repository.CreateLayer(string.Empty, "Second");
+            var thirdLayer = repository.CreateLayer(string.Empty, "Third");
+            var firstNode = repository.CreateEmptyNode(firstLayer, 0f, 0f);
+            var secondNode = repository.CreateEmptyNode(secondLayer, 0f, 0f);
+            var thirdNode = repository.CreateEmptyNode(thirdLayer, 0f, 0f);
+            repository.CreateCrossLayerEdge(firstLayer, firstNode, secondLayer, secondNode, ArchitectorEdgeKinds.Dependency);
+            repository.CreateCrossLayerEdge(secondLayer, secondNode, thirdLayer, thirdNode, ArchitectorEdgeKinds.Dependency);
+            var closing = repository.CreateCrossLayerEdge(thirdLayer, thirdNode, firstLayer, firstNode, ArchitectorEdgeKinds.Dependency);
+
+            var cycles = repository.FindDependencyCycles();
+            Assert.That(cycles.Count, Is.EqualTo(2));
+            var local = cycles.Single(cycle => cycle.LayerIds.Count == 1);
+            var crossing = cycles.Single(cycle => cycle.LayerIds.Count == 3);
+            Assert.That(local.Path.Count, Is.EqualTo(2));
+            Assert.That(crossing.Members.Count, Is.EqualTo(3));
+            Assert.That(crossing.Path.Count, Is.EqualTo(3));
+            Assert.That(crossing.Path.Select(edge => edge.id), Does.Contain(closing));
+            Assert.That(repository.DescribeDependencyCycle(crossing), Does.Contain("Third/New Node → First/New Node"));
+
+            repository.ApproveLayers(new[] { localLayer, firstLayer, secondLayer, thirdLayer });
+            var reloaded = new ArchitectorRepository(new ArchitectorPaths(temporaryRoot));
+            Assert.That(reloaded.FindDependencyCycles().Count, Is.EqualTo(2));
+            Assert.That(reloaded.GetLayerApprovalStatus(firstLayer).State, Is.EqualTo(ArchitectorApprovalStates.Approved));
+        }
+
+        [Test]
+        public void RejectRuleReturnsOnlyAfterTheCyclesAreRemoved()
+        {
+            repository.UpdateSettings("Report Cycles", settings =>
+                settings.rules.dependencyCycles = ArchitectorDependencyCyclePolicy.Report);
+            var layerId = repository.CreateLayer(string.Empty, "Local");
+            var first = repository.CreateEmptyNode(layerId, 0f, 0f);
+            var second = repository.CreateEmptyNode(layerId, 600f, 0f);
+            repository.CreateEdge(layerId, first, second, ArchitectorEdgeKinds.Dependency, "left");
+            var back = repository.CreateEdge(layerId, second, first, ArchitectorEdgeKinds.Dependency, "right");
+
+            Assert.Throws<ArchitectorDataException>(() => repository.UpdateSettings("Reject Cycles", settings =>
+                settings.rules.dependencyCycles = ArchitectorDependencyCyclePolicy.Reject));
+            Assert.That(repository.Settings.rules.dependencyCycles, Is.EqualTo(ArchitectorDependencyCyclePolicy.Report));
+
+            var settingsPath = Path.Combine(temporaryRoot, "Architector", ArchitectorPaths.SettingsFileName);
+            var reported = File.ReadAllText(settingsPath);
+            var rejected = JObject.Parse(reported);
+            rejected["rules"]["dependencyCycles"] = 0;
+            File.WriteAllText(settingsPath, rejected.ToString());
+            Assert.Throws<ArchitectorDataException>(() => repository.ValidateExternalChanges());
+            File.WriteAllText(settingsPath, reported);
+
+            repository.DeleteEdge(layerId, back);
+            repository.UpdateSettings("Reject Cycles", settings =>
+                settings.rules.dependencyCycles = ArchitectorDependencyCyclePolicy.Reject);
+            Assert.That(repository.Settings.rules.dependencyCycles, Is.EqualTo(ArchitectorDependencyCyclePolicy.Reject));
+            Assert.Throws<ArchitectorDataException>(() => repository.CreateEdge(
+                layerId, second, first, ArchitectorEdgeKinds.Dependency, "right"));
+        }
+
+        [Test]
+        public void SettingsWithoutRulesKeepRejectingCycles()
+        {
+            var settingsPath = Path.Combine(temporaryRoot, "Architector", ArchitectorPaths.SettingsFileName);
+            var settings = JObject.Parse(File.ReadAllText(settingsPath));
+            Assert.That(settings.Remove("rules"), Is.True);
+            File.WriteAllText(settingsPath, settings.ToString());
+
+            var reloaded = new ArchitectorRepository(new ArchitectorPaths(temporaryRoot));
+
+            Assert.That(reloaded.Settings.rules.dependencyCycles, Is.EqualTo(ArchitectorDependencyCyclePolicy.Reject));
         }
 
         [Test]

@@ -16,12 +16,13 @@ namespace Architector.Editor
             IReadOnlyList<ArchitectorRouteRequest> requests,
             float cornerRadius,
             float bridgeRadius,
-            ArchitectorRelationshipMerging merging = ArchitectorRelationshipMerging.Off)
+            ArchitectorRelationshipMerging merging = ArchitectorRelationshipMerging.Off,
+            float cellSize = 0f)
         {
             var token = cancellation.Token;
             task = Task.Run(() =>
             {
-                var router = new ArchitectorEdgeRouter();
+                var router = new ArchitectorEdgeRouter { CellSize = cellSize };
                 var network = merging == ArchitectorRelationshipMerging.Off ? null : router.RouteMerged(nodes, requests, merging, token);
                 var routes = network?.Routes ?? router.Route(nodes, requests, true, token);
                 var drawn = network == null ? ArchitectorEdgeRouter.Decorate(routes, cornerRadius, bridgeRadius) : network.Decorate(cornerRadius, bridgeRadius);

@@ -55,7 +55,7 @@ namespace Architector.Editor.Agents
                     var stale = CheckRevision(repository, parameters.expected_revision, true);
                     if (stale != null)
                         return stale;
-                    var token = aiWork.Begin(parameters.work_label, repository.Revision);
+                    var token = aiWork.Begin(parameters.work_label, repository.Revision, ExistingEntries(repository));
                     return WorkSessionSuccess("AI work session started; Architector windows are locked.", repository, aiWork, token);
                 }
                 if (action == "end_work")
@@ -137,6 +137,25 @@ namespace Architector.Editor.Agents
                     var centers = @params["centers"]?.Values<string>().ToArray();
                     repository.ArrangeNodes(layer.id, nodes, centers);
                     return ArchitectorAgentResult.Ok("Architector layer arranged.", new { revision = repository.Revision, layer = layer.id });
+                }
+                if (action == "arrange_changed_layers")
+                {
+                    var stale = CheckRevision(repository, parameters.expected_revision, true);
+                    if (stale != null)
+                        return stale;
+                    if (!aiWork.IsActive)
+                        return ArchitectorAgentResult.Fail("work_session_required", new
+                        {
+                            message = "arrange_changed_layers arranges what this work session added; call it with the work_token before end_work."
+                        });
+                    aiWork.RequireMutationToken(parameters.work_token);
+                    var (arranged, skipped) = ArrangeChangedLayers(repository, aiWork.KnownEntries);
+                    return ArchitectorAgentResult.Ok("Architector layers changed in this work session arranged.", new
+                    {
+                        revision = repository.Revision,
+                        arranged,
+                        skipped
+                    });
                 }
                 if (action == "relink_node")
                 {
@@ -231,7 +250,7 @@ namespace Architector.Editor.Agents
                 {
                     return ArchitectorAgentResult.Fail("unsupported_action", new
                     {
-                        message = "Valid actions: begin_work, resume_work, end_work, approve_layers, revoke_approvals, revert_to_approved, dry_run, apply, dry_run_plan, apply_plan, arrange_layer, relink_node, validate_external, reload_external."
+                        message = "Valid actions: begin_work, resume_work, end_work, approve_layers, revoke_approvals, revert_to_approved, dry_run, apply, dry_run_plan, apply_plan, arrange_layer, arrange_changed_layers, relink_node, validate_external, reload_external."
                     });
                 }
 
@@ -317,6 +336,75 @@ namespace Architector.Editor.Agents
                 revision = repository.Revision,
                 layers = layerIds
             });
+        }
+
+        private static IEnumerable<string> ExistingEntries(ArchitectorRepository repository)
+        {
+            foreach (var layer in repository.Project.layers)
+            {
+                yield return layer.id + "/";
+                if (repository.HasLayerLoadError(layer.id))
+                    continue;
+                foreach (var node in repository.LoadLayer(layer.id).semantic.nodes)
+                    yield return layer.id + "/" + node.id;
+            }
+        }
+
+        private static (List<object> arranged, List<object> skipped) ArrangeChangedLayers(
+            ArchitectorRepository repository,
+            IReadOnlyCollection<string> knownEntries)
+        {
+            var known = new HashSet<string>(knownEntries, StringComparer.Ordinal);
+            var arranged = new List<object>();
+            var skipped = new List<object>();
+            foreach (var layer in repository.Project.layers.ToArray())
+            {
+                if (repository.HasLayerLoadError(layer.id))
+                    continue;
+                var newLayer = !known.Contains(layer.id + "/");
+                var added = repository.LoadLayer(layer.id).semantic.nodes
+                    .Where(node => !known.Contains(layer.id + "/" + node.id))
+                    .Select(node => node.id)
+                    .ToArray();
+                if (!newLayer && added.Length == 0)
+                    continue;
+                try
+                {
+                    if (newLayer)
+                        repository.ArrangeNodes(layer.id);
+                    else
+                        PlaceNearNeighbors(repository, layer.id, added);
+                    arranged.Add(new { layer = layer.id, name = layer.name, whole_layer = newLayer, nodes = added.Length });
+                }
+                catch (ArchitectorDataException exception)
+                {
+                    skipped.Add(new { layer = layer.id, name = layer.name, reason = exception.Message });
+                }
+            }
+            return (arranged, skipped);
+        }
+
+        private static void PlaceNearNeighbors(ArchitectorRepository repository, string layerId, IReadOnlyCollection<string> added)
+        {
+            foreach (var nodeId in added)
+            {
+                var view = repository.LoadLayerView(layerId);
+                var layouts = view.layout.nodes.ToDictionary(node => node.nodeId, StringComparer.Ordinal);
+                if (!layouts.TryGetValue(nodeId, out var own))
+                    continue;
+                var neighbors = view.semantic.edges
+                    .Where(edge => edge.sourceNodeId == nodeId || edge.targetNodeId == nodeId)
+                    .Select(edge => edge.sourceNodeId == nodeId ? edge.targetNodeId : edge.sourceNodeId)
+                    .Where(id => id != nodeId && layouts.ContainsKey(id) && !added.Contains(id))
+                    .Distinct(StringComparer.Ordinal)
+                    .Select(id => layouts[id])
+                    .ToArray();
+                if (neighbors.Length == 0)
+                    continue;
+                var x = neighbors.Average(node => node.x + node.width * 0.5f) - own.width * 0.5f;
+                var y = neighbors.Average(node => node.y + node.height * 0.5f) - own.height * 0.5f;
+                repository.MoveNode(layerId, nodeId, x, y);
+            }
         }
 
         private static ArchitectorAgentResult CheckRevision(ArchitectorRepository repository, int? expectedRevision, bool required)

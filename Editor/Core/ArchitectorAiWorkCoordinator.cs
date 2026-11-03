@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using UnityEditor;
 
 namespace Architector.Editor
@@ -15,6 +17,7 @@ namespace Architector.Editor
         private string workToken = string.Empty;
         private string label = string.Empty;
         private int startedRevision = -1;
+        private string[] knownEntries = Array.Empty<string>();
         private bool workspacesUnlockedByUser;
         private bool settingsUnlockedByUser;
         private bool awaitingAgentResume;
@@ -45,6 +48,7 @@ namespace Architector.Editor
         public string WorkToken => workToken;
         public string Label => label;
         public int StartedRevision => startedRevision;
+        public IReadOnlyCollection<string> KnownEntries => knownEntries;
         public bool LocksWindows => locksWindows?.Invoke() ?? true;
         public bool WorkspacesLocked => IsActive && LocksWindows && !workspacesUnlockedByUser;
         public bool SettingsLocked => IsActive && LocksWindows && !settingsUnlockedByUser;
@@ -56,13 +60,14 @@ namespace Architector.Editor
         public bool WorkspacesUnlockedByUser => IsActive && workspacesUnlockedByUser;
         public bool SettingsUnlockedByUser => IsActive && settingsUnlockedByUser;
 
-        public string Begin(string requestedLabel, int repositoryRevision = -1)
+        public string Begin(string requestedLabel, int repositoryRevision = -1, IEnumerable<string> existingEntries = null)
         {
             if (IsActive)
                 throw new ArchitectorDataException("An AI work session is already active.");
             workToken = $"ai-work_{Guid.NewGuid():N}";
             label = string.IsNullOrWhiteSpace(requestedLabel) ? "AI Working" : requestedLabel.Trim();
             startedRevision = repositoryRevision;
+            knownEntries = existingEntries?.ToArray() ?? Array.Empty<string>();
             workspacesUnlockedByUser = false;
             settingsUnlockedByUser = false;
             awaitingAgentResume = false;
@@ -75,6 +80,7 @@ namespace Architector.Editor
                 workToken = string.Empty;
                 label = string.Empty;
                 startedRevision = -1;
+                knownEntries = Array.Empty<string>();
                 throw;
             }
             Changed?.Invoke();
@@ -141,6 +147,7 @@ namespace Architector.Editor
         private string TokenKey => persistenceKey + ".Token";
         private string LabelKey => persistenceKey + ".Label";
         private string RevisionKey => persistenceKey + ".Revision";
+        private string EntriesKey => persistenceKey + ".Entries";
 
         private void RequireToken(string token, bool confirmsAgentResume)
         {
@@ -160,6 +167,7 @@ namespace Architector.Editor
             workToken = string.Empty;
             label = string.Empty;
             startedRevision = -1;
+            knownEntries = Array.Empty<string>();
             workspacesUnlockedByUser = false;
             settingsUnlockedByUser = false;
             awaitingAgentResume = false;
@@ -176,12 +184,14 @@ namespace Architector.Editor
                 {
                     workToken = workToken,
                     label = label,
-                    startedRevision = startedRevision
+                    startedRevision = startedRevision,
+                    knownEntries = knownEntries.ToList()
                 });
             }
             SessionState.SetString(TokenKey, workToken);
             SessionState.SetString(LabelKey, label);
             SessionState.SetInt(RevisionKey, startedRevision);
+            SessionState.SetString(EntriesKey, string.Join("\n", knownEntries));
         }
 
         private void RestorePersistedState()
@@ -194,15 +204,19 @@ namespace Architector.Editor
                 workToken = marker.workToken.Trim();
                 label = string.IsNullOrWhiteSpace(marker.label) ? "AI Working" : marker.label.Trim();
                 startedRevision = marker.startedRevision;
+                knownEntries = marker.knownEntries?.ToArray() ?? Array.Empty<string>();
                 SessionState.SetString(TokenKey, workToken);
                 SessionState.SetString(LabelKey, label);
                 SessionState.SetInt(RevisionKey, startedRevision);
+                SessionState.SetString(EntriesKey, string.Join("\n", knownEntries));
                 return;
             }
 
             workToken = SessionState.GetString(TokenKey, string.Empty);
             label = SessionState.GetString(LabelKey, string.Empty);
             startedRevision = SessionState.GetInt(RevisionKey, -1);
+            knownEntries = SessionState.GetString(EntriesKey, string.Empty)
+                .Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
         }
 
         private void ClearPersistedState()
@@ -214,6 +228,7 @@ namespace Architector.Editor
             SessionState.EraseString(TokenKey);
             SessionState.EraseString(LabelKey);
             SessionState.EraseInt(RevisionKey);
+            SessionState.EraseString(EntriesKey);
         }
 
         [Serializable]
@@ -223,6 +238,7 @@ namespace Architector.Editor
             public string workToken = string.Empty;
             public string label = string.Empty;
             public int startedRevision = -1;
+            public List<string> knownEntries = new();
         }
     }
 }

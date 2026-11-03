@@ -25,6 +25,8 @@ namespace Architector.Editor
         private Dictionary<string, string> diskFiles = new(StringComparer.Ordinal);
         private Dictionary<string, ArchitectorFileStamp> diskStamps = new(StringComparer.Ordinal);
         private Dictionary<string, ArchitectorFileStamp> rejectedDiskStamps;
+        private IReadOnlyList<ArchitectorDependencyCycle> dependencyCycles = Array.Empty<ArchitectorDependencyCycle>();
+        private int dependencyCyclesRevision = -1;
 
         public ArchitectorRepository(ArchitectorPaths paths)
         {
@@ -1642,8 +1644,29 @@ namespace Architector.Editor
             var nextSettings = ArchitectorJson.Clone(Settings);
             mutate(nextSettings);
             ArchitectorValidation.Validate(nextSettings);
+            if (nextSettings.rules.dependencyCycles == ArchitectorDependencyCyclePolicy.Reject
+                && Settings.rules.dependencyCycles != ArchitectorDependencyCyclePolicy.Reject)
+            {
+                var cycle = FindDependencyCycles().FirstOrDefault();
+                if (cycle != null)
+                    throw new ArchitectorDataException(
+                        $"Dependency cycles cannot be rejected while the graph contains one: {DescribeDependencyCycle(cycle)}. Remove the cycles first.");
+            }
             Commit(name, null, null, nextSettings, false, notifyWhenUnchanged: true);
         }
+
+        public IReadOnlyList<ArchitectorDependencyCycle> FindDependencyCycles()
+        {
+            if (dependencyCyclesRevision != SemanticRevision)
+            {
+                dependencyCycles = ArchitectorDependencyCycles.Find(Project, layerDocuments);
+                dependencyCyclesRevision = SemanticRevision;
+            }
+            return dependencyCycles;
+        }
+
+        public string DescribeDependencyCycle(ArchitectorDependencyCycle cycle) =>
+            cycle.Describe((layerId, nodeId) => ArchitectorDependencyCycles.Caption(Project, layerDocuments, layerId, nodeId));
 
         private void ExecuteProjectChange(string name, Action<ArchitectorProjectDocument> mutate)
         {

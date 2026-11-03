@@ -6,17 +6,17 @@ namespace Architector.Editor.Mcp
 {
     [McpForUnityTool(
         "architector_edit",
-        Description = "Manage an AI work session, approval, layout, or dry-run/apply canonical documents and compact semantic plans with revision checks and one Undo operation. Actions: begin_work, resume_work, end_work, approve_layers, revoke_approvals, revert_to_approved, dry_run, apply, dry_run_plan, apply_plan, arrange_layer, validate_external, reload_external.",
+        Description = "Manage an AI work session, approval, layout, or dry-run/apply canonical documents and compact semantic plans with revision checks and one Undo operation. Actions: begin_work, resume_work, end_work, approve_layers, revoke_approvals, revert_to_approved, dry_run, apply, dry_run_plan, apply_plan, arrange_layer, arrange_changed_layers, validate_external, reload_external.",
         AutoRegister = true,
         Group = "core")]
     public static class ArchitectorMcpEditTool
     {
         public sealed class Parameters
         {
-            [ToolParameter("Edit action: begin_work, resume_work, end_work, approve_layers, revoke_approvals, dry_run, apply, dry_run_plan, apply_plan, arrange_layer, validate_external, or reload_external.")]
+            [ToolParameter("Edit action: begin_work, resume_work, end_work, approve_layers, revoke_approvals, dry_run, apply, dry_run_plan, apply_plan, arrange_layer, arrange_changed_layers, validate_external, or reload_external.")]
             public string action { get; set; }
 
-            [ToolParameter("Expected repository revision. Required for apply, arrange_layer and reload_external.", Required = false)]
+            [ToolParameter("Expected repository revision. Required for apply, arrange_layer, arrange_changed_layers and reload_external.", Required = false)]
             public int? expected_revision { get; set; }
 
             [ToolParameter("Layer ID or Explorer path for arrange_layer.", Required = false)]

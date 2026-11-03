@@ -137,6 +137,144 @@ namespace Architector.Editor.Tests
             Assert.That(network.Routes.Keys, Is.EquivalentTo(requests.Select(request => request.Id)));
         }
 
+        [Test]
+        public void OutgoingRelationshipsShareTheSourcePortAndSplitAtAJunction()
+        {
+            var requests = new[] { "a", "b", "c" }
+                .Select(id => new ArchitectorRouteRequest(id, "hub", id, "left", "right", ArchitectorEdgeKinds.DataFlow)).ToArray();
+            var nodes = Nodes();
+
+            var network = new ArchitectorEdgeRouter().RouteMerged(nodes, requests, ArchitectorRelationshipMerging.Maximum);
+
+            Assert.That(network.Routes.Values.Select(route => route[0]).Distinct().Count(), Is.EqualTo(1));
+            Assert.That(network.Strokes.Count(stroke => stroke.Arrow), Is.EqualTo(3));
+            Assert.That(network.Strokes.Count(stroke => stroke.Points[0] == network.Routes["a"][0]), Is.EqualTo(1));
+            Assert.That(network.Strokes.Any(stroke => stroke.JunctionAtStart && network.IsJunction(stroke, _ => true)), Is.True);
+            AssertNoCollinearOverlap(network);
+            AssertHonest(network, requests);
+        }
+
+        [Test]
+        public void ABusSharesOneTrunkWhenEverySourceReachesEveryTarget()
+        {
+            var nodes = new Dictionary<string, Rect>
+            {
+                ["s1"] = new(0f, 0f, 240f, 160f),
+                ["s2"] = new(0f, 480f, 240f, 160f),
+                ["t1"] = new(1200f, 0f, 240f, 160f),
+                ["t2"] = new(1200f, 480f, 240f, 160f)
+            };
+            var requests = new[] { ("s1", "t1"), ("s1", "t2"), ("s2", "t1"), ("s2", "t2") }
+                .Select(pair => new ArchitectorRouteRequest(pair.Item1 + pair.Item2, pair.Item1, pair.Item2, "right", "left")).ToArray();
+
+            var network = new ArchitectorEdgeRouter().RouteMerged(nodes, requests, ArchitectorRelationshipMerging.Maximum);
+
+            Assert.That(network.Strokes.Any(stroke => stroke.EdgeIds.Length == 4), Is.True);
+            Assert.That(network.Strokes.Count(stroke => stroke.Arrow), Is.EqualTo(2));
+            Assert.That(network.Routes.Keys, Is.EquivalentTo(requests.Select(request => request.Id)));
+            AssertHonest(network, requests);
+        }
+
+        [Test]
+        public void RelationshipsWithoutACommonEndNeverShareAStroke()
+        {
+            var nodes = new Dictionary<string, Rect>
+            {
+                ["s1"] = new(0f, 0f, 240f, 160f),
+                ["s2"] = new(0f, 240f, 240f, 160f),
+                ["t1"] = new(1200f, 0f, 240f, 160f),
+                ["t2"] = new(1200f, 240f, 240f, 160f)
+            };
+            var requests = new[]
+            {
+                new ArchitectorRouteRequest("first", "s1", "t1", "right", "left"),
+                new ArchitectorRouteRequest("second", "s2", "t2", "right", "left")
+            };
+
+            var network = new ArchitectorEdgeRouter().RouteMerged(nodes, requests, ArchitectorRelationshipMerging.Maximum);
+
+            Assert.That(network.Strokes.All(stroke => stroke.EdgeIds.Length == 1), Is.True);
+            Assert.That(network.Strokes.Any(stroke => stroke.JunctionAtStart), Is.False);
+        }
+
+        [TestCase(1)]
+        [TestCase(2)]
+        [TestCase(3)]
+        [TestCase(4)]
+        [TestCase(5)]
+        [TestCase(6)]
+        [TestCase(7)]
+        [TestCase(8)]
+        public void SharedStrokesNeverSuggestARelationshipThatDoesNotExist(int seed)
+        {
+            var random = new System.Random(seed);
+            var nodes = new Dictionary<string, Rect>();
+            for (var index = 0; index < 9; index++)
+                nodes["n" + index] = new Rect(index % 3 * 520f, index / 3 * 360f, 240f, 160f);
+            var requests = new List<ArchitectorRouteRequest>();
+            foreach (var source in nodes.Keys)
+                foreach (var target in nodes.Keys)
+                    if (source != target && random.NextDouble() < 0.3)
+                        requests.Add(new ArchitectorRouteRequest(source + ">" + target, source, target, "auto", "auto"));
+
+            var network = new ArchitectorEdgeRouter().RouteMerged(nodes, requests, ArchitectorRelationshipMerging.Maximum);
+
+            Assert.That(network.Routes.Keys, Is.EquivalentTo(requests.Select(request => request.Id)));
+            AssertHonest(network, requests);
+        }
+
+        [TestCase(1)]
+        [TestCase(2)]
+        [TestCase(3)]
+        [TestCase(4)]
+        [TestCase(5)]
+        [TestCase(6)]
+        public void CellRoutingKeepsMergedLinesApartAndConnected(int seed)
+        {
+            var random = new System.Random(seed);
+            var nodes = new Dictionary<string, Rect>();
+            for (var index = 0; index < 9; index++)
+                nodes["n" + index] = new Rect(index % 3 * 450f, index / 3 * 300f, 225f, 150f);
+            var requests = new List<ArchitectorRouteRequest>();
+            foreach (var source in nodes.Keys)
+                foreach (var target in nodes.Keys)
+                    if (source != target && random.NextDouble() < 0.3)
+                        requests.Add(new ArchitectorRouteRequest(source + ">" + target, source, target, "auto", "auto"));
+
+            var network = new ArchitectorEdgeRouter { CellSize = 75f }.RouteMerged(nodes, requests, ArchitectorRelationshipMerging.Maximum);
+
+            Assert.That(network.Routes.Keys, Is.EquivalentTo(requests.Select(request => request.Id)));
+            foreach (var request in requests)
+            {
+                var route = network.Routes[request.Id];
+                Assert.That(OnBorder(nodes[request.SourceNodeId], route[0]), Is.True, request.Id + " start");
+                Assert.That(OnBorder(nodes[request.TargetNodeId], route[route.Count - 1]), Is.True, request.Id + " end");
+            }
+            AssertHonest(network, requests);
+            AssertNoCollinearOverlap(network);
+        }
+
+        private static bool OnBorder(Rect rect, Vector2 point)
+        {
+            var inside = point.x >= rect.xMin - 0.01f && point.x <= rect.xMax + 0.01f && point.y >= rect.yMin - 0.01f && point.y <= rect.yMax + 0.01f;
+            var onEdge = Mathf.Abs(point.x - rect.xMin) < 0.01f || Mathf.Abs(point.x - rect.xMax) < 0.01f
+                         || Mathf.Abs(point.y - rect.yMin) < 0.01f || Mathf.Abs(point.y - rect.yMax) < 0.01f;
+            return inside && onEdge;
+        }
+
+        private static void AssertHonest(ArchitectorRouteNetwork network, IReadOnlyList<ArchitectorRouteRequest> requests)
+        {
+            var byId = requests.ToDictionary(request => request.Id);
+            foreach (var stroke in network.Strokes.Where(stroke => stroke.EdgeIds.Length > 1))
+            {
+                var carried = stroke.EdgeIds.Select(id => byId[id]).ToArray();
+                var pairs = carried.Select(request => (request.SourceNodeId, request.TargetNodeId)).Distinct().Count();
+                var sources = carried.Select(request => request.SourceNodeId).Distinct().Count();
+                var targets = carried.Select(request => request.TargetNodeId).Distinct().Count();
+                Assert.That(pairs, Is.EqualTo(sources * targets), $"Stroke {stroke.Id} suggests a relationship that does not exist.");
+            }
+        }
+
         [TestCase(ArchitectorRelationshipMerging.ThreeOrMore, false)]
         [TestCase(ArchitectorRelationshipMerging.TwoOrMore, false)]
         [TestCase(ArchitectorRelationshipMerging.Maximum, false)]

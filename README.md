@@ -1,77 +1,88 @@
 # Architector
 
-Machine-readable architecture for Unity projects. Architector keeps your architecture as a layered graph in plain JSON files next to the code: groups, layers, typed nodes, relationships, approvals and code scopes. People edit it in a Unity window. Coding agents read and edit it through tools. Conformance checks compare it with the compiled code.
+Architecture for Unity projects that both people and coding agents can read and edit. Architector keeps your architecture as a layered graph in plain JSON files next to the code. People edit it in a Unity window, agents edit it through MCP tools, and conformance checks compare it with the compiled code.
 
-It is built around one question: *what governs this piece of code, and what may it depend on?*
+It answers one question: *what governs this piece of code, and what may it depend on?*
 
-## What You Get
+> [!WARNING]
+> **Experimental, in active development.** Architector is being tried on several projects, and each first run still turns up problems that are then fixed. Versions are `0.x`: the file format, the MCP actions and the UI may change between minor versions, and not every change comes with a migration. Pin a release tag, keep the `Architector/` folder in Git, and expect rough edges. Reports of what breaks or confuses you help most right now.
 
-- **An architecture graph.** One layer describes one responsibility. Cross-layer links go through Portals, and only dependency relationships must stay acyclic.
-- **Arrange.** One command lays a layer or a selection around its most connected nodes, in a compact grid with short routes.
-- **Approval.** A layer can be approved as canon. Semantic changes mark it as changed until someone reviews them. Layout changes do not. Architector asks you to confirm every approval an agent requests.
-- **A digest.** `Architector/Architecture.digest.md` is a deterministic text summary of the approved architecture, generated with every commit of the graph.
-- **Conformance.** Linked nodes are checked against compiled types and selected members.
-- **Dependency evidence.** A command-line tool compares real code dependencies with the declared ones.
-- **Routing without Unity.** `context_route` goes from a file or type to its layer, its digest lines and the documents worth reading.
-- **Agent access.** An MCP server for Windows, macOS and Linux, plus adapters for MCP for Unity by Coplay and Unity MCP by Ivan Murzak. Agents with a shell can use the command-line tools instead.
+## What It Is
 
-Architector models contracts, not everything. It does not check lifecycle behaviour, method bodies or gameplay correctness.
+- **A layered graph.** Groups organise layers, and each layer describes one responsibility with typed nodes and relationships (`dependency`, `dataFlow`, `event`, `callback`). Cross-layer links go through Portals.
+- **Linked to the code.** A node can be linked to a C# type and selected members. Conformance reports when the compiled code no longer matches.
+- **Reviewed.** A layer can be approved as the agreed design. Changes to an approved layer mark it as changed until someone reviews them; layout changes do not.
+- **Readable by agents.** An MCP server, a deterministic text digest of the approved layers, and a router from a file to its layer let an agent read only what it needs.
+- **Laid out for people.** Orthogonal routing on the node grid, merged lines for shared ends, and Arrange for new layers.
+
+It is not a code generator and it does not prove behaviour: conformance checks structure, not method bodies or gameplay.
+
+## Who It Is For
+
+Unity teams, often small, that work with coding agents and want the agent to follow an agreed architecture instead of rediscovering it from the code every time. It pays off in projects with several systems and more than one person or agent changing them.
 
 ## Install
 
-Unity 6000.3 or later. The MCP server needs nothing else. The .NET SDK is needed only for `DependencyEvidence` and for running `context_route` directly.
+Requires Unity 6000.3 or later.
 
-In Unity open **Window > Package Manager > + > Add package from git URL** and enter:
+In Unity open **Window > Package Manager > + > Add package from git URL** and enter a pinned version:
 
 ```
-https://github.com/oleksiydemidenko/architector.git
+https://github.com/oleksiydemidenko/architector.git#v0.2.7
 ```
+
+The MCP server is installed from inside Unity. The .NET SDK is needed only for the `DependencyEvidence` and `ContextRoute` command-line tools.
 
 ## Getting Started
 
 1. Open **Window > Architector > Window**.
-2. Open **Window > Architector > Settings** and set the source roots to index, for example `Assets/Scripts`.
-3. Create a group and a layer, then add a node and link it to a type from your project.
-4. Commit the `Architector/` folder. It belongs in version control.
-5. Open **Window > Architector > Integrations**, check **Setup Check**, press **Install Server** and connect your agent. See [Agent Setup](Documentation~/AgentSetup.md) for the details.
+2. In **Window > Architector > Settings**, set the source roots to index, for example `Assets/Scripts`.
+3. Create a group and a layer, add a node and link it to a type from your project.
+4. Commit the `Architector/` folder.
+5. Open **Window > Architector > Integrations**, check **Setup Check**, press **Install Server** and connect your agent. See [Agent Setup](Documentation~/AgentSetup.md).
+
+[Workflow](Documentation~/Workflow.md) explains how people and agents share the graph: work sessions, approval, dependency cycles, and when to arrange.
 
 ## Working Without Unity
 
-Agents with a shell can read the architecture without an open Editor. Run from the project root:
-
-```
-dotnet run --project Packages/com.oleksiydemidenko.architector/Tools~/ContextRoute -- . Assets/Scripts/Player/PlayerMovement.cs
-```
-
-A package installed from Git lives in `Library/PackageCache/com.oleksiydemidenko.architector@<hash>/` instead of `Packages/`.
-
-Reading works from files. Writing to the graph needs the Editor, because validation, the type index and Undo live there.
+Reading works from files; writing needs the Editor, because validation, the type index and Undo live there.
 
 | Tool | Needs Unity | Purpose |
 | --- | --- | --- |
+| `architector_status`, `architector_route`, `architector_digest` (MCP) | no | Project state, routing and the approved architecture |
 | `context_route` | no | From a file or type to its layer, digest lines and documents |
-| `Architecture.digest.md` | no | Approved architecture as text |
-| `architector_status`, `architector_route`, `architector_digest` (MCP) | no | Project state, routing and the digest for MCP clients |
-| `DependencyEvidence` | no | Undeclared layer dependencies, from sources |
-| `architector_query` (`architector-query` with Ivan Murzak's server) | yes | Project, layer, approval, conformance and type queries |
-| `architector_edit` (`architector-edit`) | yes | Work sessions, dry runs, plans and approvals |
+| `DependencyEvidence` | no | Code dependencies between layers that the graph does not declare |
+| `architector_query` | yes | Layers, approval, conformance and type queries |
+| `architector_edit` | yes | Work sessions, plans, arrangement and approvals |
 
-Keep **Project Settings > Player > Run In Background** on when agents talk to the Editor. Otherwise the Editor stops answering while its window has no focus.
+Keep **Project Settings > Player > Run In Background** on when agents talk to the Editor; otherwise it stops answering while its window has no focus.
+
+## Known Limitations
+
+These are known gaps, each tracked for a future version.
+
+- A node without relationships cannot be approved, even when it is a real standalone entry point.
+- Only your own source roots are indexed: Unity and other external types cannot be linked as verified contracts.
+- Relationships wired in the Inspector (UnityEvent, Timeline, prefab overrides) are not visible to Architector.
+- `DependencyEvidence` checks dependencies between layers rather than individual types, reads only `Assets/`, and needs the .NET SDK.
+- Conformance does not notice changed method bodies, so descriptions of behaviour can go stale silently.
+- On Windows, a project in a deeply nested folder can exceed the 260-character path limit for the files in `Architector/Links`.
+- Arrange takes several seconds on layers with about 60 relationships.
+
+## Versioning And Releases
+
+Architector follows [Semantic Versioning](https://semver.org/) in its `0.x` form: a minor version may contain breaking changes, a patch version does not. Every change is listed in the [Changelog](CHANGELOG.md). Every release is a [GitHub release](https://github.com/oleksiydemidenko/architector/releases) with the MCP server built for Windows, macOS and Linux. **Settings > Update** checks for compatible releases and updates the package and its server together.
 
 ## Documentation
 
-- [Agent Setup](Documentation~/AgentSetup.md): connect Claude Code, Codex, Cursor or any other agent.
+- [Agent Setup](Documentation~/AgentSetup.md): connect Claude Code, Codex, Cursor or another agent.
 - [Workflow](Documentation~/Workflow.md): how people and agents work with the graph.
 - [Adding an Agent Integration](Documentation~/AddingAgentIntegration.md): write an adapter for another MCP server.
 - [Authoring Skill](Skills~/architector-authoring/SKILL.md): conventions for agents that write architecture.
 
-## Status
+## Feedback And Contributing
 
-Architector is in development. It is developed on Unity 6000.3.16f1 on Linux. The MCP server has been used with Claude Code and Codex.
-
-## Contributing
-
-Issues and pull requests are welcome. Please open an issue before a large change. Run the EditMode tests in `Architector.Editor.Tests` and, if you touched the adapter, `Architector.Mcp.Editor.Tests`.
+Please open an issue when something fails, surprises you or is hard to understand; say what you expected and which Unity version you use. Open an issue before a large pull request. Run the EditMode tests in `Architector.Editor.Tests` and, if you touched the adapter, `Architector.Mcp.Editor.Tests`.
 
 ## License
 

@@ -141,6 +141,27 @@ namespace Architector.Editor.Tests
         }
 
         [Test]
+        public void ConformanceWarnsAboutReportedDependencyCyclesInEveryLayer()
+        {
+            repository.UpdateSettings("Report Cycles", settings =>
+                settings.rules.dependencyCycles = ArchitectorDependencyCyclePolicy.Report);
+            var firstLayer = repository.CreateLayer(string.Empty, "First");
+            var secondLayer = repository.CreateLayer(string.Empty, "Second");
+            var firstNode = repository.CreateEmptyNode(firstLayer, 0f, 0f);
+            var secondNode = repository.CreateEmptyNode(secondLayer, 0f, 0f);
+            repository.CreateCrossLayerEdge(firstLayer, firstNode, secondLayer, secondNode, ArchitectorEdgeKinds.Dependency);
+            repository.CreateCrossLayerEdge(secondLayer, secondNode, firstLayer, firstNode, ArchitectorEdgeKinds.Dependency);
+
+            var report = ArchitectorConformance.Evaluate(repository, index, new[] { firstLayer, secondLayer }, 10);
+
+            var cycles = report.Diagnostics.Where(item => item.Code == ArchitectorConformanceCodes.DependencyCycle).ToArray();
+            Assert.That(cycles.Select(item => item.LayerId), Is.EquivalentTo(new[] { firstLayer, secondLayer }));
+            Assert.That(cycles.Select(item => item.Severity), Is.All.EqualTo(ArchitectorConformanceSeverities.Warning));
+            Assert.That(cycles[0].Message, Does.Contain("First/New Node → Second/New Node → First/New Node"));
+            Assert.That(report.ErrorCount, Is.Zero);
+        }
+
+        [Test]
         public void ExplicitBaseAndInheritedInterfaceFactsConformAndReportDrift()
         {
             var indexedType = index.Types.Single(type => type.MetadataName == typeof(ArchitectorTypeIndexTests).FullName);

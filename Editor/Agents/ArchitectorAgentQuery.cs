@@ -137,8 +137,9 @@ namespace Architector.Editor.Agents
                 workflow_rule = ArchitectorAgentPreferences.Current.Mode.AgentRule,
                 agent_may_approve = ArchitectorAgentPreferences.Current.Mode.AgentMayApprove,
                 window_locking = ArchitectorAgentPreferences.Current.LockWindowsDuringAgentWork,
+                dependency_cycles = CyclePolicyName(repository),
                 query_actions = new[] { "capabilities", "work_status", "project_summary", "group_contents", "layer_graph", "node", "relationships", "dependency_path", "setup_check", "approval_status", "baseline_diff", "conformance", "find", "type_search", "type_contract", "validate" },
-                edit_actions = new[] { "begin_work", "resume_work", "end_work", "approve_layers", "revoke_approvals", "revert_to_approved", "dry_run", "apply", "dry_run_plan", "apply_plan", "arrange_layer", "relink_node", "validate_external", "reload_external" },
+                edit_actions = new[] { "begin_work", "resume_work", "end_work", "approve_layers", "revoke_approvals", "revert_to_approved", "dry_run", "apply", "dry_run_plan", "apply_plan", "arrange_layer", "arrange_changed_layers", "relink_node", "validate_external", "reload_external" },
                 relationship_kinds = ArchitectorEdgeKinds.All,
                 semantic_plan = new
                 {
@@ -173,7 +174,7 @@ namespace Architector.Editor.Agents
                         "Fill a node responsibility (one line, at most 240 characters) when its role is not obvious from the name; it explains the node and does not affect approval.",
                         "Raw dry_run/apply documents use the storage layout: architector.project.json, Groups/<id>.group.json, Layers/<id>.layer.json (header, own nodes and intra-layer edges), Layouts/<id>.layout.json and Links/<pair-id>.link.json (both Portal endpoints and cross-layer relationships). Prefer semantic plans.",
                         "Prefer narrow reads: layer_graph with detail=summary omits members, node takes target (layer) and node (ID or title), relationships takes target, optional node and direction=in|out|both, dependency_path takes target and to (layers). find, type_search, type_contract and relationships take offset and report next_offset when more results exist.",
-                        "arrange_layer takes target and optional nodes and centers (node IDs). relink_node takes target, node and type_key, keeps the node ID and relationships, and reports dropped_members. Both need expected_revision and work_token.",
+                        "Do not arrange while working: call arrange_changed_layers once before end_work; it lays out layers created in this work session and places nodes added to existing layers next to their neighbours, and reports layers in locked groups as skipped. arrange_layer takes target and optional nodes and centers (node IDs) for an explicit user request. relink_node takes target, node and type_key, keeps the node ID and relationships, and reports dropped_members. Both need expected_revision and work_token.",
                         "setup_check reports whether source roots, indexed types, the server, the bridge and Run In Background are ready.",
                         "A failed semantic plan reports operation, for example edges[3], when the failure belongs to one plan item. An unknown or ambiguous layer returns candidates.",
                         "Parent groups must exist or appear before their children.",
@@ -191,6 +192,7 @@ namespace Architector.Editor.Agents
                         "When agent_may_approve is true the agent may approve without asking; the baseline records that the agent approved the layer.",
                         "workflow_mode is the user's local preference and the agent cannot change it; workflow_rule says what it requires.",
                         "Rework an approved layer in place; it stays canonical as Changed until the user approves or reverts it. baseline_diff lists changes since approval; revert_to_approved restores the approved version only when the user asks.",
+                        "dependency_cycles is the project rule from shared settings: reject refuses any plan that closes a dependency cycle and names the cycle; report saves source-backed cycles, reports them as dependency_cycle conformance warnings and in validate, and does not block approval. Do not relabel a real dependency as an event to avoid a cycle. The agent cannot change the rule.",
                         "End the work session before handing results to the user; validation, revision and work-token checks always apply."
                     }
                 }
@@ -923,8 +925,29 @@ namespace Architector.Editor.Agents
         private static object Validation(ArchitectorRepository repository)
         {
             var result = repository.ValidateExternalChanges();
-            return ArchitectorAgentResult.Ok("All canonical Architector documents are valid.", Result(repository, result));
+            var cycles = repository.FindDependencyCycles();
+            return ArchitectorAgentResult.Ok(cycles.Count == 0
+                ? "All canonical Architector documents are valid."
+                : $"All canonical Architector documents are valid; the graph has {cycles.Count} dependency cycles.", new
+            {
+                revision = repository.Revision,
+                changed_file_count = result.ChangedFileCount,
+                validated_file_count = result.ValidatedFileCount,
+                layer_count = result.LayerCount,
+                portal_pair_count = result.PortalPairCount,
+                dependency_cycle_policy = CyclePolicyName(repository),
+                dependency_cycles = cycles.Select(cycle => new
+                {
+                    layers = cycle.LayerIds.Select(id => repository.FindLayer(id)?.name ?? id).ToArray(),
+                    node_count = cycle.Members.Count,
+                    path = repository.DescribeDependencyCycle(cycle),
+                    relationships = cycle.Path.Select(edge => edge.id).ToArray()
+                }).ToArray()
+            });
         }
+
+        private static string CyclePolicyName(ArchitectorRepository repository) =>
+            repository.Settings.rules.dependencyCycles == ArchitectorDependencyCyclePolicy.Report ? "report" : "reject";
 
         private static ArchitectorGroupRecord ResolveGroup(ArchitectorRepository repository, string target)
         {

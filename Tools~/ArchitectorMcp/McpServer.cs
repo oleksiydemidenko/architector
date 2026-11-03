@@ -118,7 +118,7 @@ public static class McpServer
                     ["include_layout"] = new JsonObject { ["type"] = "boolean" }
                 })),
             Tool("architector_edit", "Change the architecture in the open Unity Editor. Call architector_query with action capabilities for the plan format and rules.", ActionSchema(
-                new[] { "begin_work", "resume_work", "end_work", "approve_layers", "revoke_approvals", "revert_to_approved", "dry_run", "apply", "dry_run_plan", "apply_plan", "arrange_layer", "relink_node", "validate_external", "reload_external" },
+                new[] { "begin_work", "resume_work", "end_work", "approve_layers", "revoke_approvals", "revert_to_approved", "dry_run", "apply", "dry_run_plan", "apply_plan", "arrange_layer", "arrange_changed_layers", "relink_node", "validate_external", "reload_external" },
                 new JsonObject
                 {
                     ["expected_revision"] = new JsonObject { ["type"] = "integer" },

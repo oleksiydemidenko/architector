@@ -29,6 +29,7 @@ namespace Architector.Editor
         public const string MemberMissing = "member_missing";
         public const string MemberSignatureChanged = "member_signature_changed";
         public const string UnanchoredNode = "unanchored_node";
+        public const string DependencyCycle = "dependency_cycle";
     }
 
     public sealed class ArchitectorConformanceDiagnostic
@@ -107,6 +108,7 @@ namespace Architector.Editor
             var unanchoredByLayer = FindUnanchoredLinkedNodes(repository.Project, documents, ids)
                 .GroupBy(item => item.Layer.id, StringComparer.Ordinal)
                 .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
+            var cycles = repository.FindDependencyCycles();
             foreach (var layerId in ids)
             {
                 var layer = repository.FindLayer(layerId)
@@ -146,6 +148,20 @@ namespace Architector.Editor
                             "No relationship",
                             $"Linked node '{unanchored.Node.title}' has no relationship."));
                     }
+                }
+                foreach (var cycle in cycles.Where(cycle => cycle.LayerIds.Contains(layer.id)))
+                {
+                    var member = cycle.Members.First(endpoint => string.Equals(endpoint.LayerId, layer.id, StringComparison.Ordinal));
+                    report.WarningCount++;
+                    AddDiagnostic(report, limit, Diagnostic(
+                        ArchitectorConformanceSeverities.Warning,
+                        ArchitectorConformanceCodes.DependencyCycle,
+                        layer,
+                        semantic.nodes.First(node => string.Equals(node.id, member.NodeId, StringComparison.Ordinal)),
+                        null,
+                        "Acyclic dependencies",
+                        $"Cycle of {cycle.Members.Count} nodes in {cycle.LayerIds.Count} layers",
+                        $"Dependency cycle: {repository.DescribeDependencyCycle(cycle)}."));
                 }
                 foreach (var node in semantic.nodes.Where(node =>
                              string.Equals(node.type?.mode, "linked", StringComparison.Ordinal)))
