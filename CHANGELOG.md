@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.7
+
+- **Settings > Rules > Dependency Cycles.** Reject (default) refuses a dependency cycle and names it; Report keeps cycles that exist in the code and lists them as warnings.
+- Relationship lines follow the node grid and stay evenly spaced; merged lines also share outgoing ends, and merged lines no longer overlap.
+- Agents arrange once at the end of their work with `arrange_changed_layers`; Arrange itself is faster.
+
 ## 0.2.6
 
 - Package updates automatically install or repair the matching SHA-256-verified MCP server after reload, also when received through Git. Existing default Codex/Claude connections for the project move to the new server; custom connections are preserved. Setup failures expose a retry action and retain the previous version.
