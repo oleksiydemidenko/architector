@@ -121,12 +121,14 @@ namespace Architector.Editor
     public sealed class ArchitectorRuleSettings
     {
         public ArchitectorDependencyCyclePolicy dependencyCycles;
+        public List<string> uncheckedGroupIds = new();
     }
 
     [Serializable]
     public sealed class ArchitectorArrangeSettings
     {
         public int maxGroupRelationships = 16;
+        public float improvementSeconds = ArchitectorGraphArranger.DefaultImprovementSeconds;
     }
 
     [Serializable]

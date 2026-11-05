@@ -173,7 +173,7 @@ namespace Architector.Editor.Agents
                         "type_contract hides framework members and interface declarations the type implements itself; pass query to filter members by declaration text, which also includes framework members.",
                         "Fill a node responsibility (one line, at most 240 characters) when its role is not obvious from the name; it explains the node and does not affect approval.",
                         "Raw dry_run/apply documents use the storage layout: architector.project.json, Groups/<id>.group.json, Layers/<id>.layer.json (header, own nodes and intra-layer edges), Layouts/<id>.layout.json and Links/<pair-id>.link.json (both Portal endpoints and cross-layer relationships). Prefer semantic plans.",
-                        "Prefer narrow reads: layer_graph with detail=summary omits members, node takes target (layer) and node (ID or title), relationships takes target, optional node and direction=in|out|both, dependency_path takes target and to (layers). find, type_search, type_contract and relationships take offset and report next_offset when more results exist.",
+                        "Prefer narrow reads: layer_graph with detail=summary returns the layer as compact text with paths and names and no IDs (incoming relationships folded per source layer), node takes target (layer) and node (ID or title), relationships takes target, optional node and direction=in|out|both, dependency_path takes target and to (layers). find, type_search, type_contract and relationships take offset and report next_offset when more results exist.",
                         "Do not arrange while working: call arrange_changed_layers once before end_work; it lays out layers created in this work session and places nodes added to existing layers next to their neighbours, and reports layers in locked groups as skipped. arrange_layer takes target and optional nodes and centers (node IDs) for an explicit user request. relink_node takes target, node and type_key, keeps the node ID and relationships, and reports dropped_members. Both need expected_revision and work_token.",
                         "setup_check reports whether source roots, indexed types, the server, the bridge and Run In Background are ready.",
                         "A failed semantic plan reports operation, for example edges[3], when the failure belongs to one plan item. An unknown or ambiguous layer returns candidates.",
@@ -410,7 +410,14 @@ namespace Architector.Editor.Agents
             var layer = ResolveLayer(repository, target);
             if (layer == null)
                 return LayerFailure(repository, target);
-            var summary = string.Equals(detail?.Trim(), "summary", StringComparison.OrdinalIgnoreCase);
+            if (string.Equals(detail?.Trim(), "summary", StringComparison.OrdinalIgnoreCase))
+            {
+                return ArchitectorAgentResult.Ok("Architector layer summary.", new
+                {
+                    revision = repository.Revision,
+                    summary = ArchitectorLayerSummary.Describe(repository, layer.id)
+                });
+            }
             var documents = repository.LoadLayer(layer.id);
             var approval = repository.GetLayerApprovalStatus(layer.id);
             var layouts = documents.layout.nodes.ToDictionary(node => node.nodeId, StringComparer.Ordinal);
@@ -433,7 +440,7 @@ namespace Architector.Editor.Agents
                 interfaces = (node.type?.interfaces ?? new System.Collections.Generic.List<ArchitectorTypeReferenceRecord>())
                     .Select(TypeReference).ToArray(),
                 member_count = node.members.Count,
-                members = summary ? null : node.members.Select(member => new
+                members = node.members.Select(member => new
                 {
                     member.id,
                     member.kind,
@@ -985,7 +992,8 @@ namespace Architector.Editor.Agents
                     group.name,
                     path = repository.GetEntryPath(group.id),
                     locked = repository.IsGroupLockedForEditing(group.id),
-                    lock_notice = group.lockState?.locked == true ? group.lockState.notice : null
+                    lock_notice = group.lockState?.locked == true ? group.lockState.notice : null,
+                    checks_off = repository.IsUnchecked(group.id) ? true : (bool?)null
                 };
         }
 
@@ -1000,7 +1008,8 @@ namespace Architector.Editor.Agents
                     layer.purpose,
                     path = repository.GetEntryPath(layer.id),
                     scope_folders = layer.scope?.folders ?? new List<string>(),
-                    scope_namespaces = layer.scope?.namespaces ?? new List<string>()
+                    scope_namespaces = layer.scope?.namespaces ?? new List<string>(),
+                    checks_off = repository.IsUnchecked(layer.id) ? true : (bool?)null
                 };
         }
 

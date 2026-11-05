@@ -29,6 +29,22 @@ namespace Architector.Editor
             return text.ToString();
         }
 
+        public static bool ReadsCurrentDocuments(ArchitectorProjectDocument project, ISet<string> layerIds)
+        {
+            var records = project.layers.ToDictionary(layer => layer.id, StringComparer.Ordinal);
+            foreach (var owner in project.layers.Where(layer => !string.IsNullOrEmpty(layer.approval?.semanticHash)))
+            foreach (var edge in owner.approval.baseline?.relationships ?? new List<ArchitectorEdgeRecord>())
+            foreach (var (layerId, nodeId) in new[] { (edge.sourceLayerId, edge.sourceNodeId), (edge.targetLayerId, edge.targetNodeId) })
+            {
+                if (layerId == owner.id || !layerIds.Contains(layerId))
+                    continue;
+                records.TryGetValue(layerId, out var remote);
+                if (remote?.approval?.baseline?.nodes.Any(node => node.id == nodeId) != true)
+                    return true;
+            }
+            return false;
+        }
+
         private static void AppendLayer(
             StringBuilder text,
             ArchitectorProjectDocument project,

@@ -250,32 +250,7 @@ namespace Architector.Editor
                     pairByLayers[LayerPairKey(layer.id, portal.portal.targetLayerId)] = portal.portal.pairId;
                 }
 
-                var intraEdgeIds = documents.semantic.edges
-                    .Where(edge => IsIntraLayer(edge, layer.id))
-                    .Select(edge => edge.id)
-                    .ToHashSet(StringComparer.Ordinal);
-                files[ArchitectorPaths.LayerPath(layer.id, layer.name)] = ArchitectorJson.Serialize(new ArchitectorStoredLayerDocument
-                {
-                    layerId = layer.id,
-                    name = layer.name,
-                    purpose = layer.purpose ?? string.Empty,
-                    parentGroupId = layer.parentGroupId ?? string.Empty,
-                    orderKey = orderKeys[layer.id],
-                    scope = layer.scope ?? new ArchitectorLayerScopeRecord(),
-                    nodes = documents.semantic.nodes.Where(node => !portalIds.Contains(node.id)).ToList(),
-                    edges = documents.semantic.edges.Where(edge => intraEdgeIds.Contains(edge.id)).ToList()
-                });
-                if (!string.IsNullOrEmpty(layer.approval?.semanticHash))
-                {
-                    files[ArchitectorPaths.BaselinePath(layer.id, layer.name)] = ArchitectorJson.Serialize(new ArchitectorStoredBaselineDocument
-                    {
-                        layerId = layer.id,
-                        semanticHash = layer.approval.semanticHash,
-                        approvedByAgent = layer.approval.approvedByAgent,
-                        baseline = layer.approval.baseline ?? new ArchitectorLayerBaselineRecord()
-                    });
-                }
-                files[ArchitectorPaths.LayoutPath(layer.id, layer.name)] = EncodeLayout(layer.id, documents);
+                EncodeLayerFiles(files, layer, documents, orderKeys[layer.id]);
             }
 
             var relationshipsByPair = new Dictionary<string, List<(ArchitectorEdgeRecord edge, ArchitectorEdgeLayoutRecord layout)>>(
@@ -306,19 +281,158 @@ namespace Architector.Editor
                 if (pair.Value.Count != 2)
                     throw new ArchitectorDataException($"Layer Portal pair '{pair.Key}' must contain exactly two endpoints.");
                 relationshipsByPair.TryGetValue(pair.Key, out var relationships);
-                var ordered = (relationships ?? new List<(ArchitectorEdgeRecord edge, ArchitectorEdgeLayoutRecord layout)>())
-                    .OrderBy(item => item.edge.id, StringComparer.Ordinal)
-                    .ToArray();
-                var endpoints = pair.Value.OrderBy(endpoint => endpoint.layerId, StringComparer.Ordinal).ToList();
-                files[ArchitectorPaths.LinkPath(pair.Key, LayerName(project, endpoints[0].layerId), LayerName(project, endpoints[1].layerId))] = ArchitectorJson.Serialize(new ArchitectorStoredLinkDocument
-                {
-                    pairId = pair.Key,
-                    endpoints = endpoints,
-                    relationships = ordered.Select(item => item.edge).ToList(),
-                    relationshipLayouts = ordered.Select(item => item.layout).ToList()
-                });
+                EncodeLink(files, project, pair.Key, pair.Value, relationships);
             }
             return files;
+        }
+
+        public static SortedDictionary<string, string> EncodeChangedLayers(
+            ArchitectorProjectDocument project,
+            IReadOnlyDictionary<string, ArchitectorLayerDocuments> layers,
+            IReadOnlyDictionary<string, ArchitectorLayerDocuments> previousLayers,
+            IDictionary<string, string> previousFiles,
+            ISet<string> changedLayerIds)
+        {
+            var files = new SortedDictionary<string, string>(previousFiles, StringComparer.Ordinal);
+            var orderKeys = AssignOrderKeys(project);
+            var pairIds = new SortedSet<string>(StringComparer.Ordinal);
+            foreach (var layerId in changedLayerIds)
+            {
+                foreach (var source in new[] { previousLayers, layers })
+                    if (source.TryGetValue(layerId, out var documents))
+                        foreach (var portal in documents.semantic.nodes.Where(IsPortal))
+                            pairIds.Add(portal.portal.pairId);
+                foreach (var entry in new[]
+                         {
+                             (ArchitectorPaths.LayersDirectoryName, ArchitectorPaths.LayerFileSuffix),
+                             (ArchitectorPaths.LayoutsDirectoryName, ArchitectorPaths.LayoutFileSuffix),
+                             (ArchitectorPaths.BaselinesDirectoryName, ArchitectorPaths.BaselineFileSuffix)
+                         })
+                    RemoveEntries(files, entry.Item1, entry.Item2, layerId);
+                var layer = project.layers.FirstOrDefault(candidate => candidate.id == layerId);
+                if (layer != null && layers.TryGetValue(layerId, out var next))
+                    EncodeLayerFiles(files, layer, next, orderKeys[layerId]);
+            }
+
+            foreach (var pairId in pairIds)
+            {
+                RemoveEntries(files, ArchitectorPaths.LinksDirectoryName, ArchitectorPaths.LinkFileSuffix, pairId);
+                var endpoints = new List<ArchitectorStoredPortalEndpoint>();
+                var endpointLayers = new List<string>();
+                foreach (var layerId in changedLayerIds.Concat(layers.Values
+                             .Where(documents => changedLayerIds.Contains(documents.semantic.layerId))
+                             .SelectMany(documents => documents.semantic.nodes.Where(IsPortal))
+                             .Where(portal => portal.portal.pairId == pairId)
+                             .Select(portal => portal.portal.targetLayerId)).Distinct())
+                {
+                    if (!layers.TryGetValue(layerId, out var documents))
+                        continue;
+                    foreach (var portal in documents.semantic.nodes.Where(node => IsPortal(node) && node.portal.pairId == pairId))
+                    {
+                        var layout = documents.layout.nodes.First(node => node.nodeId == portal.id);
+                        endpoints.Add(Endpoint(layerId, portal, layout));
+                        endpointLayers.Add(layerId);
+                    }
+                }
+                if (endpoints.Count == 0)
+                    continue;
+                if (endpoints.Count != 2)
+                    throw new ArchitectorDataException($"Layer Portal pair '{pairId}' must contain exactly two endpoints.");
+                var pairKey = LayerPairKey(endpointLayers[0], endpointLayers[1]);
+                var relationships = endpointLayers
+                    .SelectMany(layerId => layers[layerId].semantic.edges
+                        .Where(edge => !IsIntraLayer(edge, layerId) && LayerPairKey(edge.sourceLayerId, edge.targetLayerId) == pairKey)
+                        .Select(edge => (edge, layers[layerId].layout.edges.First(layout => layout.edgeId == edge.id))))
+                    .ToList();
+                EncodeLink(files, project, pairId, endpoints, relationships);
+            }
+
+            if (ArchitectorDigest.ReadsCurrentDocuments(project, changedLayerIds))
+            {
+                var digest = ArchitectorDigest.Build(project, layers);
+                if (digest == null)
+                    files.Remove(ArchitectorPaths.DigestFileName);
+                else
+                    files[ArchitectorPaths.DigestFileName] = digest;
+            }
+            return files;
+        }
+
+        private static void RemoveEntries(IDictionary<string, string> files, string directory, string suffix, string id)
+        {
+            var prefix = directory + "/" + id + ".";
+            foreach (var path in files.Keys.Where(path => path.StartsWith(prefix, StringComparison.Ordinal) && path.EndsWith(suffix, StringComparison.Ordinal)).ToArray())
+                files.Remove(path);
+        }
+
+        private static ArchitectorStoredPortalEndpoint Endpoint(string layerId, ArchitectorNodeRecord portal, ArchitectorNodeLayoutRecord layout)
+        {
+            return new ArchitectorStoredPortalEndpoint
+            {
+                layerId = layerId,
+                nodeId = portal.id,
+                title = portal.title,
+                role = portal.portal.role,
+                x = layout.x,
+                y = layout.y,
+                width = layout.width,
+                height = layout.height
+            };
+        }
+
+        private static void EncodeLayerFiles(
+            IDictionary<string, string> files,
+            ArchitectorLayerRecord layer,
+            ArchitectorLayerDocuments documents,
+            string orderKey)
+        {
+            var portalIds = documents.semantic.nodes.Where(IsPortal).Select(node => node.id).ToHashSet(StringComparer.Ordinal);
+            var intraEdgeIds = documents.semantic.edges
+                .Where(edge => IsIntraLayer(edge, layer.id))
+                .Select(edge => edge.id)
+                .ToHashSet(StringComparer.Ordinal);
+            files[ArchitectorPaths.LayerPath(layer.id, layer.name)] = ArchitectorJson.Serialize(new ArchitectorStoredLayerDocument
+            {
+                layerId = layer.id,
+                name = layer.name,
+                purpose = layer.purpose ?? string.Empty,
+                parentGroupId = layer.parentGroupId ?? string.Empty,
+                orderKey = orderKey,
+                scope = layer.scope ?? new ArchitectorLayerScopeRecord(),
+                nodes = documents.semantic.nodes.Where(node => !portalIds.Contains(node.id)).ToList(),
+                edges = documents.semantic.edges.Where(edge => intraEdgeIds.Contains(edge.id)).ToList()
+            });
+            if (!string.IsNullOrEmpty(layer.approval?.semanticHash))
+            {
+                files[ArchitectorPaths.BaselinePath(layer.id, layer.name)] = ArchitectorJson.Serialize(new ArchitectorStoredBaselineDocument
+                {
+                    layerId = layer.id,
+                    semanticHash = layer.approval.semanticHash,
+                    approvedByAgent = layer.approval.approvedByAgent,
+                    baseline = layer.approval.baseline ?? new ArchitectorLayerBaselineRecord()
+                });
+            }
+            files[ArchitectorPaths.LayoutPath(layer.id, layer.name)] = EncodeLayout(layer.id, documents);
+        }
+
+        private static void EncodeLink(
+            IDictionary<string, string> files,
+            ArchitectorProjectDocument project,
+            string pairId,
+            IEnumerable<ArchitectorStoredPortalEndpoint> pairEndpoints,
+            IEnumerable<(ArchitectorEdgeRecord edge, ArchitectorEdgeLayoutRecord layout)> relationships)
+        {
+            var ordered = (relationships ?? Enumerable.Empty<(ArchitectorEdgeRecord edge, ArchitectorEdgeLayoutRecord layout)>())
+                .OrderBy(item => item.edge.id, StringComparer.Ordinal)
+                .ToArray();
+            var endpoints = pairEndpoints.OrderBy(endpoint => endpoint.layerId, StringComparer.Ordinal).ToList();
+            files[ArchitectorPaths.LinkPath(pairId, LayerName(project, endpoints[0].layerId), LayerName(project, endpoints[1].layerId))] = ArchitectorJson.Serialize(new ArchitectorStoredLinkDocument
+            {
+                pairId = pairId,
+                endpoints = endpoints,
+                relationships = ordered.Select(item => item.edge).ToList(),
+                relationshipLayouts = ordered.Select(item => item.layout).ToList()
+            });
         }
 
         public static string EncodeLayout(string layerId, ArchitectorLayerDocuments documents)

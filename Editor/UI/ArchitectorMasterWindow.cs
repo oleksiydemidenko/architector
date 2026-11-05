@@ -72,6 +72,12 @@ namespace Architector.Editor
         private bool inspectorPointerDown;
         private bool inspectorPointerDragged;
         private Vector2 inspectorPointerStart;
+        private bool explorerKeyboardFocus;
+        private string stepPreviewLayerId = string.Empty;
+        private bool inspectorArranging;
+        private bool inspectorPointerOnCanvas;
+        private string inspectorPointerSelection = string.Empty;
+        private Rect lastCanvasRect;
         private GenericMenu pendingContextMenu;
         private Vector2 pendingContextMenuPosition;
         private bool pendingContextMenuNeedsRepaint;
@@ -117,6 +123,28 @@ namespace Architector.Editor
 
         public bool IsMasterWindow => windowMode == WindowMode.Master;
         public bool CanvasHasPointer => layerCanvas?.HasPointer == true;
+        public bool ExplorerHasKeyboardFocus => explorerKeyboardFocus && selectedExplorerEntryIds.Count == 1
+                                                && repository?.FindLayer(selectedExplorerEntryIds.First()) != null;
+
+        public void StepExplorerLayer(int direction)
+        {
+            var layers = (string.IsNullOrWhiteSpace(search) ? CurrentExplorerEntryOrder() : explorerSearchLayerIds)
+                .Where(id => repository.FindLayer(id) != null)
+                .ToList();
+            var index = layers.IndexOf(selectedExplorerEntryIds.First());
+            var next = index + direction;
+            if (index < 0 || next < 0 || next >= layers.Count)
+                return;
+            var target = layers[next];
+            openLayerIds ??= new List<string>();
+            var alreadyOpen = openLayerIds.Contains(target);
+            var previewIndex = openLayerIds.IndexOf(stepPreviewLayerId);
+            if (!alreadyOpen && previewIndex >= 0 && string.Equals(activeLayerId, stepPreviewLayerId, StringComparison.Ordinal))
+                openLayerIds[previewIndex] = target;
+            OpenLayer(target);
+            stepPreviewLayerId = alreadyOpen ? string.Empty : target;
+            Repaint();
+        }
 
         public void SendCanvasCommand(string command)
         {
@@ -214,6 +242,7 @@ namespace Architector.Editor
         {
             deferInspectorSelection = false;
             inspectorPointerDown = false;
+            inspectorArranging = false;
             CommitRename();
         }
 
@@ -514,6 +543,15 @@ namespace Architector.Editor
         {
             var status = GetExplorerStatus(id);
             var scope = isGroup ? "inside this group" : "in this layer";
+            if (repository.IsUnchecked(id))
+            {
+                right -= 18f;
+                var owner = repository.FindGroup(repository.FindUncheckedGroup(id))?.name ?? string.Empty;
+                GUI.Label(
+                    new Rect(right, rect.center.y - 8f, 16f, 16f),
+                    new GUIContent(ArchitectorIcons.Get("TestIgnored").image,
+                        $"Checks are off (group '{owner}'): conformance skips these layers and they cannot be approved."));
+            }
             if ((status & ArchitectorExplorerEntryStatus.Changed) != 0)
             {
                 right -= 18f;
@@ -652,7 +690,19 @@ namespace Architector.Editor
                         DrawDropBorder(backRect);
                     breadcrumbX = backRect.xMax + 6f;
                 }
-                var pathRect = new Rect(breadcrumbX, navigationRect.y, navigationRect.xMax - breadcrumbX, navigationRect.height);
+                var pathRight = navigationRect.xMax;
+                var pendingReview = ArchitectorReviewWindow.PendingCount(repository);
+                if (pendingReview > 0)
+                {
+                    var review = new GUIContent($"Review ({pendingReview})",
+                        $"Open Architector Review: {pendingReview} layer(s) changed since approval, approved by an agent or in draft.");
+                    var reviewWidth = EditorStyles.miniButton.CalcSize(review).x + 4f;
+                    var reviewRect = new Rect(navigationRect.xMax - reviewWidth, navigationRect.y + 1f, reviewWidth, navigationRect.height - 2f);
+                    if (GUI.Button(reviewRect, review, EditorStyles.miniButton))
+                        EditorApplication.delayCall += ArchitectorReviewWindow.Open;
+                    pathRight = reviewRect.x - 4f;
+                }
+                var pathRect = new Rect(breadcrumbX, navigationRect.y, Mathf.Max(0f, pathRight - breadcrumbX), navigationRect.height);
                 GUI.Label(pathRect, CurrentLocationName(), breadcrumbStyle);
 
                 var searchRect = EditorGUILayout.GetControlRect(false, EditorGUIUtility.singleLineHeight);
@@ -835,6 +885,8 @@ namespace Architector.Editor
             if (current.type == EventType.MouseDown && current.button == 0 && rect.Contains(current.mousePosition))
             {
                 layerCanvas.SelectOnly(string.Empty);
+                explorerKeyboardFocus = true;
+                stepPreviewLayerId = string.Empty;
                 var additive = current.control || current.command;
                 var rangeSelection = current.shift;
                 pressedExplorerCollapseSelection = false;
@@ -1535,6 +1587,7 @@ namespace Architector.Editor
             if (repository?.FindLayer(layerId) == null)
                 return;
             deferInspectorSelection = false;
+            inspectorArranging = false;
             openLayerIds ??= new List<string>();
             if (!openLayerIds.Contains(layerId))
                 openLayerIds.Add(layerId);
@@ -1694,6 +1747,8 @@ namespace Architector.Editor
 
                 DrawLayerTabs();
                 var canvasRect = GUILayoutUtility.GetRect(10f, 10000f, 10f, 10000f, GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true));
+                if (Event.current.type == EventType.Repaint)
+                    lastCanvasRect = canvasRect;
                 if (Event.current.type == EventType.MouseDown
                     && Event.current.button == 0
                     && canvasRect.Contains(Event.current.mousePosition))
@@ -1754,6 +1809,13 @@ namespace Architector.Editor
                 inspectorPointerDown = true;
                 inspectorPointerDragged = false;
                 inspectorPointerStart = current.mousePosition;
+                inspectorPointerOnCanvas = lastCanvasRect.Contains(current.mousePosition);
+                if (inspectorPointerOnCanvas)
+                {
+                    explorerKeyboardFocus = false;
+                    stepPreviewLayerId = string.Empty;
+                }
+                inspectorPointerSelection = layerCanvas.SelectionKey;
                 deferInspectorSelection = true;
             }
             else if (current.rawType == EventType.MouseDrag && inspectorPointerDown)
@@ -1762,7 +1824,9 @@ namespace Architector.Editor
             }
             else if (current.rawType == EventType.MouseUp)
             {
-                deferInspectorSelection = inspectorPointerDown && inspectorPointerDragged;
+                if (inspectorPointerDown && inspectorPointerDragged && layerCanvas.IsDraggingNode)
+                    inspectorArranging = true;
+                deferInspectorSelection = inspectorPointerDown && (inspectorPointerDragged || ArrangingClickKeepsInspector());
                 inspectorPointerDown = false;
             }
             else if (current.rawType == EventType.DragExited)
@@ -1774,6 +1838,21 @@ namespace Architector.Editor
             {
                 deferInspectorSelection = false;
             }
+        }
+
+        private bool ArrangingClickKeepsInspector()
+        {
+            if (!inspectorArranging || !inspectorPointerOnCanvas)
+                return false;
+            if (Event.current.button != 0)
+                return true;
+            var selection = layerCanvas.SelectionKey;
+            if (selection == "|" || selection == inspectorPointerSelection)
+            {
+                inspectorArranging = false;
+                return false;
+            }
+            return true;
         }
 
         private void DrawLayerInspector(ArchitectorLayerRecord layer)
@@ -2248,6 +2327,13 @@ namespace Architector.Editor
                 menu.AddItem(new GUIContent("Relock"), false, () => repository.RelockGroup(groupId));
                 menu.AddItem(new GUIContent("Remove Lock"), false, () => Run(() => repository.RemoveGroupLock(groupId)));
             }
+            menu.AddSeparator(string.Empty);
+            if (repository.IsGroupMarkedUnchecked(groupId))
+                menu.AddItem(new GUIContent("Turn Checks On"), false, () => Run(() => repository.SetGroupChecks(groupId, true)));
+            else if (repository.IsUnchecked(groupId))
+                menu.AddDisabledItem(new GUIContent("Checks Are Off Through a Parent Group"));
+            else
+                menu.AddItem(new GUIContent("Turn Checks Off"), false, () => Run(() => repository.SetGroupChecks(groupId, false)));
             RequestContextMenu(menu, GUIUtility.GUIToScreenPoint(Event.current.mousePosition));
         }
 

@@ -60,12 +60,18 @@ namespace Architector.Editor
                 throw new ArchitectorDataException("Grid size must be positive.");
             if (settings.arrange.maxGroupRelationships < 1)
                 throw new ArchitectorDataException("Arrange group relationships must be positive.");
+            if (settings.arrange.improvementSeconds < 0f)
+                throw new ArchitectorDataException("Arrange improvement time cannot be negative.");
             if (settings.optimization.memberParentDepth is < -1 or > 2)
                 throw new ArchitectorDataException("Member parent depth must be 0, 1, 2 or -1 for all parents.");
             if (!Enum.IsDefined(typeof(ArchitectorRelationshipMerging), settings.optimization.relationshipMerging))
                 throw new ArchitectorDataException("Unknown relationship merging mode.");
             if (!Enum.IsDefined(typeof(ArchitectorDependencyCyclePolicy), settings.rules.dependencyCycles))
                 throw new ArchitectorDataException("Unknown dependency cycle policy.");
+            settings.rules.uncheckedGroupIds ??= new List<string>();
+            if (settings.rules.uncheckedGroupIds.Any(string.IsNullOrEmpty)
+                || settings.rules.uncheckedGroupIds.Distinct(StringComparer.Ordinal).Count() != settings.rules.uncheckedGroupIds.Count)
+                throw new ArchitectorDataException("Groups with checks off must be listed once each, by ID.");
             var integrationIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (var integration in settings.agent.integrations)
             {
@@ -234,7 +240,9 @@ namespace Architector.Editor
         public static int ValidateRepository(
             ArchitectorProjectDocument project,
             ArchitectorSettingsDocument settings,
-            IReadOnlyDictionary<string, ArchitectorLayerDocuments> layers)
+            IReadOnlyDictionary<string, ArchitectorLayerDocuments> layers,
+            ISet<string> trustedLayerIds = null,
+            bool checkCycles = true)
         {
             Validate(project);
             Validate(settings);
@@ -255,7 +263,8 @@ namespace Architector.Editor
                     throw new ArchitectorDataException($"Layer '{layerRecord.name}' reuses another layer document path.");
 
                 var documents = layers[layerRecord.id];
-                Validate(documents.semantic, documents.layout);
+                if (trustedLayerIds?.Contains(layerRecord.id) != true)
+                    Validate(documents.semantic, documents.layout);
                 if (!string.Equals(documents.semantic.layerId, layerRecord.id, StringComparison.Ordinal))
                     throw new ArchitectorDataException($"Layer '{layerRecord.name}' references documents owned by another layer.");
 
@@ -321,8 +330,8 @@ namespace Architector.Editor
                     $"{relationship.kind}:{EndpointKey(relationship.sourceLayerId, relationship.sourceNodeId)}->{EndpointKey(relationship.targetLayerId, relationship.targetNodeId)}",
                     "directed relationship");
             }
-            if (settings.rules.dependencyCycles == ArchitectorDependencyCyclePolicy.Reject)
-                EnsureRepositoryAcyclic(project, layers, relationships);
+            if (checkCycles && settings.rules.dependencyCycles == ArchitectorDependencyCyclePolicy.Reject)
+                EnsureRepositoryAcyclic(project, layers, relationships, settings);
 
             return portalsByPair.Count;
         }
@@ -330,11 +339,14 @@ namespace Architector.Editor
         private static void EnsureRepositoryAcyclic(
             ArchitectorProjectDocument project,
             IReadOnlyDictionary<string, ArchitectorLayerDocuments> layers,
-            IEnumerable<ArchitectorEdgeRecord> relationships)
+            IEnumerable<ArchitectorEdgeRecord> relationships,
+            ArchitectorSettingsDocument settings)
         {
             var endpoints = ArchitectorDependencyCycles.InExplorerOrder(project).SelectMany(layer => layers[layer.id].semantic.nodes
                 .Select(node => new ArchitectorEndpoint(layer.id, node.id)));
-            var cycle = ArchitectorDependencyCycles.Find(endpoints, relationships).FirstOrDefault();
+            var uncheckedLayers = ArchitectorUncheckedGroups.LayerIds(project, settings);
+            var cycle = ArchitectorDependencyCycles.Find(endpoints, relationships)
+                .FirstOrDefault(candidate => candidate.LayerIds.Any(layerId => !uncheckedLayers.Contains(layerId)));
             if (cycle == null)
                 return;
             throw new ArchitectorDataException(

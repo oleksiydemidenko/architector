@@ -41,6 +41,12 @@ namespace Architector.Editor
         public ArchitectorProjectDocument Project { get; private set; }
         public ArchitectorSettingsDocument Settings { get; private set; }
         public int Revision { get; private set; }
+        public IReadOnlyDictionary<string, double> LastCommitPhases => commitPhases.Last;
+        private SortedDictionary<string, string> sessionFiles;
+        private SortedDictionary<string, string> committedFiles;
+        private Dictionary<string, ArchitectorLayerDocuments> committedLayers;
+        private HashSet<string> committedChangedLayers;
+        private readonly ArchitectorPhaseTimer commitPhases = new();
         public int SemanticRevision => Revision - layoutRevisions;
         public string ExternalChangeError { get; private set; } = string.Empty;
         public bool CanUndo => undo.Count > 0;
@@ -777,7 +783,8 @@ namespace Architector.Editor
                 Settings.geometry.snapToGrid ? Settings.geometry.gridSize : 1f,
                 Settings.arrange.maxGroupRelationships,
                 centers,
-                Settings.optimization.relationshipMerging);
+                Settings.optimization.relationshipMerging,
+                Settings.arrange.improvementSeconds);
             MoveNodes(layerId, positions, "Arrange Nodes");
         }
 
@@ -1586,13 +1593,13 @@ namespace Architector.Editor
             {
                 foreach (var survivingLayerId in layers.Keys.Where(candidate => !layerIds.Contains(candidate)).ToArray())
                 {
-                    var documents = layers[survivingLayerId];
-                    var portalIds = documents.semantic.nodes
+                    var portalIds = ArchitectorLazyLayers.Peek(layers, survivingLayerId).semantic.nodes
                         .Where(node => IsPortal(node) && layerIds.Contains(node.portal.targetLayerId))
                         .Select(node => node.id)
                         .ToHashSet(StringComparer.Ordinal);
                     if (portalIds.Count == 0)
                         continue;
+                    var documents = layers[survivingLayerId];
                     RemoveNodes(documents, portalIds);
                     documents.semantic.edges.RemoveAll(edge => layerIds.Contains(edge.targetLayerId));
                     var validEdgeIds = documents.semantic.edges.Select(edge => edge.id)
@@ -1675,12 +1682,19 @@ namespace Architector.Editor
 
         private void ExecuteRepositoryChange(
             string name,
-            Action<ArchitectorProjectDocument, IDictionary<string, ArchitectorLayerDocuments>> mutate)
+            Action<ArchitectorProjectDocument, IDictionary<string, ArchitectorLayerDocuments>> mutate,
+            bool layersOnly = false)
         {
-            var nextProject = ArchitectorJson.Clone(Project);
-            var nextLayers = CloneAllLayers();
+            commitPhases.Start();
+            var nextProject = layersOnly ? Project : ArchitectorJson.Clone(Project);
+            var nextLayers = new ArchitectorLazyLayers(layerDocuments, documents => new ArchitectorLayerDocuments(
+                ArchitectorJson.Clone(documents.semantic),
+                ArchitectorJson.Clone(documents.layout)));
             mutate(nextProject, nextLayers);
-            Commit(name, nextProject, nextLayers, null, false, notifyWhenUnchanged: true, reportApprovalImpacts: false);
+            nextLayers.Freeze();
+            commitPhases.Lap("clone");
+            Commit(name, nextProject, nextLayers, null, false, notifyWhenUnchanged: true, reportApprovalImpacts: false,
+                touchedLayers: layersOnly && layerErrors.Count == 0 ? nextLayers.Touched : null);
         }
 
         private void ExecuteLayoutChange(string name, ArchitectorLayerRecord layer, Action<ArchitectorLayerLayoutDocument> mutate)
@@ -1747,6 +1761,14 @@ namespace Architector.Editor
             {
                 ApplySnapshots(after);
                 layerDocuments[layerId] = next;
+                if (sessionFiles != null)
+                    foreach (var change in changes)
+                    {
+                        if (change.Value == null)
+                            sessionFiles.Remove(change.Key);
+                        else
+                            sessionFiles[change.Key] = change.Value;
+                    }
                 layoutRevisions++;
                 Revision++;
                 undo.Push(new ArchitectorUndoRecord(name, before, after));
@@ -1757,6 +1779,7 @@ namespace Architector.Editor
             {
                 ApplySnapshots(before);
                 layerDocuments[layerId] = previous;
+                sessionFiles = null;
                 throw;
             }
         }
@@ -1768,7 +1791,7 @@ namespace Architector.Editor
             {
                 var documents = layers[layer.id];
                 mutate(documents.semantic, documents.layout);
-            });
+            }, layersOnly: true);
         }
 
         private void ExecuteLayerSetChange(
@@ -1778,7 +1801,7 @@ namespace Architector.Editor
         {
             foreach (var layer in layers)
                 ReadLayer(layer.id);
-            ExecuteRepositoryChange(name, (_, documents) => mutate(documents));
+            ExecuteRepositoryChange(name, (_, documents) => mutate(documents), layersOnly: true);
         }
 
         private ArchitectorCanonicalBatchResult ApplyCanonicalBatchCore(ArchitectorCanonicalBatch batch, bool dryRun)
@@ -1836,10 +1859,37 @@ namespace Architector.Editor
             bool dryRun,
             IReadOnlyDictionary<string, string> recoveryDiskFiles = null,
             bool notifyWhenUnchanged = false,
-            bool reportApprovalImpacts = true)
+            bool reportApprovalImpacts = true,
+            IReadOnlyCollection<string> touchedLayers = null)
         {
+            commitPhases.EnsureStarted();
+            try
+            {
+                return CommitTimed(name, nextProject, nextLayers, nextSettings, dryRun, recoveryDiskFiles, notifyWhenUnchanged, reportApprovalImpacts, touchedLayers);
+            }
+            finally
+            {
+                commitPhases.Stop();
+            }
+        }
+
+        private ArchitectorCanonicalBatchResult CommitTimed(
+            string name,
+            ArchitectorProjectDocument nextProject,
+            IReadOnlyDictionary<string, ArchitectorLayerDocuments> nextLayers,
+            ArchitectorSettingsDocument nextSettings,
+            bool dryRun,
+            IReadOnlyDictionary<string, string> recoveryDiskFiles,
+            bool notifyWhenUnchanged,
+            bool reportApprovalImpacts,
+            IReadOnlyCollection<string> touchedLayers)
+        {
+            committedFiles = null;
+            committedLayers = null;
+            committedChangedLayers = null;
             if (recoveryDiskFiles == null)
                 EnsureDiskMatchesSession();
+            var incremental = touchedLayers != null && recoveryDiskFiles == null && sessionFiles != null && ReferenceEquals(nextProject, Project);
             var baseDisk = recoveryDiskFiles ?? diskFiles;
             var changes = new SortedDictionary<string, string>(StringComparer.Ordinal);
             var validatedFiles = 0;
@@ -1851,13 +1901,24 @@ namespace Architector.Editor
             {
                 RequireCompleteLayers(nextProject, nextLayers);
                 RemoveLonelyPortals(nextLayers, dryRun);
-                portalPairs = ArchitectorValidation.ValidateRepository(nextProject, nextSettings ?? Settings, nextLayers);
-                var nextFiles = ArchitectorStorageCodec.Encode(nextProject, nextLayers);
+                var changedLayers = incremental ? ChangedLayers(nextLayers, touchedLayers) : null;
+                portalPairs = ArchitectorValidation.ValidateRepository(nextProject, nextSettings ?? Settings, nextLayers,
+                    changedLayers == null ? null : nextLayers.Keys.Where(id => !changedLayers.Contains(id)).ToHashSet(StringComparer.Ordinal),
+                    changedLayers == null || AddsDependency(nextLayers, changedLayers));
+                commitPhases.Lap("validate");
+                var nextFiles = changedLayers == null
+                    ? ArchitectorStorageCodec.Encode(nextProject, nextLayers)
+                    : ArchitectorStorageCodec.EncodeChangedLayers(nextProject, nextLayers, layerDocuments, sessionFiles, changedLayers);
+                commitPhases.Lap("encode_next");
                 IReadOnlyDictionary<string, string> previousFiles = recoveryDiskFiles == null && layerErrors.Count == 0
-                    ? ArchitectorStorageCodec.Encode(Project, layerDocuments)
+                    ? sessionFiles ?? ArchitectorStorageCodec.Encode(Project, layerDocuments)
                     : baseDisk
                         .Where(pair => !string.Equals(pair.Key, ArchitectorPaths.SettingsFileName, StringComparison.Ordinal))
                         .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+                commitPhases.Lap("encode_previous");
+                committedFiles = nextFiles;
+                committedLayers = changedLayers == null ? null : nextLayers.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+                committedChangedLayers = changedLayers;
                 foreach (var pair in nextFiles)
                 {
                     if (!previousFiles.TryGetValue(pair.Key, out var previous)
@@ -1875,6 +1936,7 @@ namespace Architector.Editor
                 if (reportApprovalImpacts)
                     approvalImpacts = BuildApprovalImpacts(nextProject, nextLayers);
                 EnforceGroupLocks(nextProject, nextLayers, previousFiles, nextFiles);
+                commitPhases.Lap("diff_and_locks");
             }
 
             if (nextSettings != null)
@@ -1908,6 +1970,33 @@ namespace Architector.Editor
             return result;
         }
 
+        private bool AddsDependency(IReadOnlyDictionary<string, ArchitectorLayerDocuments> nextLayers, ISet<string> changedLayers)
+        {
+            string Key(ArchitectorEdgeRecord edge) => $"{edge.id}|{edge.sourceLayerId}|{edge.sourceNodeId}|{edge.targetLayerId}|{edge.targetNodeId}";
+            foreach (var layerId in changedLayers)
+            {
+                if (!nextLayers.TryGetValue(layerId, out var next))
+                    continue;
+                var before = layerDocuments.TryGetValue(layerId, out var previous)
+                    ? previous.semantic.edges.Where(edge => edge.kind == ArchitectorEdgeKinds.Dependency).Select(Key).ToHashSet(StringComparer.Ordinal)
+                    : new HashSet<string>(StringComparer.Ordinal);
+                if (next.semantic.edges.Any(edge => edge.kind == ArchitectorEdgeKinds.Dependency && !before.Contains(Key(edge))))
+                    return true;
+            }
+            return false;
+        }
+
+        private HashSet<string> ChangedLayers(IReadOnlyDictionary<string, ArchitectorLayerDocuments> nextLayers, IEnumerable<string> touched)
+        {
+            var changed = touched.ToHashSet(StringComparer.Ordinal);
+            foreach (var pair in nextLayers)
+                if (!layerDocuments.TryGetValue(pair.Key, out var session) || !ArchitectorLazyLayers.IsShared(session, pair.Value))
+                    changed.Add(pair.Key);
+            foreach (var removed in layerDocuments.Keys.Where(id => !nextLayers.ContainsKey(id)))
+                changed.Add(removed);
+            return changed;
+        }
+
         private static bool IsRenamedEntry(string path) =>
             ArchitectorStorageCodec.IsCanonicalPath(path)
             && !string.Equals(path, ArchitectorPaths.ProjectFileName, StringComparison.Ordinal)
@@ -1930,21 +2019,42 @@ namespace Architector.Editor
             diskFiles = new Dictionary<string, string>(baseDisk, StringComparer.Ordinal);
             diskStamps = new Dictionary<string, ArchitectorFileStamp>(diskStamps, StringComparer.Ordinal);
 
+            var encoded = committedFiles;
+            var candidate = committedLayers;
+            var changedLayers = committedChangedLayers;
+            var keptSession = sessionFiles;
+            var previousLayers = layerDocuments;
+            committedFiles = null;
+            committedLayers = null;
+            committedChangedLayers = null;
             try
             {
                 ApplySnapshots(after);
-                var decoded = DecodeComplete(diskFiles);
-                Install(decoded, nextSettings ?? Settings, diskFiles, replacementStamps: null);
+                commitPhases.Lap("write");
+                if (candidate != null)
+                {
+                    layerDocuments = candidate;
+                    rejectedDiskStamps = null;
+                    ExternalChangeError = string.Empty;
+                }
+                else
+                    Install(DecodeComplete(diskFiles), nextSettings ?? Settings, diskFiles, replacementStamps: null);
+                sessionFiles = encoded ?? keptSession;
+                commitPhases.Lap("decode_install");
                 Revision++;
+                if (changedLayers != null)
+                    KeepApprovalStatuses(changedLayers, previousLayers);
                 undo.Push(new ArchitectorUndoRecord(name, before, after));
                 redo.Clear();
                 Changed?.Invoke();
+                commitPhases.Lap("changed_event");
             }
             catch
             {
                 ApplySnapshots(before);
                 diskFiles = previousDiskFiles;
                 diskStamps = previousDiskStamps;
+                sessionFiles = null;
                 throw;
             }
         }
@@ -1997,6 +2107,7 @@ namespace Architector.Editor
             layerDocuments = decoded.Layers;
             layerErrors = decoded.LayerErrors;
             Settings = settings;
+            sessionFiles = null;
             diskFiles = new Dictionary<string, string>(files, StringComparer.Ordinal);
             if (replacementStamps != null)
                 diskStamps = new Dictionary<string, ArchitectorFileStamp>(replacementStamps, StringComparer.Ordinal);
@@ -2005,6 +2116,8 @@ namespace Architector.Editor
         }
 
         public bool HasLayerLoadError(string layerId) => layerErrors.ContainsKey(layerId);
+
+        internal ArchitectorLayerDocuments PeekLayer(string layerId) => ReadLayer(layerId);
 
         private ArchitectorLayerDocuments ReadLayer(string layerId)
         {
@@ -2389,8 +2502,9 @@ namespace Architector.Editor
             foreach (var edge in layers.Values.SelectMany(documents => documents.semantic.edges))
                 if (!string.Equals(edge.sourceLayerId, edge.targetLayerId, StringComparison.Ordinal))
                     connected.Add(LayerPairKey(edge.sourceLayerId, edge.targetLayerId));
-            foreach (var documents in layers.Values)
+            foreach (var layerId in layers.Keys.ToArray())
             {
+                var documents = layers[layerId];
                 var lonely = documents.semantic.nodes
                     .Where(node => IsPortal(node) && !connected.Contains(LayerPairKey(documents.semantic.layerId, node.portal.targetLayerId)))
                     .ToArray();
@@ -2402,7 +2516,7 @@ namespace Architector.Editor
                     .Select(node => node.id)
                     .ToHashSet(StringComparer.Ordinal);
                 if (removed.Count > 0)
-                    RemoveNodes(documents, removed);
+                    RemoveNodes(ArchitectorLazyLayers.Mutable(layers, layerId), removed);
             }
         }
 
@@ -2427,15 +2541,16 @@ namespace Architector.Editor
             string layerId,
             ISet<string> nodeIds)
         {
-            foreach (var documents in documentsByLayerId.Values)
+            foreach (var ownerId in documentsByLayerId.Keys.ToArray())
             {
-                var removed = documents.semantic.edges.Where(edge =>
+                var removed = ArchitectorLazyLayers.Peek(documentsByLayerId, ownerId).semantic.edges.Where(edge =>
                         edge.sourceLayerId == layerId && nodeIds.Contains(edge.sourceNodeId)
                         || edge.targetLayerId == layerId && nodeIds.Contains(edge.targetNodeId))
                     .Select(edge => edge.id)
                     .ToHashSet(StringComparer.Ordinal);
                 if (removed.Count == 0)
                     continue;
+                var documents = documentsByLayerId[ownerId];
                 documents.semantic.edges.RemoveAll(edge => removed.Contains(edge.id));
                 documents.layout.edges.RemoveAll(layout => removed.Contains(layout.edgeId));
             }
@@ -2446,13 +2561,16 @@ namespace Architector.Editor
             string firstLayerId,
             string secondLayerId)
         {
-            foreach (var documents in documentsByLayerId.Values)
+            foreach (var ownerId in documentsByLayerId.Keys.ToArray())
             {
-                var removed = documents.semantic.edges.Where(edge =>
+                var removed = ArchitectorLazyLayers.Peek(documentsByLayerId, ownerId).semantic.edges.Where(edge =>
                         edge.sourceLayerId == firstLayerId && edge.targetLayerId == secondLayerId
                         || edge.sourceLayerId == secondLayerId && edge.targetLayerId == firstLayerId)
                     .Select(edge => edge.id)
                     .ToHashSet(StringComparer.Ordinal);
+                if (removed.Count == 0)
+                    continue;
+                var documents = documentsByLayerId[ownerId];
                 documents.semantic.edges.RemoveAll(edge => removed.Contains(edge.id));
                 documents.layout.edges.RemoveAll(layout => removed.Contains(layout.edgeId));
             }

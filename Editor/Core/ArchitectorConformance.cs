@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 
 namespace Architector.Editor
 {
@@ -30,6 +31,8 @@ namespace Architector.Editor
         public const string MemberSignatureChanged = "member_signature_changed";
         public const string UnanchoredNode = "unanchored_node";
         public const string DependencyCycle = "dependency_cycle";
+        public const string LayersUnchecked = "layers_unchecked";
+        public const string LinkedToUncheckedLayer = "linked_to_unchecked_layer";
     }
 
     public sealed class ArchitectorConformanceDiagnostic
@@ -56,6 +59,7 @@ namespace Architector.Editor
                 ? ArchitectorConformanceStates.Incomplete
                 : ArchitectorConformanceStates.Conformant;
         public int LayerCount { get; internal set; }
+        public int UncheckedLayerCount { get; internal set; }
         public int ApprovedLayerCount { get; internal set; }
         public int UnapprovedLayerCount { get; internal set; }
         public int LinkedTypeCount { get; internal set; }
@@ -98,12 +102,28 @@ namespace Architector.Editor
             if (layerIds == null)
                 throw new ArgumentNullException(nameof(layerIds));
 
-            var ids = layerIds.Where(id => !string.IsNullOrEmpty(id)).Distinct(StringComparer.Ordinal).ToArray();
-            var report = new ArchitectorConformanceReport { LayerCount = ids.Length };
+            var requested = layerIds.Where(id => !string.IsNullOrEmpty(id)).Distinct(StringComparer.Ordinal).ToArray();
+            var uncheckedLayers = repository.UncheckedLayerIds();
+            var ids = requested.Where(id => !uncheckedLayers.Contains(id)).ToArray();
+            var skipped = requested.Where(uncheckedLayers.Contains).ToArray();
+            var report = new ArchitectorConformanceReport { LayerCount = ids.Length, UncheckedLayerCount = skipped.Length };
             var limit = Math.Max(0, diagnosticLimit);
+            if (skipped.Length > 0)
+            {
+                var names = skipped.Select(id => repository.FindLayer(id)?.name ?? id).ToArray();
+                report.WarningCount++;
+                AddDiagnostic(report, limit, new ArchitectorConformanceDiagnostic
+                {
+                    Severity = ArchitectorConformanceSeverities.Warning,
+                    Code = ArchitectorConformanceCodes.LayersUnchecked,
+                    Expected = "Checked layers",
+                    Observed = $"{skipped.Length} skipped",
+                    Message = $"{skipped.Length} layer(s) in groups with checks off were skipped: {string.Join(", ", names.Take(5))}{(names.Length > 5 ? ", …" : string.Empty)}."
+                });
+            }
             var documents = repository.Project.layers.ToDictionary(
                 layer => layer.id,
-                layer => repository.LoadLayer(layer.id),
+                layer => repository.PeekLayer(layer.id),
                 StringComparer.Ordinal);
             var unanchoredByLayer = FindUnanchoredLinkedNodes(repository.Project, documents, ids)
                 .GroupBy(item => item.Layer.id, StringComparer.Ordinal)
@@ -132,7 +152,7 @@ namespace Architector.Editor
                     });
                 }
 
-                var semantic = repository.LoadLayer(layer.id).semantic;
+                var semantic = documents[layer.id].semantic;
                 if (unanchoredByLayer.TryGetValue(layer.id, out var unanchoredNodes))
                 {
                     foreach (var unanchored in unanchoredNodes)
@@ -163,13 +183,24 @@ namespace Architector.Editor
                         $"Cycle of {cycle.Members.Count} nodes in {cycle.LayerIds.Count} layers",
                         $"Dependency cycle: {repository.DescribeDependencyCycle(cycle)}."));
                 }
-                foreach (var node in semantic.nodes.Where(node =>
-                             string.Equals(node.type?.mode, "linked", StringComparison.Ordinal)))
+                foreach (var other in ArchitectorUncheckedGroups.LinksToUnchecked(layer.id, documents.Values, uncheckedLayers))
                 {
-                    EvaluateLinkedNode(report, limit, layer, node, typeIndex);
+                    var otherName = repository.FindLayer(other.Key)?.name ?? other.Key;
+                    report.ErrorCount++;
+                    AddDiagnostic(report, limit, new ArchitectorConformanceDiagnostic
+                    {
+                        Severity = ArchitectorConformanceSeverities.Error,
+                        Code = ArchitectorConformanceCodes.LinkedToUncheckedLayer,
+                        LayerId = layer.id,
+                        LayerName = layer.name,
+                        Expected = "No relationships with layers whose checks are off",
+                        Observed = $"{other.Count()} with '{otherName}'",
+                        Message = $"Layer '{layer.name}' has {other.Count()} relationship(s) with '{otherName}', where checks are off. Remove them, or move the layer out of that group and turn its checks on."
+                    });
                 }
+                MergeLinked(report, limit, LinkedResult(layer, semantic, typeIndex));
             }
-            if (report.LinkedTypeCount == 0)
+            if (report.LinkedTypeCount == 0 && ids.Length > 0)
             {
                 report.WarningCount++;
                 AddDiagnostic(report, limit, new ArchitectorConformanceDiagnostic
@@ -368,6 +399,45 @@ namespace Architector.Editor
                 Observed = observed ?? string.Empty,
                 Message = message
             };
+        }
+
+        private sealed class LinkedCacheEntry
+        {
+            public ArchitectorTypeIndex TypeIndex;
+            public int Generation;
+            public string LayerName;
+            public ArchitectorConformanceReport Report;
+        }
+
+        private static readonly ConditionalWeakTable<ArchitectorLayerDocument, LinkedCacheEntry> LinkedCache = new();
+
+        private static ArchitectorConformanceReport LinkedResult(ArchitectorLayerRecord layer, ArchitectorLayerDocument semantic, ArchitectorTypeIndex typeIndex)
+        {
+            if (LinkedCache.TryGetValue(semantic, out var cached)
+                && ReferenceEquals(cached.TypeIndex, typeIndex)
+                && cached.Generation == typeIndex.Generation
+                && cached.LayerName == layer.name)
+                return cached.Report;
+            var partial = new ArchitectorConformanceReport();
+            foreach (var node in semantic.nodes.Where(node => string.Equals(node.type?.mode, "linked", StringComparison.Ordinal)))
+                EvaluateLinkedNode(partial, int.MaxValue, layer, node, typeIndex);
+            LinkedCache.Remove(semantic);
+            LinkedCache.Add(semantic, new LinkedCacheEntry { TypeIndex = typeIndex, Generation = typeIndex.Generation, LayerName = layer.name, Report = partial });
+            return partial;
+        }
+
+        private static void MergeLinked(ArchitectorConformanceReport report, int limit, ArchitectorConformanceReport partial)
+        {
+            report.LinkedTypeCount += partial.LinkedTypeCount;
+            report.SelectedMemberCount += partial.SelectedMemberCount;
+            report.SelectedTypeFactCount += partial.SelectedTypeFactCount;
+            report.PassedCount += partial.PassedCount;
+            report.WarningCount += partial.WarningCount;
+            report.ErrorCount += partial.ErrorCount;
+            report.UnverifiedMemberCount += partial.UnverifiedMemberCount;
+            report.UnverifiedTypeFactCount += partial.UnverifiedTypeFactCount;
+            foreach (var diagnostic in partial.Diagnostics)
+                AddDiagnostic(report, limit, diagnostic);
         }
 
         private static void AddDiagnostic(

@@ -111,6 +111,8 @@ namespace Architector.Editor
         public string SelectedEdgeId => selectedEdgeId;
         public int SelectionCount => selectedNodeIds.Count;
         public bool IsBoxSelecting => boxSelecting;
+        public bool IsDraggingNode => draggingNode;
+        public string SelectionKey => selectedEdgeId + "|" + string.Join(",", selectedNodeIds.OrderBy(id => id, StringComparer.Ordinal));
 
         public void SelectOnly(string nodeId)
         {

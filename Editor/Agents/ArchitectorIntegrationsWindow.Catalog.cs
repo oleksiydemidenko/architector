@@ -61,7 +61,12 @@ namespace Architector.Editor.Agents
             foreach (var entry in filteredIntegrations.Skip(integrationPage * IntegrationsPerPage).Take(IntegrationsPerPage))
             {
                 var expanded = SessionState.GetBool(ExpandedKey + entry.Id, false);
-                using (var box = new ArchitectorFoldoutBox(entry.DisplayName + "   ·   " + string.Join(", ", entry.Tags), ref expanded))
+                var update = entry.Updates == null ? null : ArchitectorIntegrationUpdates.State(entry.Updates.Id).Update;
+                var title = entry.DisplayName + "   ·   " + string.Join(", ", entry.Tags);
+                if (update?.Available == true)
+                    title += "   ·   " + ArchitectorFoldoutBox.WarningText(update.availableVersion + " available");
+                using (var box = new ArchitectorFoldoutBox(new GUIContent(title), ref expanded,
+                           update?.Available == true ? EditorGUIUtility.IconContent("console.warnicon.sml").image : null))
                 {
                     if (box.Expanded)
                     {
@@ -107,8 +112,11 @@ namespace Architector.Editor.Agents
                             ArchitectorIntegrationUpdates.Install(entry.Updates, aiWork);
                     }
             }
-            if (!string.IsNullOrEmpty(state.Update?.releaseNotes))
-                EditorGUILayout.LabelField(state.Update.releaseNotes, EditorStyles.wordWrappedLabel);
+            if (state.Update?.Available == true)
+            {
+                var notesKey = ExpandedKey + entry.Id + ".notes";
+                SessionState.SetBool(notesKey, ArchitectorReleaseNotesView.Draw(state.Update.releaseNotes, SessionState.GetBool(notesKey, true)));
+            }
         }
 
         private void DrawIntegrationTags()

@@ -50,6 +50,7 @@ namespace Architector.Editor
         private const int RoutePatience = 20;
         private const float RouteCrossingCost = 64f;
         private const float RouteBendCost = 64f;
+        public const float DefaultImprovementSeconds = 5f;
 
         public static Dictionary<string, ArchitectorPoint> Arrange(
             IReadOnlyList<ArchitectorArrangeNode> nodes,
@@ -58,7 +59,8 @@ namespace Architector.Editor
             float grid,
             int maxGroupRelationships,
             IReadOnlyCollection<string> centers = null,
-            ArchitectorRelationshipMerging merging = ArchitectorRelationshipMerging.Off)
+            ArchitectorRelationshipMerging merging = ArchitectorRelationshipMerging.Off,
+            float improvementSeconds = DefaultImprovementSeconds)
         {
             var result = new Dictionary<string, ArchitectorPoint>(StringComparer.Ordinal);
             if (nodes.Count == 0)
@@ -69,7 +71,8 @@ namespace Architector.Editor
                 ? GroupAroundCenters(graph, centers)
                 : GroupByLimit(graph, maxGroupRelationships);
             var placements = OrderGroups(groups, graph).Select(group => LayOut(group, graph, gap, grid)).ToList();
-            ImproveByRoutes(placements, graph, nodes, edges, gap, grid, merging);
+            if (improvementSeconds > 0f)
+                ImproveByRoutes(placements, graph, nodes, edges, gap, grid, merging, improvementSeconds);
             Pack(placements.Select(placement => ToBlock(placement.Cells, graph, gap, grid)).ToList(), nodes, gap, grid, result);
             return result;
         }
@@ -81,8 +84,10 @@ namespace Architector.Editor
             IReadOnlyList<ArchitectorArrangeEdge> edges,
             float gap,
             float grid,
-            ArchitectorRelationshipMerging merging)
+            ArchitectorRelationshipMerging merging,
+            float improvementSeconds)
         {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
             var requests = edges
                 .Where(edge => edge.SourceNodeId != edge.TargetNodeId
                                && graph.Nodes.ContainsKey(edge.SourceNodeId)
@@ -106,12 +111,13 @@ namespace Architector.Editor
             var sinceImprovement = 0;
             var evaluations = 0;
             var improved = true;
-            while (improved && evaluations < RouteEvaluations && sinceImprovement < RoutePatience)
+            bool InTime() => clock.Elapsed.TotalSeconds < improvementSeconds;
+            while (improved && evaluations < RouteEvaluations && sinceImprovement < RoutePatience && InTime())
             {
                 improved = false;
                 foreach (var pair in SwapCandidates(placements, graph, busy))
                 {
-                    if (evaluations >= RouteEvaluations || sinceImprovement >= RoutePatience)
+                    if (evaluations >= RouteEvaluations || sinceImprovement >= RoutePatience || !InTime())
                         break;
                     var cells = pair.placement.Cells;
                     var occupants = pair.placement.Occupants();

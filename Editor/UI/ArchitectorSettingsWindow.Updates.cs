@@ -9,7 +9,7 @@ namespace Architector.Editor
     {
         [NonSerialized] private bool updateExpanded;
         private string updateShownTag;
-        private Vector2 updateNotesScroll;
+        private bool updateNotesExpanded = true;
 
         private void CheckForUpdatesOnOpen()
         {
@@ -42,11 +42,10 @@ namespace Architector.Editor
         private void DrawUpdates()
         {
             var available = ArchitectorPackageUpdates.UpdateAvailable;
-            var title = available
-                ? new GUIContent("Update — " + ArchitectorPackageUpdates.State.availableTag + " available", EditorGUIUtility.IconContent("console.warnicon.sml").image)
-                : new GUIContent("Update");
-            using var box = new ArchitectorFoldoutBox(title, ref updateExpanded,
-                ArchitectorPackageUpdates.IsCurrent ? EditorGUIUtility.IconContent("TestPassed").image : null);
+            var title = new GUIContent(available ? "Update " + ArchitectorFoldoutBox.WarningText(ArchitectorPackageUpdates.State.availableTag + " available") : "Update");
+            var icon = available ? EditorGUIUtility.IconContent("console.warnicon.sml").image
+                : ArchitectorPackageUpdates.IsCurrent ? EditorGUIUtility.IconContent("TestPassed").image : null;
+            using var box = new ArchitectorFoldoutBox(title, ref updateExpanded, icon);
             if (!box.Expanded)
                 return;
 
@@ -108,13 +107,8 @@ namespace Architector.Editor
                 MessageType.None);
             if (GUILayout.Button("Open Integrations", EditorStyles.miniButton))
                 OpenIntegrations();
-            if (available && !string.IsNullOrEmpty(state.releaseNotes))
-            {
-                EditorGUILayout.LabelField("Changes", EditorStyles.boldLabel);
-                updateNotesScroll = EditorGUILayout.BeginScrollView(updateNotesScroll, GUILayout.MaxHeight(240f));
-                EditorGUILayout.LabelField(state.releaseNotes, EditorStyles.wordWrappedLabel);
-                EditorGUILayout.EndScrollView();
-            }
+            if (available)
+                updateNotesExpanded = ArchitectorReleaseNotesView.Draw(state.releaseNotes, updateNotesExpanded);
         }
 
         private void ConfirmPackageUpdate()

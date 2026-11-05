@@ -51,6 +51,11 @@ namespace Architector.Editor
 
         public bool Expanded { get; }
 
+        public static string WarningText(string text)
+        {
+            return $"<color={(EditorGUIUtility.isProSkin ? "#F0C040" : "#8A5A00")}>{text}</color>";
+        }
+
         public static GUIStyle ContentStyle
         {
             get
@@ -84,7 +89,7 @@ namespace Architector.Editor
         {
             if (headerStyle == null)
             {
-                headerStyle = new GUIStyle(EditorStyles.foldout);
+                headerStyle = new GUIStyle(EditorStyles.foldout) { richText = true };
                 headerStyle.focused.textColor = headerStyle.normal.textColor;
                 headerStyle.onFocused.textColor = headerStyle.onNormal.textColor;
             }

@@ -123,6 +123,42 @@ namespace Architector.Editor.Tests
         }
 
         [Test]
+        public void LayerSummaryIsCompactTextWithoutIds()
+        {
+            var core = repository.CreateLayer(string.Empty, "Core");
+            var data = repository.CreateLayer(string.Empty, "Data");
+            string Node(string layer, string title)
+            {
+                var id = repository.CreateEmptyNode(layer, 0f, 0f);
+                repository.RenameEmptyNode(layer, id, title);
+                return id;
+            }
+            var store = Node(core, "Store");
+            var cache = Node(core, "Cache");
+            var reader = Node(data, "Reader");
+            var writer = Node(data, "Writer");
+            repository.UpdateNodeResponsibility(core, store, "Keeps the records.");
+            repository.CreateEdge(core, cache, store, ArchitectorEdgeKinds.Dependency, "auto");
+            repository.CreateCrossLayerEdge(data, reader, core, store, ArchitectorEdgeKinds.Dependency);
+            repository.CreateCrossLayerEdge(data, writer, core, store, ArchitectorEdgeKinds.Event);
+            repository.CreateCrossLayerEdge(data, writer, core, cache, ArchitectorEdgeKinds.Dependency);
+
+            var result = JObject.Parse(ArchitectorAgentQuery.Handle(
+                repository,
+                new ArchitectorAiWorkCoordinator(),
+                JObject.Parse("{ 'action': 'layer_graph', 'target': 'Core', 'detail': 'summary' }")).ToJson());
+            var summary = result["data"]?["summary"]?.Value<string>();
+
+            Assert.That(result["success"]?.Value<bool>(), Is.True, result.ToString());
+            Assert.That(summary, Does.Contain("Layer: Core"));
+            Assert.That(summary, Does.Contain("- Store — Keeps the records."));
+            Assert.That(summary, Does.Contain("- Cache -> Store dependency"));
+            Assert.That(summary, Does.Contain("Incoming (3 from 1 layers;"));
+            Assert.That(summary, Does.Contain("- Data: 3 (dependency 2, event 1) to Store, Cache"));
+            Assert.That(summary, Does.Not.Contain(store).And.Not.Contain(core).And.Not.Contain("portal"));
+        }
+
+        [Test]
         public void BridgeRefusesAWrongToken()
         {
             Assume.That(ArchitectorAgentBridge.Port, Is.GreaterThan(0), "The bridge runs only in an interactive Editor.");

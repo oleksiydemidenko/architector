@@ -175,6 +175,10 @@ namespace Architector.Editor
             var cycles = repository.FindDependencyCycles();
             if (cycles.Count > 0)
                 EditorGUILayout.HelpBox($"The graph has {cycles.Count} dependency cycles. Layer Inspector and conformance list them.", MessageType.None);
+            var checksOff = rules.uncheckedGroupIds.Select(id => repository.FindGroup(id)?.name).Where(name => name != null).ToArray();
+            EditorGUILayout.LabelField(
+                new GUIContent("Checks Off", "Groups whose layers conformance skips and which cannot be approved. Turn checks on or off from a group's context menu; agents cannot change it. Shared with the team."),
+                new GUIContent(checksOff.Length == 0 ? "None" : string.Join(", ", checksOff)));
         }
 
         private static void DrawPathList(List<string> paths, string newValue)
@@ -222,6 +226,13 @@ namespace Architector.Editor
                 arrange.maxGroupRelationships,
                 4,
                 64);
+            arrange.improvementSeconds = EditorGUILayout.Slider(
+                new GUIContent(
+                    "Improvement Time (s)",
+                    "Arrange first lays a layer out quickly, then tries node swaps that shorten and uncross its lines until this time runs out. The layout is always complete; less time means fewer improvements on large layers. 0 skips the improvement."),
+                arrange.improvementSeconds,
+                0f,
+                30f);
         }
 
         private void DrawOptimization(ArchitectorOptimizationSettings optimization)

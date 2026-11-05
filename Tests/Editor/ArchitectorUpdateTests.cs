@@ -189,6 +189,14 @@ namespace Architector.Editor.Tests
             }
         }
 
+        [Test]
+        public void ReleaseNotesShowHeadingsBulletsAndBoldWithoutMarkdown()
+        {
+            var text = ArchitectorReleaseNotesView.Format("## 0.2.7\r\n\r\n- **Rules.** Reject `cycles`.\n- Faster.\n");
+
+            Assert.That(text, Is.EqualTo("<b>0.2.7</b>\n•  <b>Rules.</b> Reject cycles.\n•  Faster."));
+        }
+
         private static JObject Release() => JObject.Parse(
             "{ 'draft': false, 'prerelease': false, 'assets': [ { 'name': 'architector-mcp-linux-x64', 'state': 'uploaded' }, { 'name': 'checksums.txt', 'state': 'uploaded' } ] }");
     }

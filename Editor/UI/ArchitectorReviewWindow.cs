@@ -50,6 +50,20 @@ namespace Architector.Editor
             window.Show();
         }
 
+        public static int PendingCount(ArchitectorRepository repository)
+        {
+            var uncheckedLayers = repository.UncheckedLayerIds();
+            return repository.Project.layers.Count(layer => !uncheckedLayers.Contains(layer.id)
+                                                            && NeedsReview(layer, repository.GetLayerApprovalStatus(layer.id).State));
+        }
+
+        private static bool NeedsReview(ArchitectorLayerRecord layer, string state)
+        {
+            return state == ArchitectorApprovalStates.Changed
+                   || state == ArchitectorApprovalStates.Draft
+                   || state == ArchitectorApprovalStates.Approved && layer.approval?.approvedByAgent == true;
+        }
+
         private void OnEnable()
         {
             titleContent = new GUIContent(Title);
@@ -78,7 +92,8 @@ namespace Architector.Editor
 
             RefreshErrors();
             var statuses = repository.GetLayerApprovalStatuses().ToDictionary(status => status.LayerId, StringComparer.Ordinal);
-            var layers = LayersInExplorerOrder().Where(layer => statuses.ContainsKey(layer.id)).ToArray();
+            var uncheckedLayers = repository.UncheckedLayerIds();
+            var layers = LayersInExplorerOrder().Where(layer => statuses.ContainsKey(layer.id) && !uncheckedLayers.Contains(layer.id)).ToArray();
             var changed = layers.Where(layer => statuses[layer.id].State == ArchitectorApprovalStates.Changed).ToArray();
             var byAgent = layers.Where(layer => statuses[layer.id].State == ArchitectorApprovalStates.Approved
                                                 && layer.approval?.approvedByAgent == true).ToArray();

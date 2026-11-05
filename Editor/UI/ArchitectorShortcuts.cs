@@ -32,6 +32,16 @@ namespace Architector.Editor
                 window.SendCanvasCommand(command);
         }
 
+        private static void Step(ShortcutArguments arguments, string command, int direction)
+        {
+            if (arguments.context is not ArchitectorMasterWindow window || EditorGUIUtility.editingTextField)
+                return;
+            if (window.ExplorerHasKeyboardFocus)
+                window.StepExplorerLayer(direction);
+            else if (window.CanvasHasPointer)
+                window.SendCanvasCommand(command);
+        }
+
         private static void Navigate(ShortcutArguments arguments, int direction)
         {
             if (arguments.context is ArchitectorMasterWindow window && !EditorGUIUtility.editingTextField)
@@ -72,10 +82,10 @@ namespace Architector.Editor
         private static void OnNeighbourRight(ShortcutArguments arguments) => Send(arguments, NeighbourRight);
 
         [Shortcut(NeighbourUp, typeof(ArchitectorMasterWindow), KeyCode.UpArrow)]
-        private static void OnNeighbourUp(ShortcutArguments arguments) => Send(arguments, NeighbourUp);
+        private static void OnNeighbourUp(ShortcutArguments arguments) => Step(arguments, NeighbourUp, -1);
 
         [Shortcut(NeighbourDown, typeof(ArchitectorMasterWindow), KeyCode.DownArrow)]
-        private static void OnNeighbourDown(ShortcutArguments arguments) => Send(arguments, NeighbourDown);
+        private static void OnNeighbourDown(ShortcutArguments arguments) => Step(arguments, NeighbourDown, 1);
 
         [Shortcut(PreviousLayer, typeof(ArchitectorMasterWindow), KeyCode.LeftArrow, ShortcutModifiers.Alt)]
         private static void OnPreviousLayer(ShortcutArguments arguments) => Navigate(arguments, -1);

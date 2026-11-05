@@ -2593,5 +2593,169 @@ namespace Architector.Editor.Tests
             Assert.That(node.members.Single().declaration, Is.EqualTo("public void Stop(string cue)"));
             Assert.That(converted.References, Is.Empty);
         }
+
+        [Test]
+        public void ChecksOffSkipsConformanceBlocksApprovalAndSurvivesReload()
+        {
+            var groupId = repository.CreateGroup(string.Empty, "Sketches");
+            var layerId = repository.CreateLayer(groupId, "Sketch");
+            repository.CreateLinkedNode(layerId, 0f, 0f, CreateIndexedType());
+            using var index = new ArchitectorTypeIndex(repository);
+            Assert.That(ArchitectorConformance.Evaluate(repository, index, new[] { layerId }).ErrorCount, Is.GreaterThan(0));
+            Assert.That(ArchitectorReviewWindow.PendingCount(repository), Is.EqualTo(1));
+
+            repository.SetGroupChecks(groupId, false);
+
+            var report = ArchitectorConformance.Evaluate(repository, index, new[] { layerId });
+            Assert.That(report.ErrorCount, Is.Zero);
+            Assert.That(report.UncheckedLayerCount, Is.EqualTo(1));
+            Assert.That(report.Diagnostics.Select(diagnostic => diagnostic.Code), Is.EqualTo(new[] { ArchitectorConformanceCodes.LayersUnchecked }));
+            Assert.Throws<ArchitectorDataException>(() => repository.ApproveLayers(new[] { layerId }));
+            Assert.That(ArchitectorReviewWindow.PendingCount(repository), Is.Zero);
+            Assert.That(new ArchitectorRepository(new ArchitectorPaths(temporaryRoot)).IsUnchecked(layerId), Is.True);
+
+            repository.SetGroupChecks(groupId, true);
+            Assert.That(ArchitectorConformance.Evaluate(repository, index, new[] { layerId }).ErrorCount, Is.GreaterThan(0));
+        }
+
+        [Test]
+        public void ChecksStayOnForApprovedLockedAndInheritedGroups()
+        {
+            var approvedGroup = repository.CreateGroup(string.Empty, "Approved");
+            repository.ApproveLayers(new[] { repository.CreateLayer(approvedGroup, "Done") });
+            Assert.That(() => repository.SetGroupChecks(approvedGroup, false), Throws.TypeOf<ArchitectorDataException>().With.Message.Contains("Revoke"));
+
+            var lockedGroup = repository.CreateGroup(string.Empty, "Core");
+            var lockedChild = repository.CreateGroup(lockedGroup, "Inner");
+            repository.LockGroup(lockedGroup, "secret", string.Empty);
+            Assert.That(() => repository.SetGroupChecks(lockedChild, false), Throws.TypeOf<ArchitectorDataException>().With.Message.Contains("locked"));
+
+            var parent = repository.CreateGroup(string.Empty, "Sketches");
+            var child = repository.CreateGroup(parent, "Doors");
+            repository.SetGroupChecks(parent, false);
+            Assert.That(repository.IsUnchecked(child), Is.True);
+            Assert.Throws<ArchitectorDataException>(() => repository.SetGroupChecks(child, false));
+            Assert.Throws<ArchitectorDataException>(() => repository.SetGroupChecks(child, true));
+        }
+
+        [Test]
+        public void CyclesInsideGroupsWithChecksOffAreAllowedUntilChecksReturn()
+        {
+            var groupId = repository.CreateGroup(string.Empty, "Sketches");
+            var layerId = repository.CreateLayer(groupId, "Loop");
+            var first = repository.CreateEmptyNode(layerId, 0f, 0f);
+            var second = repository.CreateEmptyNode(layerId, 600f, 0f);
+            repository.CreateEdge(layerId, first, second, ArchitectorEdgeKinds.Dependency, "left");
+            Assert.Throws<ArchitectorDataException>(() => repository.CreateEdge(layerId, second, first, ArchitectorEdgeKinds.Dependency, "right"));
+
+            repository.SetGroupChecks(groupId, false);
+            Assert.DoesNotThrow(() => repository.CreateEdge(layerId, second, first, ArchitectorEdgeKinds.Dependency, "right"));
+
+            Assert.That(() => repository.SetGroupChecks(groupId, true), Throws.TypeOf<ArchitectorDataException>().With.Message.Contains("cycle"));
+            Assert.That(repository.IsUnchecked(layerId), Is.True);
+        }
+
+        [Test]
+        public void RelationshipsWithLayersWithChecksOffAreErrorsAndBlockApproval()
+        {
+            var checkedLayer = repository.CreateLayer(string.Empty, "Doors");
+            var groupId = repository.CreateGroup(string.Empty, "Sketches");
+            var sketchLayer = repository.CreateLayer(groupId, "Lights");
+            var door = repository.CreateEmptyNode(checkedLayer, 0f, 0f);
+            var light = repository.CreateEmptyNode(sketchLayer, 0f, 0f);
+            repository.CreateCrossLayerEdge(checkedLayer, door, sketchLayer, light, ArchitectorEdgeKinds.Dependency);
+            repository.SetGroupChecks(groupId, false);
+            using var index = new ArchitectorTypeIndex(repository);
+
+            var report = ArchitectorConformance.Evaluate(repository, index, new[] { checkedLayer });
+
+            var error = report.Diagnostics.Single(diagnostic => diagnostic.Code == ArchitectorConformanceCodes.LinkedToUncheckedLayer);
+            Assert.That(error.Severity, Is.EqualTo(ArchitectorConformanceSeverities.Error));
+            Assert.That(error.Message, Does.Contain("Lights"));
+            Assert.That(report.UncheckedLayerCount, Is.Zero);
+            Assert.That(() => repository.ApproveLayers(new[] { checkedLayer }), Throws.TypeOf<ArchitectorDataException>().With.Message.Contains("Lights"));
+
+            var incoming = repository.CreateLayer(string.Empty, "Switches");
+            var sketch = repository.CreateEmptyNode(sketchLayer, 600f, 0f);
+            var lever = repository.CreateEmptyNode(incoming, 0f, 0f);
+            repository.CreateCrossLayerEdge(sketchLayer, sketch, incoming, lever, ArchitectorEdgeKinds.Dependency);
+            Assert.That(ArchitectorConformance.Evaluate(repository, index, new[] { incoming }).Diagnostics
+                .Select(diagnostic => diagnostic.Code), Does.Contain(ArchitectorConformanceCodes.LinkedToUncheckedLayer));
+        }
+
+        [Test]
+        public void FastLayerEditsKeepTheSessionEqualToAFreshLoadAndToCanonicalFiles()
+        {
+            var groupId = repository.CreateGroup(string.Empty, "Doors");
+            var first = repository.CreateLayer(groupId, "Locks");
+            var second = repository.CreateLayer(groupId, "Keys");
+            var third = repository.CreateLayer(string.Empty, "Hall");
+            var lockNode = repository.CreateEmptyNode(first, 0f, 0f);
+            var keyNode = repository.CreateEmptyNode(second, 0f, 0f);
+            var hallNode = repository.CreateEmptyNode(third, 0f, 0f);
+            repository.CreateCrossLayerEdge(first, lockNode, second, keyNode, ArchitectorEdgeKinds.Dependency);
+            repository.CreateCrossLayerEdge(third, hallNode, first, lockNode, ArchitectorEdgeKinds.Event);
+            repository.ApproveLayers(new[] { first, second, third });
+            AssertSessionMatchesDisk();
+
+            repository.RenameEmptyNode(second, keyNode, "Master Key");
+            AssertSessionMatchesDisk();
+            Assert.That(repository.GetLayerApprovalStatus(first).State, Is.EqualTo(ArchitectorApprovalStates.Changed));
+            Assert.That(repository.GetLayerApprovalStatus(third).State, Is.EqualTo(ArchitectorApprovalStates.Approved));
+
+            var spare = repository.CreateEmptyNode(second, 600f, 0f);
+            repository.CreateEdge(second, spare, keyNode, ArchitectorEdgeKinds.DataFlow, "auto");
+            repository.MoveNode(second, spare, 900f, 300f);
+            AssertSessionMatchesDisk();
+
+            repository.DeleteNode(second, keyNode);
+            AssertSessionMatchesDisk();
+            Assert.That(repository.LoadLayer(first).semantic.nodes.Any(node => node.kind == ArchitectorNodeKinds.LayerPortal && node.portal.targetLayerId == second), Is.False);
+
+            repository.RenameEntry(third, "Lobby");
+            repository.DeleteNode(first, lockNode);
+            AssertSessionMatchesDisk();
+        }
+
+        private static ArchitectorLayerDocuments Canonical(ArchitectorLayerDocuments documents)
+        {
+            documents.semantic.nodes.Sort((left, right) => string.CompareOrdinal(left.id, right.id));
+            documents.semantic.edges.Sort((left, right) => string.CompareOrdinal(left.id, right.id));
+            documents.layout.nodes.Sort((left, right) => string.CompareOrdinal(left.nodeId, right.nodeId));
+            documents.layout.edges.Sort((left, right) => string.CompareOrdinal(left.edgeId, right.edgeId));
+            return documents;
+        }
+
+        private void AssertSessionMatchesDisk()
+        {
+            var fresh = new ArchitectorRepository(new ArchitectorPaths(temporaryRoot));
+            var layers = fresh.Project.layers.ToDictionary(layer => layer.id, layer => fresh.LoadLayer(layer.id), StringComparer.Ordinal);
+            foreach (var layer in repository.Project.layers)
+            {
+                var session = Canonical(repository.LoadLayer(layer.id));
+                var loaded = Canonical(fresh.LoadLayer(layer.id));
+                Assert.That(ArchitectorJson.Serialize(session.semantic), Is.EqualTo(ArchitectorJson.Serialize(loaded.semantic)), layer.name);
+                Assert.That(ArchitectorJson.Serialize(session.layout), Is.EqualTo(ArchitectorJson.Serialize(loaded.layout)), layer.name);
+                Assert.That(repository.GetLayerApprovalStatus(layer.id).CurrentHash, Is.EqualTo(fresh.GetLayerApprovalStatus(layer.id).CurrentHash), layer.name);
+            }
+            var root = Path.Combine(temporaryRoot, ArchitectorPaths.DataDirectoryName);
+            foreach (var file in ArchitectorStorageCodec.Encode(fresh.Project, layers))
+                Assert.That(File.ReadAllText(Path.Combine(root, file.Key)), Is.EqualTo(file.Value), file.Key);
+        }
+
+        [Test]
+        public void ReviewCountsDraftAndChangedLayers()
+        {
+            var approvedId = repository.CreateLayer(string.Empty, "Approved");
+            repository.CreateLayer(string.Empty, "Draft");
+            repository.ApproveLayers(new[] { approvedId });
+            Assert.That(ArchitectorReviewWindow.PendingCount(repository), Is.EqualTo(1));
+
+            repository.CreateEmptyNode(approvedId, 0f, 0f);
+            Assert.That(ArchitectorReviewWindow.PendingCount(repository), Is.EqualTo(2));
+
+            repository.ApproveLayers(repository.Project.layers.Select(layer => layer.id).ToArray());
+            Assert.That(ArchitectorReviewWindow.PendingCount(repository), Is.Zero);
+        }
     }
 }

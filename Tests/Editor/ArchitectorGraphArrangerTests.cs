@@ -154,5 +154,22 @@ namespace Architector.Editor.Tests
                 Assert.That(second[pair.Key], Is.EqualTo(pair.Value));
             Assert.That(first.Values.Min(point => point.x), Is.EqualTo(0f));
         }
+
+        [Test]
+        public void WithoutImprovementTimeTheLayoutIsStillCompleteAndValid()
+        {
+            var nodes = Enumerable.Range(0, 14).Select(index => Node($"n{index:00}")).ToList();
+            var edges = new List<ArchitectorArrangeEdge>();
+            for (var index = 1; index < 14; index++)
+            {
+                edges.Add(Edge("n00", $"n{index:00}"));
+                edges.Add(Edge($"n{index:00}", $"n{index % 13 + 1:00}"));
+            }
+
+            var positions = ArchitectorGraphArranger.Arrange(nodes, edges, Gap, Grid, 64, improvementSeconds: 0f);
+
+            Assert.That(positions.Keys, Is.EquivalentTo(nodes.Select(node => node.Id)));
+            AssertNoOverlap(nodes, positions);
+        }
     }
 }

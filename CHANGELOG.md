@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Editing nodes and relationships is about 15 times faster: on 50 layers an edit with the window's refresh drops from about 3 s to 0.2 s. Only the layers an edit touches are cloned, validated, encoded and reinstalled; approval hashes and conformance are recomputed only where they can change.
+- `layer_graph` with `detail=summary` returns the layer as compact text: paths and names instead of IDs, no empty fields, incoming relationships folded into one line per source layer.
+- **Settings > Arrange > Improvement Time** (5 s by default) limits how long Arrange improves a layer; the layout itself is always complete.
+- An available update shows its version in yellow and a warning icon in Settings and on its integration in Integrations; the change list is a foldout sized to its text.
+- The Project panel shows **Review (N)** when layers are changed, approved by an agent or in draft.
+- After you drag nodes, the inspector keeps what it shows: a click only selects, and clicking the selected node or relationship again opens it. Clicking empty canvas or opening a layer returns to one click.
+- After a click on a layer in Explorer, Up and Down open the previous and next layer of that list in one preview tab; a click on the canvas gives the arrows back to node navigation.
+- **Turn Checks Off** on a group (context menu): conformance skips its layers and says how many it skipped, dependency cycles inside them are allowed, and they cannot be approved. A relationship between such a layer and a checked one is a conformance error and blocks approval of the checked layer. Only a person can switch it, never in locked groups or groups with approved layers. Listed in **Settings > Rules**.
+
 ## 0.2.7
 
 - **Settings > Rules > Dependency Cycles.** Reject (default) refuses a dependency cycle and names it; Report keeps cycles that exist in the code and lists them as warnings.

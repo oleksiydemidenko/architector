@@ -9,6 +9,8 @@ namespace Architector.Editor
         private readonly Dictionary<string, ArchitectorLayerApprovalStatus> approvalStatusCache =
             new(StringComparer.Ordinal);
         private int approvalStatusCacheRevision = -1;
+        private int approvalEdgesRevision = -1;
+        private Dictionary<string, List<ArchitectorEdgeRecord>> approvalCrossEdges = new(StringComparer.Ordinal);
 
         public ArchitectorLayerApprovalStatus GetLayerApprovalStatus(string layerId)
         {
@@ -22,7 +24,18 @@ namespace Architector.Editor
 
             var layer = FindLayer(layerId)
                         ?? throw new ArchitectorDataException($"Layer '{layerId}' does not exist.");
-            var hash = ComputeSemanticHashForLayer(Project, LoadAllLayers(), layer.id);
+            if (approvalEdgesRevision != SemanticRevision)
+            {
+                approvalCrossEdges = layerDocuments.Values.SelectMany(documents => documents.semantic.edges)
+                    .Where(edge => edge.sourceLayerId != edge.targetLayerId)
+                    .GroupBy(edge => edge.sourceLayerId, StringComparer.Ordinal)
+                    .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+                approvalEdgesRevision = SemanticRevision;
+            }
+            var hash = layerErrors.Count > 0
+                ? ComputeSemanticHashForLayer(Project, LoadAllLayers(), layer.id)
+                : ComputeSemanticHashForLayer(Project, layerDocuments, layer.id,
+                    approvalCrossEdges.TryGetValue(layer.id, out var crossEdges) ? crossEdges : new List<ArchitectorEdgeRecord>());
             var state = ArchitectorApproval.State(layer, hash);
             var status = new ArchitectorLayerApprovalStatus(
                 layer.id,
@@ -31,6 +44,31 @@ namespace Architector.Editor
                 hash);
             approvalStatusCache.Add(layerId, status);
             return status;
+        }
+
+        private void KeepApprovalStatuses(ISet<string> changedLayers, IReadOnlyDictionary<string, ArchitectorLayerDocuments> previousLayers)
+        {
+            if (approvalStatusCacheRevision != SemanticRevision - 1)
+                return;
+            approvalStatusCacheRevision = SemanticRevision;
+            var renamed = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var layerId in changedLayers)
+            {
+                var before = previousLayers.TryGetValue(layerId, out var previous)
+                    ? previous.semantic.nodes.ToDictionary(node => node.id, node => node.title, StringComparer.Ordinal)
+                    : new Dictionary<string, string>(StringComparer.Ordinal);
+                var after = layerDocuments.TryGetValue(layerId, out var next)
+                    ? next.semantic.nodes.ToDictionary(node => node.id, node => node.title, StringComparer.Ordinal)
+                    : new Dictionary<string, string>(StringComparer.Ordinal);
+                foreach (var node in before.Where(node => !after.TryGetValue(node.Key, out var title) || title != node.Value))
+                    renamed.Add(layerId + "|" + node.Key);
+            }
+            var affected = new HashSet<string>(changedLayers, StringComparer.Ordinal);
+            foreach (var edge in layerDocuments.Values.SelectMany(documents => documents.semantic.edges))
+                if (renamed.Contains(edge.targetLayerId + "|" + edge.targetNodeId))
+                    affected.Add(edge.sourceLayerId);
+            foreach (var layerId in affected)
+                approvalStatusCache.Remove(layerId);
         }
 
         public IReadOnlyList<ArchitectorLayerApprovalStatus> GetLayerApprovalStatuses(
@@ -49,7 +87,22 @@ namespace Architector.Editor
             var ids = layerIds.Where(value => !string.IsNullOrEmpty(value)).Distinct(StringComparer.Ordinal).ToArray();
             if (ids.Length != layerIds.Count)
                 throw new ArchitectorDataException("Layer approval contains an empty or duplicate ID.");
+            foreach (var id in ids)
+            {
+                var uncheckedGroup = FindUncheckedGroup(id);
+                if (uncheckedGroup.Length > 0)
+                    throw new ArchitectorDataException(
+                        $"Layer '{FindLayer(id)?.name ?? id}' is in group '{FindGroup(uncheckedGroup).name}', where checks are off. Turn checks on for the group before approving: approval means the layer is checked.");
+            }
             var layers = LoadAllLayers();
+            var uncheckedLayers = UncheckedLayerIds();
+            foreach (var id in ids)
+            {
+                var link = ArchitectorUncheckedGroups.LinksToUnchecked(id, layers.Values, uncheckedLayers).FirstOrDefault();
+                if (link != null)
+                    throw new ArchitectorDataException(
+                        $"Layer '{FindLayer(id)?.name ?? id}' has {link.Count()} relationship(s) with '{FindLayer(link.Key)?.name ?? link.Key}', where checks are off. Remove them before approving.");
+            }
             ArchitectorApproval.EnsureLayersCanBeApproved(Project, layers, ids);
             var hashes = ids.ToDictionary(
                 id => id,
@@ -288,10 +341,20 @@ namespace Architector.Editor
             IReadOnlyDictionary<string, ArchitectorLayerDocuments> layers,
             string layerId)
         {
+            var crossEdges = layers.Values.SelectMany(documents => documents.semantic.edges)
+                .Where(edge => edge.sourceLayerId == layerId && edge.targetLayerId != layerId);
+            return ComputeSemanticHashForLayer(project, layers, layerId, crossEdges);
+        }
+
+        private static string ComputeSemanticHashForLayer(
+            ArchitectorProjectDocument project,
+            IReadOnlyDictionary<string, ArchitectorLayerDocuments> layers,
+            string layerId,
+            IEnumerable<ArchitectorEdgeRecord> crossEdges)
+        {
             var layer = project.layers.First(candidate => candidate.id == layerId);
             var layerNames = project.layers.ToDictionary(candidate => candidate.id, candidate => candidate.name, StringComparer.Ordinal);
-            var facts = layers.Values.SelectMany(documents => documents.semantic.edges)
-                .Where(edge => edge.sourceLayerId == layerId && edge.targetLayerId != layerId)
+            var facts = crossEdges
                 .Select(edge =>
                 {
                     var source = layers[edge.sourceLayerId].semantic.nodes.First(node => node.id == edge.sourceNodeId);
