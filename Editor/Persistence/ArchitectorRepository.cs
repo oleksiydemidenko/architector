@@ -40,7 +40,20 @@ namespace Architector.Editor
         public ArchitectorPaths Paths { get; }
         public ArchitectorProjectDocument Project { get; private set; }
         public ArchitectorSettingsDocument Settings { get; private set; }
-        public int Revision { get; private set; }
+        // Kept in the Editor session, so a script reload continues the count instead of starting again at 1
+        // (agents compare it with expected_revision).
+        public int Revision
+        {
+            get => revision;
+            private set
+            {
+                revision = value;
+                UnityEditor.SessionState.SetInt(RevisionSessionKey, value);
+            }
+        }
+
+        private int revision;
+        private string RevisionSessionKey => "Architector.Revision:" + Paths.RepositoryRoot;
         public IReadOnlyDictionary<string, double> LastCommitPhases => commitPhases.Last;
         private SortedDictionary<string, string> sessionFiles;
         private SortedDictionary<string, string> committedFiles;
@@ -59,6 +72,7 @@ namespace Architector.Editor
             EnsureStorageExists();
             var files = ReadDiskFiles(out var stamps);
             Install(ArchitectorStorageCodec.Decode(files), ReadSettings(files), files, stamps);
+            revision = Math.Max(revision, UnityEditor.SessionState.GetInt(RevisionSessionKey, 0));
             Revision++;
         }
 

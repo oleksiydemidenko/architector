@@ -477,6 +477,7 @@ namespace Architector.Editor.Agents
                 portal_pair_count = result.Batch.PortalPairCount,
                 approval_impacts = ApprovalImpacts(result.Batch.ApprovalImpacts),
                 references = result.References,
+                warnings = result.Warnings.Count == 0 ? null : result.Warnings,
                 can_undo = repository.CanUndo,
                 next_undo = repository.NextUndoName
             });

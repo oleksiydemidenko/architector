@@ -66,7 +66,7 @@ namespace Architector.Editor.Agents
                     case "group_contents":
                         return GroupContents(repository, parameters.target);
                     case "layer_graph":
-                        return LayerGraph(repository, parameters.target, parameters.include_layout == true, parameters.detail);
+                        return LayerGraph(repository, parameters.target, parameters.include_layout == true, parameters.detail, parameters.limit ?? 40, parameters.offset ?? 0);
                     case "node":
                         return NodeDetails(repository, parameters.target, parameters.node);
                     case "relationships":
@@ -163,7 +163,9 @@ namespace Architector.Editor.Agents
                     rules = new[]
                     {
                         "Every created entity has one plan-unique reference.",
-                        "References may also be existing immutable IDs or Explorer paths such as Core/Player/Movement.",
+                        "References may also be existing immutable IDs or Explorer paths such as Core/Player/Movement. A node may be named by its title, \"Node Title\" or \"Layer/Path::Node Title\"; an ambiguous title fails with the candidate ids.",
+                        "Code facts come from the architector-mcp server without Unity: code_evidence (every cross-layer reference, owners, same-layer references), layer_facts (a layer's files, types, references by layer and node candidates with file:line), scope_what_if (what moving types, files or folders to another layer would change), layer_dump (nodes and relationships with ids, paged) and lookup (names to layer, node and member ids). Before reading a layer's code, call layer_facts and read only the lines it points to; before changing a scope, call scope_what_if. Write responsibilities yourself from the code.",
+                        "nodeContracts on a linked node: an omitted members, baseType or interfaces keeps what the node has; an explicit empty list clears it. dry_run_plan lists in warnings every member and interface a plan removes.",
                         "Group and layer names are unique among siblings; the path identifies an entry.",
                         "A layer with an approval baseline shows only Portals to other approved layers; layer_graph marks the others visible_in_layer=false. Hidden Portals remain canonical and validated.",
                         "Layer code scope (layerScopes: folders or single files, and namespaces; the most specific entry wins) maps code to layers for the dependency evidence tool; it does not affect approval. Run: dotnet run --project \"" + ArchitectorPackagePaths.DependencyEvidenceProject + "\" -- <repository root>.",
@@ -173,7 +175,7 @@ namespace Architector.Editor.Agents
                         "type_contract hides framework members and interface declarations the type implements itself; pass query to filter members by declaration text, which also includes framework members.",
                         "Fill a node responsibility (one line, at most 240 characters) when its role is not obvious from the name; it explains the node and does not affect approval.",
                         "Raw dry_run/apply documents use the storage layout: architector.project.json, Groups/<id>.group.json, Layers/<id>.layer.json (header, own nodes and intra-layer edges), Layouts/<id>.layout.json and Links/<pair-id>.link.json (both Portal endpoints and cross-layer relationships). Prefer semantic plans.",
-                        "Prefer narrow reads: layer_graph with detail=summary returns the layer as compact text with paths and names and no IDs (incoming relationships folded per source layer), node takes target (layer) and node (ID or title), relationships takes target, optional node and direction=in|out|both, dependency_path takes target and to (layers). find, type_search, type_contract and relationships take offset and report next_offset when more results exist.",
+                        "Prefer narrow reads: layer_dump from the server, or layer_graph with detail=summary returns the layer as compact text with paths and names and no IDs (incoming relationships folded per source layer), node takes target (layer) and node (ID or title), relationships takes target, optional node and direction=in|out|both, dependency_path takes target and to (layers). layer_graph (40 nodes and 40 relationships per page by default), find, type_search, type_contract and relationships take offset and limit and report next_offset when more results exist.",
                         "Do not arrange while working: call arrange_changed_layers once before end_work; it lays out layers created in this work session and places nodes added to existing layers next to their neighbours, and reports layers in locked groups as skipped. arrange_layer takes target and optional nodes and centers (node IDs) for an explicit user request. relink_node takes target, node and type_key, keeps the node ID and relationships, and reports dropped_members. Both need expected_revision and work_token.",
                         "setup_check reports whether source roots, indexed types, the server, the bridge and Run In Background are ready.",
                         "A failed semantic plan reports operation, for example edges[3], when the failure belongs to one plan item. An unknown or ambiguous layer returns candidates.",
@@ -183,7 +185,7 @@ namespace Architector.Editor.Agents
                         "Entry deletion is recursive; Portal node/layer deletion removes reciprocal endpoints.",
                         "All creation and mutation arrays form one validated transaction and one Undo action.",
                         "begin_work requires expected_revision and returns a work_token.",
-                        "Script compilation preserves the lock in an awaiting-agent state; resume_work or any authenticated mutation confirms the agent resumed.",
+                        "Script compilation preserves the lock in an awaiting-agent state (work_status shows awaiting_agent_resume and next_step): call resume_work with the same work_token, then continue; any authenticated mutation also confirms it. The revision keeps counting across a script reload.",
                         "Mutations during active work require its work_token; end_work releases the session.",
                         "apply_plan requires expected_revision; dry_run_plan never writes.",
                         "apply/apply_plan save designs without approval; do not pass approve_changes.",
@@ -211,6 +213,9 @@ namespace Architector.Editor.Agents
                 workspaces_user_override = aiWork?.WorkspacesUnlockedByUser == true,
                 settings_user_override = aiWork?.SettingsUnlockedByUser == true,
                 awaiting_agent_resume = aiWork?.IsAwaitingAgentResume == true,
+                next_step = aiWork?.IsAwaitingAgentResume == true
+                    ? "Scripts were reloaded during your work session. Call architector_edit resume_work with the same work_token, then continue."
+                    : null,
                 started_revision = aiWork?.StartedRevision ?? -1
             });
         }
@@ -405,7 +410,7 @@ namespace Architector.Editor.Agents
             });
         }
 
-        private static object LayerGraph(ArchitectorRepository repository, string target, bool includeLayout, string detail)
+        private static object LayerGraph(ArchitectorRepository repository, string target, bool includeLayout, string detail, int limit, int offset)
         {
             var layer = ResolveLayer(repository, target);
             if (layer == null)
@@ -421,7 +426,11 @@ namespace Architector.Editor.Agents
             var documents = repository.LoadLayer(layer.id);
             var approval = repository.GetLayerApprovalStatus(layer.id);
             var layouts = documents.layout.nodes.ToDictionary(node => node.nodeId, StringComparer.Ordinal);
-            var nodes = documents.semantic.nodes.Select(node => new
+            // Paged: a full layer can exceed the reply limit. limit applies to nodes and relationships each.
+            limit = Math.Max(1, limit);
+            offset = Math.Max(0, offset);
+            var nodeTotal = documents.semantic.nodes.Count;
+            var nodes = documents.semantic.nodes.Skip(offset).Take(limit).Select(node => new
             {
                 node.id,
                 node.title,
@@ -463,7 +472,8 @@ namespace Architector.Editor.Agents
                     rectangle.height
                 } : null
             }).ToArray();
-            var edges = repository.GetRelationshipsForLayer(layer.id).Select(edge => new
+            var allEdges = repository.GetRelationshipsForLayer(layer.id).ToArray();
+            var edges = allEdges.Skip(offset).Take(limit).Select(edge => new
             {
                 edge.id,
                 edge.kind,
@@ -489,8 +499,11 @@ namespace Architector.Editor.Agents
                     layer.purpose,
                     approval = new { state = approval.State }
                 },
+                node_total = nodeTotal,
+                edge_total = allEdges.Length,
                 nodes,
-                edges
+                edges,
+                next_offset = offset + limit < Math.Max(nodeTotal, allEdges.Length) ? offset + limit : (int?)null
             });
         }
 

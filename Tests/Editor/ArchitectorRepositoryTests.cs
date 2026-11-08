@@ -70,6 +70,17 @@ namespace Architector.Editor.Tests
         }
 
         [Test]
+        public void RevisionKeepsCountingWhenTheRepositoryIsLoadedAgain()
+        {
+            repository.CreateLayer(string.Empty, "Counted");
+            var before = repository.Revision;
+
+            var reloaded = new ArchitectorRepository(new ArchitectorPaths(temporaryRoot));
+
+            Assert.That(reloaded.Revision, Is.GreaterThan(before), "A script reload must not restart the revision at 1.");
+        }
+
+        [Test]
         public void RenamingALayerRetitlesThePortalsThatLeadToIt()
         {
             var sourceLayerId = repository.CreateLayer(string.Empty, "Source");

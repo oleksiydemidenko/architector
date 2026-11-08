@@ -86,9 +86,11 @@ namespace Architector.Editor
         public string typeNamespace = string.Empty;
         public string typeName = string.Empty;
         public string typeKey = string.Empty;
+        // On a linked node an omitted (null) baseType, interfaces or members keeps what the node has;
+        // an explicit empty list clears it.
         public ArchitectorPlanTypeReference baseType;
-        public List<ArchitectorPlanTypeReference> interfaces = new();
-        public List<ArchitectorPlanMember> members = new();
+        public List<ArchitectorPlanTypeReference> interfaces;
+        public List<ArchitectorPlanMember> members;
     }
 
     [Serializable]
@@ -178,20 +180,26 @@ namespace Architector.Editor
     {
         public ArchitectorSemanticPlanResult(
             ArchitectorCanonicalBatchResult batch,
-            IReadOnlyDictionary<string, string> references)
+            IReadOnlyDictionary<string, string> references,
+            IReadOnlyList<string> warnings = null)
         {
             Batch = batch;
             References = references;
+            Warnings = warnings ?? Array.Empty<string>();
         }
 
         public ArchitectorCanonicalBatchResult Batch { get; }
         public IReadOnlyDictionary<string, string> References { get; }
+
+        // What the plan removes without saying so, for example members of a linked node a nodeContracts entry dropped.
+        public IReadOnlyList<string> Warnings { get; }
     }
 
     public sealed partial class ArchitectorRepository
     {
         public const string PlanOperationKey = "plan_operation";
         private string planOperation = string.Empty;
+        private readonly List<string> planWarnings = new();
 
         public ArchitectorSemanticPlanResult DryRunSemanticPlan(
             ArchitectorSemanticPlan plan,
@@ -199,7 +207,7 @@ namespace Architector.Editor
             ArchitectorTypeIndex typeIndex = null)
         {
             var candidate = BuildLocatedSemanticPlan(plan, typeIndex);
-            return new ArchitectorSemanticPlanResult(CommitSemanticPlan(candidate, actionName, true), candidate.references);
+            return new ArchitectorSemanticPlanResult(CommitSemanticPlan(candidate, actionName, true), candidate.references, planWarnings.ToArray());
         }
 
         public ArchitectorSemanticPlanResult ApplySemanticPlan(
@@ -208,7 +216,7 @@ namespace Architector.Editor
             ArchitectorTypeIndex typeIndex = null)
         {
             var candidate = BuildLocatedSemanticPlan(plan, typeIndex);
-            return new ArchitectorSemanticPlanResult(CommitSemanticPlan(candidate, actionName, false), candidate.references);
+            return new ArchitectorSemanticPlanResult(CommitSemanticPlan(candidate, actionName, false), candidate.references, planWarnings.ToArray());
         }
 
         private ArchitectorCanonicalBatchResult CommitSemanticPlan(
@@ -231,6 +239,7 @@ namespace Architector.Editor
         private SemanticPlanCandidate BuildLocatedSemanticPlan(ArchitectorSemanticPlan plan, ArchitectorTypeIndex typeIndex)
         {
             planOperation = string.Empty;
+            planWarnings.Clear();
             try
             {
                 return BuildSemanticPlan(plan, typeIndex);
@@ -851,7 +860,8 @@ namespace Architector.Editor
             var layer = GetPlanDocuments(layerId, documents);
             var nodeId = ResolveMutableReference(references, item?.node);
             if (layer.semantic.nodes.All(node => node.id != nodeId))
-                throw new ArchitectorDataException($"Node reference '{item?.node}' does not exist in the selected layer.");
+                nodeId = ResolveNodeTitle(layer.semantic, item?.node)
+                         ?? throw new ArchitectorDataException($"Node reference '{item?.node}' does not exist in the selected layer.");
             var index = layer.semantic.nodes.FindIndex(node => node.id == nodeId);
             var existing = layer.semantic.nodes[index];
             if (IsPortal(existing))
@@ -924,19 +934,37 @@ namespace Architector.Editor
                 var available = typeIndex?.GetMembers(existing.type).ToDictionary(member => member.SymbolKey, StringComparer.Ordinal)
                                 ?? throw new ArchitectorDataException("Linked member selection requires the local C# type index.");
                 var existingByKey = existing.members.ToDictionary(member => member.symbolKey, StringComparer.Ordinal);
-                existing.members = planned.members.Select(member =>
+                if (item.members != null)
                 {
-                    if (!available.TryGetValue(member.symbolKey, out var indexed))
-                        throw new ArchitectorDataException($"Linked member '{member.symbolKey}' is not available on node '{existing.title}'.");
-                    return existingByKey.TryGetValue(indexed.SymbolKey, out var saved)
-                        ? saved
-                        : new ArchitectorMemberRecord
-                        {
-                            id = NewId("member"), kind = indexed.Kind, declaration = indexed.Declaration, symbolKey = indexed.SymbolKey
-                        };
-                }).ToList();
-                existing.members = ArchitectorMemberOrder.SortStable(existing.members);
-                ApplyPlannedTypeFacts(existing.type, planned.baseType, planned.interfaces, typeIndex, true);
+                    var before = existing.members;
+                    existing.members = item.members.Select(member =>
+                    {
+                        if (!available.TryGetValue(member.symbolKey, out var indexed))
+                            throw new ArchitectorDataException($"Linked member '{member.symbolKey}' is not available on node '{existing.title}'.");
+                        return existingByKey.TryGetValue(indexed.SymbolKey, out var saved)
+                            ? saved
+                            : new ArchitectorMemberRecord
+                            {
+                                id = NewId("member"), kind = indexed.Kind, declaration = indexed.Declaration, symbolKey = indexed.SymbolKey
+                            };
+                    }).ToList();
+                    var kept = existing.members.Select(member => member.symbolKey).ToHashSet(StringComparer.Ordinal);
+                    foreach (var removed in before.Where(member => !kept.Contains(member.symbolKey)))
+                        planWarnings.Add($"{planOperation}: removes member '{removed.declaration}' from node '{existing.title}'.");
+                    existing.members = ArchitectorMemberOrder.SortStable(existing.members);
+                }
+                var keptBase = existing.type.baseType;
+                var keptInterfaces = existing.type.interfaces;
+                if (item.baseType != null || item.interfaces != null)
+                    ApplyPlannedTypeFacts(existing.type, item.baseType, item.interfaces ?? new List<ArchitectorPlanTypeReference>(), typeIndex, true);
+                if (item.baseType == null)
+                    existing.type.baseType = keptBase;
+                if (item.interfaces == null)
+                    existing.type.interfaces = keptInterfaces;
+                else
+                    foreach (var removed in (keptInterfaces ?? new List<ArchitectorTypeReferenceRecord>())
+                                 .Where(before => existing.type.interfaces.All(after => ArchitectorTypeReference.Key(after) != ArchitectorTypeReference.Key(before))))
+                        planWarnings.Add($"{planOperation}: removes interface '{removed.name}' from node '{existing.title}'.");
                 existing.title = planned.title;
                 existing.responsibility = ArchitectorNodeResponsibility.Normalize(planned.responsibility);
                 return;
@@ -1080,9 +1108,28 @@ namespace Architector.Editor
             string value)
         {
             var id = ResolveReference(references, value);
-            if (layer.nodes.All(node => node.id != id))
-                throw new ArchitectorDataException($"Node reference '{value}' does not exist in the selected layer.");
-            return id;
+            if (layer.nodes.Any(node => node.id == id))
+                return id;
+            return ResolveNodeTitle(layer, value)
+                   ?? throw new ArchitectorDataException($"Node reference '{value}' does not exist in the selected layer.");
+        }
+
+        // A node may be named instead of identified: "Node Title" or "Layer/Path::Node Title" (the layer part is
+        // informative; the plan item already selects the layer). Portals are named after layers and are not matched.
+        private static string ResolveNodeTitle(ArchitectorLayerDocument layer, string value)
+        {
+            var reference = value?.Trim() ?? string.Empty;
+            var separator = reference.LastIndexOf("::", StringComparison.Ordinal);
+            var title = separator < 0 ? reference : reference.Substring(separator + 2).Trim();
+            if (title.Length == 0)
+                return null;
+            var matches = layer.nodes
+                .Where(node => !IsPortal(node) && string.Equals(node.title, title, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (matches.Length > 1)
+                throw new ArchitectorDataException(
+                    $"Node name '{title}' is ambiguous in the selected layer: {string.Join(", ", matches.Select(node => node.id))}. Use the node id.");
+            return matches.Length == 1 ? matches[0].id : null;
         }
 
         private static string ResolveEdgeReference(

@@ -362,6 +362,58 @@ namespace Architector.Editor.Tests
         }
 
         [Test]
+        public void NodeContractsKeepOmittedMembersWarnAboutRemovalsAndAcceptNodeNames()
+        {
+            var type = index.Types.Single(candidate => candidate.MetadataName == typeof(DeclarationContract).FullName);
+            var members = index.GetMembers(LinkedTypeRecord(type))
+                .Where(member => new[] { "Register", "Initialize", "Add" }.Contains(member.SymbolKey.Split('|')[2])).ToArray();
+            var created = repository.ApplySemanticPlan(new ArchitectorSemanticPlan
+            {
+                layers = { new ArchitectorPlanLayer { reference = "contracts", name = "Contracts" } },
+                nodes = { new ArchitectorPlanNode { reference = "contract", layer = "contracts", title = "Contract" } }
+            });
+            var layerId = created.References["contracts"];
+            repository.ApplySemanticPlan(new ArchitectorSemanticPlan
+            {
+                nodeContracts = { new ArchitectorPlanNodeContract
+                {
+                    layer = "Contracts", node = "Contract", mode = "linked", typeKey = type.Key,
+                    members = members.Select(member => new ArchitectorPlanMember { symbolKey = member.SymbolKey }).ToList()
+                } }
+            }, typeIndex: index);
+            var nodeId = repository.LoadLayer(layerId).semantic.nodes.Single().id;
+            string[] Members() => repository.LoadLayer(layerId).semantic.nodes.Single().members.Select(member => member.symbolKey).ToArray();
+            Assert.That(Members(), Is.EquivalentTo(members.Select(member => member.SymbolKey)));
+
+            repository.ApplySemanticPlan(new ArchitectorSemanticPlan
+            {
+                nodeContracts = { new ArchitectorPlanNodeContract { layer = layerId, node = "Contracts::Contract", responsibility = "Holds the contract." } }
+            }, typeIndex: index);
+            Assert.That(Members(), Is.EquivalentTo(members.Select(member => member.SymbolKey)), "Omitted members are kept.");
+
+            var dryRun = repository.DryRunSemanticPlan(new ArchitectorSemanticPlan
+            {
+                nodeContracts = { new ArchitectorPlanNodeContract
+                {
+                    layer = layerId, node = nodeId,
+                    members = new List<ArchitectorPlanMember> { new() { symbolKey = members[0].SymbolKey } }
+                } }
+            }, typeIndex: index);
+            Assert.That(dryRun.Warnings.Count, Is.EqualTo(2));
+            Assert.That(dryRun.Warnings, Has.All.Contains("removes member").And.All.Contains("nodeContracts[0]"));
+
+            repository.ApplySemanticPlan(new ArchitectorSemanticPlan
+            {
+                nodeContracts = { new ArchitectorPlanNodeContract { layer = layerId, node = nodeId, members = new List<ArchitectorPlanMember>() } }
+            }, typeIndex: index);
+            Assert.That(Members(), Is.Empty, "An explicit empty list clears.");
+            Assert.Throws<ArchitectorDataException>(() => repository.DryRunSemanticPlan(new ArchitectorSemanticPlan
+            {
+                nodeContracts = { new ArchitectorPlanNodeContract { layer = layerId, node = "Missing Title", responsibility = "x" } }
+            }, typeIndex: index));
+        }
+
+        [Test]
         public void ManualNodeResolvesItsBaseTypeByKey()
         {
             var baseType = index.Types.Single(candidate => candidate.MetadataName == typeof(DeclarationContract).FullName);

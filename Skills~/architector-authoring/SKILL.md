@@ -10,8 +10,14 @@ The graph describes structure, contracts, ownership and dependency direction. Ra
 ## Before Authoring
 
 - Read the approved architecture through `context_route`, which prints the digest lines of the layer that owns a file or type. Query only the layers you edit (`project_summary`, `group_contents`, `layer_graph`).
-- Check `work_status`. Only one agent work session can exist per Editor. Begin late, end early, and never take over another agent's lease.
-- Read the system's code and its documents. Describe what exists and what is agreed, not what the code accidentally does.
+- Check `work_status`. Only one agent work session can exist per Editor. Begin late, end early, and never take over another agent's lease. After a script reload `work_status` shows `awaiting_agent_resume`: call `resume_work` with the same `work_token` and continue.
+- **Ask for code facts before reading code.** The `architector-mcp` server answers these `architector_query` actions itself, without Unity:
+  - `layer_facts` with `target`: the layer's files and types, references to and from other layers with type pairs, declared or not, and node candidates with file:line (types used or inherited by other layers, Unity entry points, extension points). Read only the lines it points to. `type` returns one type's public members.
+  - `code_evidence`: every layer pair with its references; `status=undeclared|cycle|unevidenced`, `pair`, `layer`; `include=references|owners|intra` pages full lists.
+  - `scope_what_if` with `moves` (`type`, `file` or `folder`, and `to`): before changing a scope or moving a type, see the undeclared pairs and cycles it adds or removes and the relationships that would lose their evidence.
+  - `layer_dump` (nodes and relationships with ids, paged) and `lookup` (names to layer, node and member ids).
+  - Replies are compact; use `offset`, `limit` and `next_offset`, or `output=file` for a full list.
+- Read the system's code and its documents. Describe what exists and what is agreed, not what the code accidentally does. Responsibilities are yours to write from the code; the facts only point to it.
 
 ## Shape The Graph
 
@@ -32,8 +38,9 @@ The graph describes structure, contracts, ownership and dependency direction. Ra
 1. `begin_work` with the current revision.
 2. Read narrowly: `node`, `relationships`, `dependency_path` or `layer_graph` with `detail=summary`. Find type keys with `type_search` (`Assembly:MetadataName`, generics as ``List`1``).
 3. Member symbol keys follow `kind|Assembly:Type|Name|genericArity|parameters`. Take them from `type_contract`.
-4. Write one semantic plan (groups, layers, `layerScopes`, nodes with `responsibility`, edges). Run `dry_run_plan`, fix the reported errors (`operation` names the plan item), then `apply_plan` with `plan={"plan_token": "<token from the dry run>"}` instead of resending the plan.
-5. Run `conformance` for the group and `DependencyEvidence` from the repository root. Fix the graph or report the gap.
+4. Write one semantic plan (groups, layers, `layerScopes`, nodes with `responsibility`, edges). Existing nodes may be named instead of identified: `"Node Title"` or `"Layer/Path::Node Title"`. Run `dry_run_plan`, fix the reported errors (`operation` names the plan item) and read its `warnings`, then `apply_plan` with `plan={"plan_token": "<token from the dry run>"}` instead of resending the plan.
+   - `nodeContracts` on a linked node: leave out `members`, `baseType` or `interfaces` to keep them; an explicit empty list clears. `warnings` lists every member and interface the plan would remove.
+5. Run `conformance` for the group and `code_evidence` (or `DependencyEvidence` from the repository root; both give the same totals). Fix the graph or report the gap.
 6. Do not arrange while you work. Once, right before `end_work`, call `arrange_changed_layers` with the current `expected_revision` and `work_token`. It lays out every layer created in this work session and places nodes added to existing layers next to their neighbours, leaving the user's layout of everything else unchanged; layers in locked groups are reported as skipped. Use `arrange_layer` only when the user asks to rearrange a layer. Arrange changes presentation, not approval.
 7. `end_work`, then report the layers, conformance counts, dependency evidence and open questions to the user. Approve only when the user asks, unless `capabilities` reports `agent_may_approve`. Otherwise Architector asks the user to confirm in the Editor.
 

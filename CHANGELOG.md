@@ -1,6 +1,25 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+**Code facts for agents.** Building a graph over an existing large project, agents spent most of a session reading code for facts a program can compute. The MCP server now answers them itself, without Unity, from one Roslyn pass over `Assets` that it keeps in memory and refreshes after files change:
+
+- `code_evidence`: every reference between layers with source type, target type and file:line, grouped by layer pair with declared, undeclared, cycle and unevidenced status; owners of every type; same-layer references. The totals equal `DependencyEvidence`, which now runs on the same engine with unchanged output.
+- `layer_facts`: a layer's files and types (kind, base type, interfaces, public members), its references to and from other layers with type pairs, and node candidates by rule (used or inherited by other layers, Unity entry points, extension points), each with file:line and the node it is linked to. No responsibilities are generated.
+- `scope_what_if`: for types, files or folders moved to other layers, the undeclared pairs and cycles added and removed, the relationships that would lose their evidence and the linked nodes that would change layer. Changes nothing.
+- `layer_dump`: a layer's nodes and relationships with ids, without layout, paged. `lookup`: layer, node and member ids by name.
+- Replies are compact (counts and the most frequent type pairs); full lists come by `offset`/`limit` paging or `output: "file"`. The same answers are available from the command line: `dotnet run --project Tools~/DependencyEvidence -- <root> --facts=<action> --args=<json>`.
+- The server binary grows from about 12 to about 19 MB (Roslyn and .NET reference assemblies inside); it still needs no .NET SDK.
+
+**Plans and work sessions:**
+
+- Semantic plans accept a node's title instead of its id: `"Node Title"` or `"Layer/Path::Node Title"`.
+- **Behaviour change:** `nodeContracts` on a linked node keeps an omitted `members`, `baseType` or `interfaces`; an explicit empty list clears it. Before, an omitted list silently cleared the node's members. `dry_run_plan` and `apply_plan` return `warnings` listing every member and interface a plan removes.
+- The revision keeps counting across a script reload instead of starting again at 1.
+- After a script reload `work_status` shows `next_step`: call `resume_work` with the same work token. Skill and Workflow say so.
+- `layer_graph` is paged: 40 nodes and 40 relationships per reply by default, with `offset`, `limit` and `next_offset`.
+
+**Editor:**
 
 - Editing nodes and relationships is about 15 times faster: on 50 layers an edit with the window's refresh drops from about 3 s to 0.2 s. Only the layers an edit touches are cloned, validated, encoded and reinstalled; approval hashes and conformance are recomputed only where they can change.
 - `layer_graph` with `detail=summary` returns the layer as compact text: paths and names instead of IDs, no empty fields, incoming relationships folded into one line per source layer.

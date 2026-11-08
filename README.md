@@ -52,6 +52,7 @@ Reading works from files; writing needs the Editor, because validation, the type
 | `architector_status`, `architector_route`, `architector_digest` (MCP) | no | Project state, routing and the approved architecture |
 | `context_route` | no | From a file or type to its layer, digest lines and documents |
 | `DependencyEvidence` | no | Code dependencies between layers that the graph does not declare |
+| `architector_query` code facts: `code_evidence`, `layer_facts`, `scope_what_if`, `layer_dump`, `lookup` | no | Who owns which types, every reference between layers with file:line, node candidates, what a scope move would change, layer ids by name. Answered by the server itself, the same totals as `DependencyEvidence` |
 | `architector_query` | yes | Layers, approval, conformance and type queries |
 | `architector_edit` | yes | Work sessions, plans, arrangement and approvals |
 
@@ -64,7 +65,7 @@ These are known gaps, each tracked for a future version.
 - A node without relationships cannot be approved, even when it is a real standalone entry point.
 - Only your own source roots are indexed: Unity and other external types cannot be linked as verified contracts.
 - Relationships wired in the Inspector (UnityEvent, Timeline, prefab overrides) are not visible to Architector.
-- `DependencyEvidence` checks dependencies between layers rather than individual types, reads only `Assets/`, and needs the .NET SDK.
+- `DependencyEvidence` and the code facts check dependencies between layers rather than individual types and read only `Assets/`; the command-line tool needs the .NET SDK, the server does not. The server analyses the code when it starts (seconds; longer on thousands of files) and again on the next code facts call after any C# or Architector file changed.
 - Conformance does not notice changed method bodies, so descriptions of behaviour can go stale silently.
 - On Windows, a project in a deeply nested folder can exceed the 260-character path limit for the files in `Architector/Links`.
 - Arrange takes several seconds on layers with about 60 relationships.
