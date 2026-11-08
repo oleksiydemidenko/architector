@@ -296,7 +296,8 @@ namespace Architector.Editor
         private string searchText = string.Empty;
         private readonly HashSet<string> searchMatches = new(StringComparer.Ordinal);
 
-        private static Rect SearchBarRect() => new(8f, 8f, 340f, 24f);
+        // The frame holds only the close button and the field; the count is written outside it, on the canvas.
+        private static Rect SearchBarRect() => new(8f, 8f, 250f, 24f);
 
         public bool SearchOpen => searchOpen;
 
@@ -322,8 +323,8 @@ namespace Architector.Editor
         {
             var current = Event.current;
             var bar = SearchBarRect();
-            var field = new Rect(bar.x + 4f, bar.y + 3f, 200f, 18f);
-            var close = new Rect(bar.xMax - 22f, bar.y + 3f, 18f, 18f);
+            var close = new Rect(bar.x + 4f, bar.y + 3f, 18f, 18f);
+            var field = new Rect(close.xMax + 4f, bar.y + 3f, bar.xMax - close.xMax - 8f, 18f);
             if (current.type == EventType.KeyDown && GUI.GetNameOfFocusedControl() == SearchControlName)
             {
                 if (current.keyCode == KeyCode.Escape)
@@ -343,6 +344,12 @@ namespace Architector.Editor
             }
             if (current.type == EventType.Repaint)
                 EditorStyles.helpBox.Draw(bar, false, false, false, false);
+            if (GUI.Button(close, new GUIContent("×", "Close the search (Esc)"), EditorStyles.miniButton))
+            {
+                CloseSearch();
+                requestRepaint?.Invoke();
+                return;
+            }
             GUI.SetNextControlName(SearchControlName);
             var next = EditorGUI.TextField(field, searchText, EditorStyles.toolbarSearchField);
             if (searchFocusPending)
@@ -358,12 +365,11 @@ namespace Architector.Editor
                 UpdateSearchMatches();
                 requestRepaint?.Invoke();
             }
-            var found = searchText.Trim().Length == 0 ? string.Empty : searchMatches.Count == 1 ? "1 node" : $"{searchMatches.Count} nodes";
-            GUI.Label(new Rect(field.xMax + 6f, bar.y + 4f, close.x - field.xMax - 8f, 16f), found, EditorStyles.miniLabel);
-            if (GUI.Button(close, new GUIContent("×", "Close the search (Esc)"), EditorStyles.miniButton))
+            if (searchText.Trim().Length > 0)
             {
-                CloseSearch();
-                requestRepaint?.Invoke();
+                var found = new GUIContent(searchMatches.Count == 1 ? "1 node" : $"{searchMatches.Count} nodes");
+                var size = EditorStyles.boldLabel.CalcSize(found);
+                GUI.Label(new Rect(bar.xMax + 6f, bar.y + (bar.height - size.y) * 0.5f, size.x, size.y), found, EditorStyles.boldLabel);
             }
         }
 

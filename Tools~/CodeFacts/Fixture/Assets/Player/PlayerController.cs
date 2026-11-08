@@ -7,6 +7,8 @@ namespace Sample.Player
     {
         private readonly Clock clock = new Clock();
 
+        [SerializeField] private PlayerInventory spare;
+
         public PlayerInventory Inventory { get; } = new PlayerInventory();
 
         public void Tick(Clock source)

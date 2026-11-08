@@ -126,6 +126,17 @@ namespace Architector.Editor
 
         public bool IsMasterWindow => windowMode == WindowMode.Master;
         public bool CanvasHasPointer => layerCanvas?.HasPointer == true;
+
+        // F over the tab strip scrolls it to the tab of the layer open on the canvas.
+        public bool TabsHavePointer => tabsHavePointer;
+        [NonSerialized] private bool tabsHavePointer;
+        [NonSerialized] private Rect lastTabsRect;
+
+        public void RevealActiveTab()
+        {
+            scrollActiveLayerIntoView = true;
+            Repaint();
+        }
         public bool ExplorerHasKeyboardFocus => explorerKeyboardFocus && selectedExplorerEntryIds.Count == 1
                                                 && repository?.FindLayer(selectedExplorerEntryIds.First()) != null;
 
@@ -1305,6 +1316,12 @@ namespace Architector.Editor
             EnsureLayerNavigationState();
             EnsureStyles();
             var toolbarRect = GUILayoutUtility.GetRect(0f, 34f, GUILayout.ExpandWidth(true));
+            if (Event.current.type == EventType.Repaint)
+                lastTabsRect = toolbarRect;
+            if (Event.current.type == EventType.MouseLeaveWindow)
+                tabsHavePointer = false;
+            else if (Event.current.isMouse || Event.current.type == EventType.MouseMove)
+                tabsHavePointer = lastTabsRect.Contains(Event.current.mousePosition);
             GUI.Box(toolbarRect, GUIContent.none, layerTabsBarStyle);
 
             const float navigationButtonWidth = 24f;

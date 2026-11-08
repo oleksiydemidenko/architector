@@ -21,7 +21,7 @@ namespace Architector.Editor
         {
             ("Canvas", "main", new[]
             {
-                (ArchitectorShortcuts.FocusView, null, "Focus the selection, or the whole layer"),
+                (ArchitectorShortcuts.FocusView, null, "Focus the selection, or the whole layer; over the tabs, show the open layer's tab"),
                 (ArchitectorShortcuts.FocusLayer, null, "Focus the whole layer"),
                 (ArchitectorShortcuts.Search, null, "Find nodes by name; Enter focuses them, Esc closes"),
                 (ArchitectorShortcuts.Arrange, null, "Arrange the selection, or the whole layer"),

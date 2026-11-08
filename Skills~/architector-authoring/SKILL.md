@@ -17,6 +17,7 @@ The graph describes structure, contracts, ownership and dependency direction. Ra
   - `scope_what_if` with `moves` (`type`, `file` or `folder`, and `to`): before changing a scope or moving a type, see the undeclared pairs and cycles it adds or removes and the relationships that would lose their evidence.
   - `layer_dump` (nodes and relationships with ids, paged) and `lookup` (names to layer, node and member ids).
   - Replies are compact; use `offset`, `limit` and `next_offset`, or `output=file` for a full list.
+  - **Project rules.** `code_evidence` shows the active rules (`rules.presets`, the `unity` preset by default) and `rules.suggestions`: calls and attributes the code repeats that no rule covers. When a suggestion appears, read two or three of its examples. If it wires types together (dependency access, injection, Inspector wiring), propose to the user adding it to `Architector/code-facts.json` (`genericCalls`, `injectionAttributes`, `serializedAttributes`, or a preset: `zenject`, `vcontainer`, `addressables`). Also say so when you notice wiring the facts cannot see (reflection, strings, prefab references).
 - Read the system's code and its documents. Describe what exists and what is agreed, not what the code accidentally does. Responsibilities are yours to write from the code; the facts only point to it.
 
 ## Shape The Graph

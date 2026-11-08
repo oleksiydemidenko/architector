@@ -75,6 +75,7 @@ public static class FactsQueries
         result["unevidenced"] = unevidenced.Count;
         if (model.EvidenceWarnings.Count > 0)
             result["warnings"] = Array(model.EvidenceWarnings.Take(10).Select(value => (JsonNode?)value));
+        result["rules"] = RulesEntry(model);
 
         var include = Text(arguments, "include");
         if (include == "references")
@@ -175,6 +176,8 @@ public static class FactsQueries
                 ["node"] = item.type.Nodes.FirstOrDefault()
             })
             .ToArray();
+        if (model.RuleSuggestions.Count > 0)
+            result["rule_suggestions"] = $"{model.RuleSuggestions.Count}; code_evidence lists them";
         result["node_candidates_total"] = candidates.Length;
         result["node_candidates"] = Array(candidates.Take(IntOr(arguments, "candidates", 40)));
         Page(result, "type_list", owned.OrderBy(type => type.At, StringComparer.Ordinal).Select(type => (JsonNode?)TypeEntry(architecture, type)), arguments, 50);
@@ -372,6 +375,26 @@ public static class FactsQueries
         var result = Success();
         result["results"] = results;
         return result;
+    }
+
+    // The project's extraction rules and what the code repeats that they do not cover.
+    private static JsonObject RulesEntry(FactsModel model)
+    {
+        var rules = new JsonObject { ["presets"] = Array(model.Extractors.ActivePresets.Select(value => (JsonNode?)value)) };
+        if (model.Extractors.Problems.Count > 0)
+            rules["problems"] = Array(model.Extractors.Problems.Select(value => (JsonNode?)value));
+        if (model.RuleSuggestions.Count > 0)
+        {
+            rules["suggestions"] = Array(model.RuleSuggestions.Select(suggestion => (JsonNode?)new JsonObject
+            {
+                ["rule"] = suggestion.Rule,
+                ["name"] = suggestion.Name,
+                ["uses"] = suggestion.Uses,
+                ["example"] = suggestion.Example
+            }));
+            rules["hint"] = "The code repeats these but Architector/code-facts.json does not cover them. Read a few examples; when they wire types together (dependency access, injection), propose adding them to the user.";
+        }
+        return rules;
     }
 
     private static bool DeclaresName(string declaration, string name)

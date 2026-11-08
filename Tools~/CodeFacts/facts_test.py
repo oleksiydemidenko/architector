@@ -49,7 +49,12 @@ owners = answer({"action": "code_evidence", "include": "owners", "limit": 50})
 assert ["Sample.Tools.Helper", None, "Assets/Tools/Helper.cs:3"] in owners["items"], owners
 
 core = answer({"action": "layer_facts", "target": "Core"})
-assert (core["layer"], core["files"], core["types"]) == ("Sample/Core", 3, 5), core
+assert (core["layer"], core["files"], core["types"]) == ("Sample/Core", 4, 7), core
+rules = evidence["rules"]
+assert rules["presets"] == ["unity"], rules
+assert [(item["rule"], item["name"], item["uses"]) for item in rules["suggestions"]] == [("genericCalls", "Fetch", 10), ("injectionAttributes", "Track", 10)], rules
+controller = answer({"action": "layer_facts", "target": "Player", "type": "PlayerController"})
+assert controller["extra"]["serialized"] == [["PlayerInventory", "Assets/Player/PlayerController.cs:10"]], controller
 wiring = answer({"action": "layer_facts", "target": "Core", "type": "Wiring"})
 assert wiring["extra"] == {"generic_calls": [["Get<Clock>", "Assets/Core/Wiring.cs:18"]], "injected": [["ITickable", "Assets/Core/Wiring.cs:9"]]}, wiring
 assert next(item for item in core["type_list"] if item["type"] == "Sample.Core.Wiring")["generic_calls"] == 1, core

@@ -182,26 +182,78 @@ public sealed class FactsNode
 public sealed record FactsMember(string Id, string Kind, string Declaration, string SymbolKey);
 
 // Architector/code-facts.json, optional:
-// { "genericCalls": ["Get", "TryGet"], "injectionAttributes": ["Inject"] }
-// genericCalls lists generic method names whose type arguments are reported per type (for example Get<Container, Parameter>);
-// injectionAttributes lists attributes whose constructor or method parameters, fields or properties are reported as injected.
+// { "presets": ["unity", "vcontainer"], "genericCalls": ["Get"], "injectionAttributes": ["Inject"], "serializedAttributes": [] }
+// genericCalls: generic method names whose type arguments are reported per type (Get<Container, Parameter>).
+// injectionAttributes: attributes whose constructor or method parameters, fields or properties are reported as injected.
+// serializedAttributes: attributes whose field or property types are reported as wired in the Inspector.
+// presets add common conventions; without the file, or without "presets", the "unity" preset is on. "presets": [] turns it off.
+// These rules only add facts per type; they never change the dependency evidence.
 public sealed class FactsExtractors
 {
+    public static readonly IReadOnlyDictionary<string, (string[] Calls, string[] Injection, string[] Serialized)> Presets =
+        new Dictionary<string, (string[], string[], string[])>(StringComparer.Ordinal)
+        {
+            ["unity"] = (
+                new[]
+                {
+                    "GetComponent", "GetComponents", "GetComponentInChildren", "GetComponentsInChildren", "GetComponentInParent",
+                    "GetComponentsInParent", "TryGetComponent", "AddComponent", "FindAnyObjectByType", "FindFirstObjectByType",
+                    "FindObjectsByType", "FindObjectOfType", "FindObjectsOfType", "CreateInstance", "Load", "LoadAll"
+                },
+                System.Array.Empty<string>(),
+                new[] { "SerializeField", "SerializeReference" }),
+            ["zenject"] = (
+                new[] { "Bind", "BindInterfacesTo", "BindInterfacesAndSelfTo", "BindFactory", "Resolve", "TryResolve", "ResolveAll", "InstantiateComponent" },
+                new[] { "Inject", "InjectOptional", "InjectLocal" },
+                System.Array.Empty<string>()),
+            ["vcontainer"] = (
+                new[] { "Register", "RegisterComponent", "RegisterComponentInHierarchy", "RegisterInstance", "RegisterEntryPoint", "Resolve" },
+                new[] { "Inject" },
+                System.Array.Empty<string>()),
+            ["addressables"] = (
+                new[] { "LoadAssetAsync", "LoadAssetsAsync", "InstantiateAsync" },
+                System.Array.Empty<string>(),
+                System.Array.Empty<string>())
+        };
+
     public HashSet<string> GenericCalls { get; } = new(StringComparer.Ordinal);
     public HashSet<string> InjectionAttributes { get; } = new(StringComparer.Ordinal);
-    public bool Any => GenericCalls.Count + InjectionAttributes.Count > 0;
+    public HashSet<string> SerializedAttributes { get; } = new(StringComparer.Ordinal);
+    public List<string> ActivePresets { get; } = new();
+    public List<string> Problems { get; } = new();
+    public bool Any => GenericCalls.Count + InjectionAttributes.Count + SerializedAttributes.Count > 0;
 
     public static FactsExtractors Load(string path)
     {
         var extractors = new FactsExtractors();
-        if (!File.Exists(path))
-            return extractors;
-        using var document = JsonDocument.Parse(File.ReadAllText(path));
-        extractors.GenericCalls.UnionWith(FactsArchitecture.Strings(document.RootElement, "genericCalls"));
-        extractors.InjectionAttributes.UnionWith(FactsArchitecture.Strings(document.RootElement, "injectionAttributes")
-            .Select(name => name.EndsWith("Attribute", StringComparison.Ordinal) ? name[..^"Attribute".Length] : name));
+        var presets = new[] { "unity" }.AsEnumerable();
+        if (File.Exists(path))
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            var root = document.RootElement;
+            if (root.TryGetProperty("presets", out _))
+                presets = FactsArchitecture.Strings(root, "presets").ToArray();
+            extractors.GenericCalls.UnionWith(FactsArchitecture.Strings(root, "genericCalls"));
+            extractors.InjectionAttributes.UnionWith(FactsArchitecture.Strings(root, "injectionAttributes").Select(AttributeName));
+            extractors.SerializedAttributes.UnionWith(FactsArchitecture.Strings(root, "serializedAttributes").Select(AttributeName));
+        }
+        foreach (var preset in presets)
+        {
+            if (!Presets.TryGetValue(preset, out var rules))
+            {
+                extractors.Problems.Add($"Unknown preset '{preset}' in code-facts.json. Known: {string.Join(", ", Presets.Keys)}.");
+                continue;
+            }
+            extractors.ActivePresets.Add(preset);
+            extractors.GenericCalls.UnionWith(rules.Calls);
+            extractors.InjectionAttributes.UnionWith(rules.Injection);
+            extractors.SerializedAttributes.UnionWith(rules.Serialized);
+        }
         return extractors;
     }
+
+    public static string AttributeName(string name) =>
+        name.EndsWith("Attribute", StringComparison.Ordinal) ? name[..^"Attribute".Length] : name;
 }
 
 public sealed class FactsRelationship

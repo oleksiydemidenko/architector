@@ -50,7 +50,13 @@ namespace Architector.Editor
         }
 
         [Shortcut(FocusView, typeof(ArchitectorMasterWindow), KeyCode.F)]
-        private static void OnFocusView(ShortcutArguments arguments) => Send(arguments, FocusView);
+        private static void OnFocusView(ShortcutArguments arguments)
+        {
+            if (arguments.context is ArchitectorMasterWindow { TabsHavePointer: true } window && !EditorGUIUtility.editingTextField)
+                window.RevealActiveTab();
+            else
+                Send(arguments, FocusView);
+        }
 
         [Shortcut(FocusLayer, typeof(ArchitectorMasterWindow), KeyCode.F, ShortcutModifiers.Shift)]
         private static void OnFocusLayer(ShortcutArguments arguments) => Send(arguments, FocusLayer);

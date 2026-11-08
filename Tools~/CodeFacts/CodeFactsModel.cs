@@ -94,6 +94,7 @@ public sealed class FactsModel
             }
         }
         model.EvidenceWarnings = evidenceOwners.Ambiguities.OrderBy(value => value, StringComparer.Ordinal).ToArray();
+        model.SuggestRules();
         model.LinkTypes();
         model.BuildMilliseconds = watch.ElapsedMilliseconds;
         return model;
@@ -163,8 +164,7 @@ public sealed class FactsModel
             }
             else
                 type.Files.Add($"{tree.FilePath}:{line}");
-            if (Extractors.Any)
-                Extract(declaration, type, tree.FilePath);
+            Extract(declaration, type, tree.FilePath);
         }
     }
 
@@ -175,27 +175,99 @@ public sealed class FactsModel
     {
         string At(SyntaxNode node) => $"{file}:{node.GetLocation().GetLineSpan().StartLinePosition.Line + 1}";
         foreach (var generic in declaration.DescendantNodes().OfType<GenericNameSyntax>())
-            if (Extractors.GenericCalls.Contains(generic.Identifier.ValueText) && generic.Parent is InvocationExpressionSyntax or MemberAccessExpressionSyntax)
-                type.AddExtra("generic_calls", $"{generic.Identifier.ValueText}<{string.Join(", ", generic.TypeArgumentList.Arguments)}>", At(generic));
+        {
+            if (generic.Parent is not (InvocationExpressionSyntax or MemberAccessExpressionSyntax))
+                continue;
+            var name = generic.Identifier.ValueText;
+            if (Extractors.GenericCalls.Contains(name))
+                type.AddExtra("generic_calls", $"{name}<{string.Join(", ", generic.TypeArgumentList.Arguments)}>", At(generic));
+            else
+                callCandidates.Add((name, generic.TypeArgumentList.Arguments.Select(ShortTypeName).ToArray(), At(generic)));
+        }
         foreach (var attribute in declaration.DescendantNodes().OfType<AttributeSyntax>())
         {
-            var attributeName = attribute.Name.ToString().Split('.').Last();
-            if (attributeName.EndsWith("Attribute", StringComparison.Ordinal))
-                attributeName = attributeName[..^"Attribute".Length];
-            if (!Extractors.InjectionAttributes.Contains(attributeName))
-                continue;
+            var attributeName = FactsExtractors.AttributeName(attribute.Name.ToString().Split('.').Last());
             var target = attribute.Parent?.Parent;
-            var injected = target switch
+            var types = target switch
             {
                 BaseMethodDeclarationSyntax method => method.ParameterList.Parameters.Select(parameter => parameter.Type?.ToString() ?? string.Empty),
                 FieldDeclarationSyntax field => new[] { field.Declaration.Type.ToString() },
                 PropertyDeclarationSyntax property => new[] { property.Type.ToString() },
                 ParameterSyntax parameter => new[] { parameter.Type?.ToString() ?? string.Empty },
-                _ => Array.Empty<string>()
+                _ => null
             };
-            foreach (var service in injected.Where(value => value.Length > 0))
-                type.AddExtra("injected", service, At(attribute));
+            if (types == null)
+                continue;
+            var kind = Extractors.InjectionAttributes.Contains(attributeName) ? "injected"
+                : Extractors.SerializedAttributes.Contains(attributeName) ? "serialized"
+                : null;
+            if (kind == null)
+            {
+                if (!CommonAttributes.Contains(attributeName))
+                    attributeCandidates.Add((attributeName, At(attribute)));
+                continue;
+            }
+            foreach (var value in types.Where(value => value.Length > 0))
+                type.AddExtra(kind, value, At(attribute));
         }
+    }
+
+    private static string ShortTypeName(TypeSyntax type)
+    {
+        var text = type.ToString();
+        var generic = text.IndexOf('<');
+        if (generic >= 0)
+            text = text[..generic];
+        return text.Split('.').Last().TrimEnd('?', ']', '[');
+    }
+
+    // Attributes that say nothing about how types are wired; they are never suggested as project rules.
+    private static readonly HashSet<string> CommonAttributes = new(StringComparer.Ordinal)
+    {
+        "Serializable", "NonSerialized", "Obsolete", "Header", "Tooltip", "Range", "Space", "Min", "Multiline", "TextArea",
+        "HideInInspector", "ContextMenu", "ContextMenuItem", "MenuItem", "FormerlySerializedAs", "Test", "TestCase",
+        "TestCaseSource", "SetUp", "TearDown", "OneTimeSetUp", "OneTimeTearDown", "UnityTest", "UnitySetUp", "UnityTearDown",
+        "Category", "Values", "InitializeOnLoadMethod", "RuntimeInitializeOnLoadMethod", "DidReloadScripts", "MethodImpl",
+        "DllImport", "Conditional", "DebuggerHidden", "DebuggerStepThrough", "DebuggerBrowsable", "CallerMemberName",
+        "CallerFilePath", "CallerLineNumber", "NotNull", "CanBeNull", "MaybeNull", "NotNullWhen", "MaybeNullWhen", "Preserve",
+        "UsedImplicitly", "SuppressMessage", "JsonProperty", "JsonIgnore", "ReadOnly", "BurstCompile", "Params", "In", "Out",
+        "Optional", "DefaultValue", "Description", "Pure", "AssertionMethod", "CompilerGenerated", "EditorBrowsable"
+    };
+
+    // Generic calls of the base library that take any type and wire nothing.
+    private static readonly HashSet<string> CommonGenericCalls = new(StringComparer.Ordinal)
+    {
+        "Empty", "Cast", "OfType", "Equals", "Parse", "TryParse", "Default", "SizeOf", "Unsafe", "As", "Repeat", "Range"
+    };
+
+    private readonly List<(string Name, string[] TypeArguments, string At)> callCandidates = new();
+    private readonly List<(string Name, string At)> attributeCandidates = new();
+
+    // What the code repeats but the rules do not cover: generic calls with this project's types as type arguments, and
+    // attributes on fields, properties and parameters. An agent checks a few examples and proposes them for code-facts.json.
+    public IReadOnlyList<FactsRuleSuggestion> RuleSuggestions { get; private set; } = Array.Empty<FactsRuleSuggestion>();
+
+    private const int SuggestionMinimumUses = 10;
+
+    private void SuggestRules()
+    {
+        var ownNames = Types.Select(type => type.Name).ToHashSet(StringComparer.Ordinal);
+        var calls = callCandidates
+            .Where(call => !CommonGenericCalls.Contains(call.Name) && call.TypeArguments.Any(ownNames.Contains))
+            .GroupBy(call => call.Name)
+            .Where(group => group.Count() >= SuggestionMinimumUses)
+            .OrderByDescending(group => group.Count())
+            .Take(5)
+            .Select(group => new FactsRuleSuggestion("genericCalls", group.Key, group.Count(), group.First().At));
+        var attributes = attributeCandidates
+            .GroupBy(attribute => attribute.Name)
+            .Where(group => group.Count() >= SuggestionMinimumUses)
+            .OrderByDescending(group => group.Count())
+            .Take(5)
+            .Select(group => new FactsRuleSuggestion("injectionAttributes", group.Key, group.Count(), group.First().At));
+        RuleSuggestions = calls.Concat(attributes).ToArray();
+        callCandidates.Clear();
+        attributeCandidates.Clear();
     }
 
     private void LinkTypes()
@@ -296,6 +368,8 @@ public sealed class FactsModel
         }
     }
 }
+
+public sealed record FactsRuleSuggestion(string Rule, string Name, int Uses, string Example);
 
 // One use of a first-party type inside another top-level type. CountsAsEvidence is DependencyEvidence's rule.
 public sealed record FactsReference(
