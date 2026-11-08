@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.1
+
+**Windows open at once.** No Architector window hangs white while it loads any more:
+
+- The Architector window and workspace windows draw their frame at once and load in steps after it is shown: the architecture, project types, approvals, every layer's checks and the open layer. A loading bar glides between steps and counts layers ("Checking layers 4 / 12"). Input waits until loading ends.
+- The Layer Inspector never checks a layer while it draws:
+  - A check expected to be very short runs at once.
+  - A longer check keeps the last shown result on screen until the new one is ready, so switching layers does not flicker.
+  - "Checking conformance…" appears only for a wait expected to take half a second or more.
+  - A layer whose check fails shows "Conformance unavailable" and is not checked again until the architecture or the code changes.
+- After an edit, the Explorer's error and change marks are rebuilt in the background, one layer per step. The old marks stay until the new set is complete, so an edit no longer waits for a check of the whole project.
+- **Review** checks layers one by one with a counting loading bar when it opens. Later checks that took under half a second run quietly.
+- **Integrations** runs its Setup Check after the window is shown, with a loading bar only for the first check.
+
+**Agent work locks Integrations and Review too.** While an agent works, Integrations shares the Settings lock and Review shares the workspace lock: the same banner, greyed content and no input. The Settings **Update** foldout now greys out with the rest.
+
+**Window layout:**
+
+- The Explorer starts below the tab bar. Beside the tab bar, a strip of square quick buttons holds **New Workspace Window** (moved from the tab bar) and **Review**, with an eye icon and an outlined count of layers waiting for review.
+- Integrations colours its tags: **Extension** and **MCP** each have their own colour on the filter buttons and in the entry headers.
+- The confirmation for clearing tabs has **Do not show again**. **Settings > Utilities > Confirm Clearing Tabs** turns it back on.
+- A click on an empty spot of the canvas no longer refits the view twice. Fit Layer On Open follows a canvas size change only until you first click, scroll or press a key in the canvas.
+
 ## 0.3.0
 
 **Code facts for agents.** Building a graph over an existing large project, agents spent most of a session reading code for facts a program can compute. The MCP server now answers them itself, without Unity, from one Roslyn pass over `Assets` that it keeps in memory and refreshes after files change:

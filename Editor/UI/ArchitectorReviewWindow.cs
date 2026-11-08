@@ -19,6 +19,8 @@ namespace Architector.Editor
 
         private ArchitectorRepository repository;
         private ArchitectorTypeIndex typeIndex;
+        private ArchitectorAiWorkCoordinator aiWork;
+        [NonSerialized] private ArchitectorDeferredWork deferred;
         private string loadError = string.Empty;
         private Vector2 scroll;
         private bool changedExpanded = true;
@@ -26,6 +28,8 @@ namespace Architector.Editor
         private bool draftExpanded = true;
         private int errorsRevision = -1;
         private int errorsGeneration = -1;
+        private const double QuietCheckSeconds = 0.5;
+        [NonSerialized] private bool errorsReady;
         private string anchorLayerId = string.Empty;
         private int dragRow = -1;
         private readonly HashSet<string> strokeRows = new(StringComparer.Ordinal);
@@ -71,13 +75,18 @@ namespace Architector.Editor
                 return;
             repository = session.Repository;
             typeIndex = session.TypeIndex;
+            aiWork = session.AiWork;
             repository.Changed += Repaint;
+            aiWork.Changed += Repaint;
         }
 
         private void OnDisable()
         {
             if (repository != null)
                 repository.Changed -= Repaint;
+            if (aiWork != null)
+                aiWork.Changed -= Repaint;
+            deferred?.Cancel();
         }
 
         private void OnGUI()
@@ -90,7 +99,20 @@ namespace Architector.Editor
                 return;
             }
 
-            RefreshErrors();
+            ArchitectorAiWorkUi.DrawWorkspaceBanner(aiWork, "Review");
+            var aiLocked = aiWork?.WorkspacesLocked == true;
+            if (aiLocked)
+                ArchitectorAiWorkUi.ConsumeInputWhenLocked();
+            deferred ??= new ArchitectorDeferredWork(this);
+            if (Event.current.type == EventType.Layout && !deferred.Pending
+                && (errorsRevision != repository.SemanticRevision || errorsGeneration != typeIndex.Generation))
+            {
+                // A re-check expected to take less than half a second runs quietly: the old marks stay until it ends.
+                var quiet = errorsReady && deferred.LastSeconds >= 0.0 && deferred.LastSeconds < QuietCheckSeconds;
+                deferred.Run("Checking layers", RefreshErrors(), null, quiet);
+            }
+            deferred.DrawStatus();
+            EditorGUI.BeginDisabledGroup(aiLocked || deferred.Blocking);
             var statuses = repository.GetLayerApprovalStatuses().ToDictionary(status => status.LayerId, StringComparer.Ordinal);
             var uncheckedLayers = repository.UncheckedLayerIds();
             var layers = LayersInExplorerOrder().Where(layer => statuses.ContainsKey(layer.id) && !uncheckedLayers.Contains(layer.id)).ToArray();
@@ -117,6 +139,7 @@ namespace Architector.Editor
 
             visibleLayers = visible;
             DrawBottomBar(visible);
+            EditorGUI.EndDisabledGroup();
             if (Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Escape)
             {
                 ClearSelection();
@@ -319,18 +342,44 @@ namespace Architector.Editor
             Repaint();
         }
 
-        private void RefreshErrors()
+        // One layer per step, so the loading bar moves layer by layer and no single freeze covers the whole project.
+        private IEnumerator<float> RefreshErrors()
         {
             if (errorsRevision == repository.SemanticRevision && errorsGeneration == typeIndex.Generation)
-                return;
+                yield break;
             errorsRevision = repository.SemanticRevision;
             errorsGeneration = typeIndex.Generation;
+            var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+            var layerIds = repository.Project.layers.Select(layer => layer.id).ToArray();
+            for (var index = 0; index < layerIds.Length; index++)
+            {
+                deferred.Label = $"Checking layers {index + 1} / {layerIds.Length}";
+                CountLayerErrors(layerIds[index], counts);
+                yield return (index + 1f) / layerIds.Length;
+            }
             errorCounts.Clear();
-            var report = ArchitectorConformance.Evaluate(repository, typeIndex, repository.Project.layers.Select(layer => layer.id), int.MaxValue);
+            foreach (var pair in counts)
+                errorCounts[pair.Key] = pair.Value;
+            errorsReady = true;
+        }
+
+        private void CountLayerErrors(string layerId, Dictionary<string, int> counts)
+        {
+            if (repository.FindLayer(layerId) == null)
+                return;
+            ArchitectorConformanceReport report;
+            try
+            {
+                report = ArchitectorConformance.Evaluate(repository, typeIndex, new[] { layerId }, int.MaxValue);
+            }
+            catch (ArchitectorDataException)
+            {
+                return;
+            }
             foreach (var diagnostic in report.Diagnostics.Where(item => item.Severity == ArchitectorConformanceSeverities.Error))
             {
-                errorCounts.TryGetValue(diagnostic.LayerId, out var count);
-                errorCounts[diagnostic.LayerId] = count + 1;
+                counts.TryGetValue(diagnostic.LayerId, out var count);
+                counts[diagnostic.LayerId] = count + 1;
             }
         }
 

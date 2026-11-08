@@ -37,6 +37,8 @@ namespace Architector.Editor
             }
         }
 
+        public static bool IsCreated => instance != null;
+
         public ArchitectorRepository Repository { get; }
         public ArchitectorUserStateStore UserState { get; }
         public ArchitectorNodeClipboard NodeClipboard { get; }

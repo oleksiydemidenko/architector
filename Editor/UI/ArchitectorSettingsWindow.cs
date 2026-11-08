@@ -122,7 +122,8 @@ namespace Architector.Editor
             scroll = EditorGUILayout.BeginScrollView(scroll);
             using (new EditorGUILayout.VerticalScope(ArchitectorFoldoutBox.ContentStyle))
             {
-                DrawUpdates();
+                using (new EditorGUI.DisabledScope(aiLocked))
+                    DrawUpdates();
                 var draft = ArchitectorJson.Clone(repository.Settings);
                 EditorGUI.BeginChangeCheck();
                 using (new EditorGUI.DisabledScope(aiLocked))
@@ -328,6 +329,11 @@ namespace Architector.Editor
             using var box = new ArchitectorFoldoutBox("Utilities", ref utilitiesExpanded);
             if (!box.Expanded)
                 return;
+            var confirmClear = !EditorUtility.GetDialogOptOutDecision(DialogOptOutDecisionType.ForThisMachine, ArchitectorMasterWindow.ClearLayerTabsDialogKey);
+            var confirmClearNow = EditorGUILayout.Toggle(new GUIContent("Confirm Clearing Tabs",
+                "Ask before the trash button closes every layer tab except the active one. Stored for this computer."), confirmClear);
+            if (confirmClearNow != confirmClear)
+                EditorUtility.SetDialogOptOutDecision(DialogOptOutDecisionType.ForThisMachine, ArchitectorMasterWindow.ClearLayerTabsDialogKey, !confirmClearNow);
             if (GUILayout.Button("Open Architector Integrations"))
                 OpenIntegrations();
             if (GUILayout.Button("Open Architector Review"))

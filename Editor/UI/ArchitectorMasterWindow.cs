@@ -26,6 +26,8 @@ namespace Architector.Editor
 
         private const float HeaderHeight = 30f;
         private const float ExplorerWidth = 270f;
+        private const float LayerTabsHeight = 34f;
+        internal const string ClearLayerTabsDialogKey = "Architector.ClearLayerTabs.Confirm";
         private const float TabBorderOverlap = 1f;
         private const string ExplorerDragDataKey = "ArchitectorExplorerDrag";
         private const string LayerTabDragDataKey = "ArchitectorLayerTabDrag";
@@ -86,6 +88,7 @@ namespace Architector.Editor
         private GUIStyle layerTabsBarStyle;
         private GUIStyle layerTabStyle;
         private GUIStyle layerTabNavigationStyle;
+        private GUIStyle reviewCountStyle;
         private GUIStyle tabCloseStyle;
         // Unity keeps window fields across a domain reload but brings a GUIStyle back without word wrap, so wrapped styles are rebuilt.
         [NonSerialized] private GUIStyle conformanceDiagnosticStyle;
@@ -142,6 +145,8 @@ namespace Architector.Editor
 
         public void StepExplorerLayer(int direction)
         {
+            if (!loaded)
+                return;
             var layers = (string.IsNullOrWhiteSpace(search) ? CurrentExplorerEntryOrder() : explorerSearchLayerIds)
                 .Where(id => repository.FindLayer(id) != null)
                 .ToList();
@@ -162,6 +167,8 @@ namespace Architector.Editor
 
         public void SendCanvasCommand(string command)
         {
+            if (!loaded)
+                return;
             layerCanvas?.SendCommand(command);
             SendEvent(EditorGUIUtility.CommandEvent(ArchitectorLayerCanvas.CommandEventName));
             Repaint();
@@ -169,6 +176,8 @@ namespace Architector.Editor
 
         public void NavigateHistory(int direction)
         {
+            if (!loaded)
+                return;
             NavigateLayerHistory(direction);
             Repaint();
         }
@@ -214,8 +223,106 @@ namespace Architector.Editor
         {
             EnsureWorkspaceCanvas();
             UpdateWindowTitle();
-            if (!ArchitectorSession.TryGet(out var session, out loadError))
+            wantsMouseMove = true;
+            wantsMouseEnterLeaveWindow = true;
+            wantsLessLayoutEvents = true;
+            loaded = false;
+            loading ??= new ArchitectorDeferredWork(this);
+            var connected = false;
+            if (ArchitectorSession.IsCreated)
+                LoadGuarded(() => connected = ConnectSession());
+            loading.Run(connected ? "Indexing project types" : "Reading the architecture", LoadWindow(connected), FinishLoading);
+            Repaint();
+        }
+
+        // Opening shows the window frame at once; each heavy step runs on its own editor update after the window
+        // was painted, and the loading bar glides between steps, so the window fills in instead of hanging white.
+        [NonSerialized] private bool loaded;
+        [NonSerialized] private ArchitectorDeferredWork loading;
+        [NonSerialized] private string pendingLayerId = string.Empty;
+
+        private IEnumerator<float> LoadWindow(bool connected)
+        {
+            if (!connected)
+            {
+                LoadGuarded(() => connected = ConnectSession());
+                if (!connected)
+                    yield break;
+                yield return 0.1f;
+            }
+            loading.Label = "Indexing project types";
+            LoadGuarded(() => _ = typeIndex.Types);
+            yield return 0.3f;
+            loading.Label = "Checking approvals";
+            LoadGuarded(() => _ = repository.GetLayerApprovalStatuses());
+            yield return 0.4f;
+            if (windowMode == WindowMode.Master)
+            {
+                using var steps = ExplorerStatusSteps(explorerStatus, true);
+                while (steps.MoveNext())
+                    yield return 0.4f + 0.45f * steps.Current;
+            }
+            loading.Label = "Opening the layer";
+            LoadGuarded(() =>
+            {
+                var layerId = pendingLayerId.Length > 0 ? pendingLayerId : activeLayerId;
+                if (repository.FindLayer(layerId) != null)
+                    GetLayerConformance(layerId);
+            });
+            yield return 1f;
+        }
+
+        private static void LoadGuarded(Action step)
+        {
+            try
+            {
+                step();
+            }
+            catch (ArchitectorDataException)
+            {
+            }
+        }
+
+        private void FinishLoading()
+        {
+            loaded = true;
+            if (repository != null && pendingLayerId.Length > 0)
+                OpenLayer(pendingLayerId);
+            pendingLayerId = string.Empty;
+            Repaint();
+        }
+
+        private void DrawLoading()
+        {
+            EnsureStyles();
+            ArchitectorAiWorkUi.ConsumeInputWhenLocked();
+            var area = GUILayoutUtility.GetRect(0f, 0f, GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true));
+            if (Event.current.type != EventType.Repaint)
                 return;
+            var right = area;
+            if (windowMode == WindowMode.Master)
+            {
+                var explorerWidth = ExplorerWidth + EditorStyles.helpBox.margin.horizontal;
+                var strip = new Rect(area.x, area.y, explorerWidth, LayerTabsHeight);
+                layerTabsBarStyle.Draw(strip, false, false, false, false);
+                var margin = EditorStyles.helpBox.margin;
+                EditorStyles.helpBox.Draw(new Rect(area.x + margin.left, strip.yMax + margin.top, ExplorerWidth, area.height - LayerTabsHeight - margin.vertical),
+                    false, false, false, false);
+                right = new Rect(area.x + explorerWidth, area.y, area.width - explorerWidth, area.height);
+            }
+            layerTabsBarStyle.Draw(new Rect(right.x, right.y, right.width, LayerTabsHeight), false, false, false, false);
+            var barWidth = Mathf.Min(320f, right.width - 40f);
+            var barRect = new Rect(right.center.x - barWidth * 0.5f, right.y + LayerTabsHeight + (right.height - LayerTabsHeight) * 0.5f - 10f, barWidth, 20f);
+            loading.DrawBar(barRect);
+            GUI.Label(new Rect(barRect.x, barRect.y - 22f, barRect.width, 18f), "Loading Architector", EditorStyles.centeredGreyMiniLabel);
+        }
+
+        private bool ConnectSession()
+        {
+            if (repository != null)
+                return true;
+            if (!ArchitectorSession.TryGet(out var session, out loadError))
+                return false;
             repository = session.Repository;
             userState = session.UserState;
             nodeClipboard = session.NodeClipboard;
@@ -224,17 +331,20 @@ namespace Architector.Editor
             repository.Changed += OnRepositoryChanged;
             repository.ExternalChangesReloaded += OnExternalChangesReloaded;
             aiWork.Changed += OnAiWorkChanged;
-            wantsMouseMove = true;
-            wantsMouseEnterLeaveWindow = true;
-            wantsLessLayoutEvents = true;
             EnsureSelectionExists();
             EnsureLayerNavigationState();
             InitializeRequestedWorkspaceWindow();
             UpdateWindowTitle();
+            return true;
         }
 
         private void OnDisable()
         {
+            loading?.Cancel();
+            explorerStatusWork?.Cancel();
+            explorerStatusRevision = -1;
+            EditorApplication.update -= StepLayerConformance;
+            conformanceRequestLayerId = string.Empty;
             FinishArrange(false);
             layerCanvas?.CancelRouting();
             CommitRename();
@@ -315,6 +425,11 @@ namespace Architector.Editor
                 DrawHeader();
             else
                 DrawWorkspaceAiHeader();
+            if (!loaded)
+            {
+                DrawLoading();
+                return;
+            }
             if (repository == null)
             {
                 EditorGUILayout.HelpBox(loadError, MessageType.Error);
@@ -540,45 +655,90 @@ namespace Architector.Editor
 
         private static string EscapeRichText(string value) => value.Replace("<", "<​");
 
+        // After loading, statuses are rebuilt quietly in the background, one layer per step: the old marks stay on
+        // screen until the new ones are complete, so an edit never waits for a check of the whole project.
+        [NonSerialized] private ArchitectorDeferredWork explorerStatusWork;
+
         private ArchitectorExplorerEntryStatus GetExplorerStatus(string id)
         {
             if (explorerStatusRevision != repository.SemanticRevision || explorerStatusTypeGeneration != typeIndex.Generation)
-                RebuildExplorerStatus();
+            {
+                explorerStatusRevision = repository.SemanticRevision;
+                explorerStatusTypeGeneration = typeIndex.Generation;
+                explorerStatusWork ??= new ArchitectorDeferredWork(this);
+                explorerStatusWork.Run("Checking layers", RefreshExplorerStatus(), Repaint, true);
+            }
             return explorerStatus.TryGetValue(id, out var status) ? status : ArchitectorExplorerEntryStatus.None;
         }
 
-        private void RebuildExplorerStatus()
+        private IEnumerator<float> RefreshExplorerStatus()
+        {
+            var next = new Dictionary<string, ArchitectorExplorerEntryStatus>(StringComparer.Ordinal);
+            using (var steps = ExplorerStatusSteps(next, false))
+                while (steps.MoveNext())
+                    yield return steps.Current;
+            explorerStatus.Clear();
+            foreach (var pair in next)
+                explorerStatus[pair.Key] = pair.Value;
+        }
+
+        // Builds the statuses into target one layer per step and yields the progress after each layer.
+        private IEnumerator<float> ExplorerStatusSteps(Dictionary<string, ArchitectorExplorerEntryStatus> target, bool showProgress)
+        {
+            List<string> healthy = null;
+            LoadGuarded(() => healthy = BeginExplorerStatus(target));
+            if (healthy == null)
+                yield break;
+            for (var index = 0; index < healthy.Count; index++)
+            {
+                if (showProgress)
+                    loading.Label = $"Checking layers {index + 1} / {healthy.Count}";
+                var layerId = healthy[index];
+                if (repository.FindLayer(layerId) != null)
+                    LoadGuarded(() => MarkLayerErrors(target, layerId));
+                yield return (index + 1f) / healthy.Count;
+            }
+        }
+
+        // Marks load errors and changed layers; returns the layers whose conformance is still to check, none when
+        // any layer failed to load.
+        private List<string> BeginExplorerStatus(Dictionary<string, ArchitectorExplorerEntryStatus> target)
         {
             explorerStatusRevision = repository.SemanticRevision;
             explorerStatusTypeGeneration = typeIndex.Generation;
-            explorerStatus.Clear();
+            target.Clear();
             var healthy = new List<string>();
             foreach (var layer in repository.Project.layers)
             {
                 if (repository.HasLayerLoadError(layer.id))
-                    MarkExplorerStatus(layer.id, layer.parentGroupId, ArchitectorExplorerEntryStatus.Error);
+                    MarkExplorerStatus(target, layer.id, layer.parentGroupId, ArchitectorExplorerEntryStatus.Error);
                 else
                     healthy.Add(layer.id);
             }
             if (healthy.Count != repository.Project.layers.Count)
-                return;
+                return new List<string>();
             foreach (var layerId in healthy)
                 if (string.Equals(repository.GetLayerApprovalStatus(layerId).State, ArchitectorApprovalStates.Changed, StringComparison.Ordinal))
-                    MarkExplorerStatus(layerId, repository.FindLayer(layerId).parentGroupId, ArchitectorExplorerEntryStatus.Changed);
-            var conformance = ArchitectorConformance.Evaluate(repository, typeIndex, healthy, int.MaxValue);
-            foreach (var diagnostic in conformance.Diagnostics)
-                if (string.Equals(diagnostic.Severity, ArchitectorConformanceSeverities.Error, StringComparison.Ordinal))
-                    MarkExplorerStatus(diagnostic.LayerId, repository.FindLayer(diagnostic.LayerId).parentGroupId, ArchitectorExplorerEntryStatus.Error);
+                    MarkExplorerStatus(target, layerId, repository.FindLayer(layerId).parentGroupId, ArchitectorExplorerEntryStatus.Changed);
+            return healthy;
         }
 
-        private void MarkExplorerStatus(string layerId, string groupId, ArchitectorExplorerEntryStatus status)
+        private void MarkLayerErrors(Dictionary<string, ArchitectorExplorerEntryStatus> target, string layerId)
         {
-            explorerStatus.TryGetValue(layerId, out var current);
-            explorerStatus[layerId] = current | status;
+            var conformance = ArchitectorConformance.Evaluate(repository, typeIndex, new[] { layerId }, int.MaxValue);
+            foreach (var diagnostic in conformance.Diagnostics)
+                if (string.Equals(diagnostic.Severity, ArchitectorConformanceSeverities.Error, StringComparison.Ordinal))
+                    MarkExplorerStatus(target, diagnostic.LayerId, repository.FindLayer(diagnostic.LayerId)?.parentGroupId, ArchitectorExplorerEntryStatus.Error);
+        }
+
+        private void MarkExplorerStatus(Dictionary<string, ArchitectorExplorerEntryStatus> target, string layerId, string groupId, ArchitectorExplorerEntryStatus status)
+        {
+            target.TryGetValue(layerId, out var current);
+            target[layerId] = current | status;
             while (!string.IsNullOrEmpty(groupId))
             {
-                explorerStatus.TryGetValue(groupId, out var groupStatus);
-                explorerStatus[groupId] = groupStatus | status;
+                target.TryGetValue(groupId, out var groupStatus);
+                target[groupId] = groupStatus | status;
                 groupId = repository.FindGroup(groupId)?.parentGroupId;
             }
         }
@@ -719,9 +879,69 @@ namespace Architector.Editor
                 explorerDropIntoGroupId = string.Empty;
                 explorerDropOnBack = false;
             }
+            EnsureStyles();
+            using (new EditorGUILayout.VerticalScope(GUILayout.Width(ExplorerWidth + EditorStyles.helpBox.margin.horizontal), GUILayout.ExpandHeight(true)))
+            {
+                DrawQuickTools();
+                DrawExplorerBox();
+            }
+        }
+
+        private void DrawQuickTools()
+        {
+            var stripRect = GUILayoutUtility.GetRect(0f, LayerTabsHeight, GUILayout.ExpandWidth(true));
+            GUI.Box(stripRect, GUIContent.none, layerTabsBarStyle);
+            var size = stripRect.height - 6f;
+            var workspaceRect = new Rect(stripRect.x + 3f, stripRect.y + 3f, size, size);
+            DrawNewWorkspaceButton(workspaceRect);
+            var reviewRect = new Rect(workspaceRect.xMax + 3f, workspaceRect.y, size, size);
+            DrawReviewButton(reviewRect, ArchitectorReviewWindow.PendingCount(repository));
+        }
+
+        private void DrawNewWorkspaceButton(Rect rect)
+        {
+            if (GUI.Button(rect, new GUIContent(string.Empty, "Open an empty Architector Workspace Window"), layerTabNavigationStyle))
+                OpenEmptyWorkspaceWindow();
+            DrawCenteredIcon(rect, ArchitectorIcons.Get("layout@2x").image, 20f);
+        }
+
+        private void DrawReviewButton(Rect rect, int pending)
+        {
+            var tooltip = pending > 0
+                ? $"Open Architector Review: {pending} layer(s) changed since approval, approved by an agent or in draft."
+                : "Open Architector Review: every layer is approved.";
+            if (GUI.Button(rect, new GUIContent(string.Empty, tooltip), layerTabNavigationStyle))
+                EditorApplication.delayCall += ArchitectorReviewWindow.Open;
+            DrawCenteredIcon(rect, ArchitectorIcons.Get("VisibilityOn").image, 16f, pending > 0 ? -3f : 0f);
+            if (pending <= 0 || Event.current.type != EventType.Repaint)
+                return;
+            var text = pending > 99 ? "99+" : pending.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var countRect = new Rect(rect.x, rect.yMax - 13f, rect.width - 2f, 12f);
+            var outline = EditorGUIUtility.isProSkin ? new Color(0.08f, 0.08f, 0.08f) : new Color(0.15f, 0.12f, 0.05f);
+            reviewCountStyle.normal.textColor = outline;
+            for (var x = -1; x <= 1; x++)
+                for (var y = -1; y <= 1; y++)
+                    if (x != 0 || y != 0)
+                        reviewCountStyle.Draw(new Rect(countRect.x + x, countRect.y + y, countRect.width, countRect.height), text, false, false, false, false);
+            reviewCountStyle.normal.textColor = GUI.enabled ? new Color(1f, 0.78f, 0.25f) : new Color(1f, 0.78f, 0.25f, 0.45f);
+            reviewCountStyle.Draw(countRect, text, false, false, false, false);
+        }
+
+        private static void DrawCenteredIcon(Rect rect, Texture icon, float iconSize, float offsetY = 0f)
+        {
+            if (icon == null || Event.current.type != EventType.Repaint)
+                return;
+            var previous = GUI.color;
+            if (!GUI.enabled)
+                GUI.color = new Color(previous.r, previous.g, previous.b, previous.a * 0.45f);
+            GUI.DrawTexture(new Rect(rect.center.x - iconSize * 0.5f, rect.center.y - iconSize * 0.5f + offsetY, iconSize, iconSize), icon, ScaleMode.ScaleToFit, true);
+            GUI.color = previous;
+        }
+
+        private void DrawExplorerBox()
+        {
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox, GUILayout.Width(ExplorerWidth), GUILayout.ExpandHeight(true)))
             {
-                EnsureStyles();
                 var navigationRect = GUILayoutUtility.GetRect(0f, 20f, GUILayout.ExpandWidth(true));
                 var breadcrumbX = navigationRect.x;
                 if (!string.IsNullOrEmpty(currentGroupId))
@@ -735,17 +955,6 @@ namespace Architector.Editor
                     breadcrumbX = backRect.xMax + 6f;
                 }
                 var pathRight = navigationRect.xMax;
-                var pendingReview = ArchitectorReviewWindow.PendingCount(repository);
-                if (pendingReview > 0)
-                {
-                    var review = new GUIContent($"Review ({pendingReview})",
-                        $"Open Architector Review: {pendingReview} layer(s) changed since approval, approved by an agent or in draft.");
-                    var reviewWidth = EditorStyles.miniButton.CalcSize(review).x + 4f;
-                    var reviewRect = new Rect(navigationRect.xMax - reviewWidth, navigationRect.y + 1f, reviewWidth, navigationRect.height - 2f);
-                    if (GUI.Button(reviewRect, review, EditorStyles.miniButton))
-                        EditorApplication.delayCall += ArchitectorReviewWindow.Open;
-                    pathRight = reviewRect.x - 4f;
-                }
                 var pathRect = new Rect(breadcrumbX, navigationRect.y, Mathf.Max(0f, pathRight - breadcrumbX), navigationRect.height);
                 GUI.Label(pathRect, CurrentLocationName(), breadcrumbStyle);
 
@@ -1318,7 +1527,7 @@ namespace Architector.Editor
         {
             EnsureLayerNavigationState();
             EnsureStyles();
-            var toolbarRect = GUILayoutUtility.GetRect(0f, 34f, GUILayout.ExpandWidth(true));
+            var toolbarRect = GUILayoutUtility.GetRect(0f, LayerTabsHeight, GUILayout.ExpandWidth(true));
             if (Event.current.type == EventType.Repaint)
                 lastTabsRect = toolbarRect;
             if (Event.current.type == EventType.MouseLeaveWindow)
@@ -1341,23 +1550,16 @@ namespace Architector.Editor
                     NavigateLayerHistory(1);
             }
 
-            var newWorkspaceRect = new Rect(forwardRect.xMax + 4f, backRect.y, navigationButtonWidth, backRect.height);
-            if (GUI.Button(newWorkspaceRect, new GUIContent(string.Empty, "Open an empty Architector Workspace Window"), layerTabNavigationStyle))
-                OpenEmptyWorkspaceWindow();
-            var newWorkspaceIcon = ArchitectorIcons.Get("layout@2x").image;
-            if (newWorkspaceIcon != null && Event.current.type == EventType.Repaint)
+            var lastNavigationRight = forwardRect.xMax;
+            if (windowMode != WindowMode.Master)
             {
-                const float workspaceIconSize = 20f;
-                var workspaceIconRect = new Rect(
-                    newWorkspaceRect.center.x - workspaceIconSize * 0.5f,
-                    newWorkspaceRect.center.y - workspaceIconSize * 0.5f,
-                    workspaceIconSize,
-                    workspaceIconSize);
-                GUI.DrawTexture(workspaceIconRect, newWorkspaceIcon, ScaleMode.ScaleToFit, true);
+                var newWorkspaceRect = new Rect(forwardRect.xMax + 4f, backRect.y, navigationButtonWidth, backRect.height);
+                DrawNewWorkspaceButton(newWorkspaceRect);
+                lastNavigationRight = newWorkspaceRect.xMax;
             }
 
             const float clearButtonWidth = 30f;
-            var clearRect = new Rect(newWorkspaceRect.xMax + 2f, backRect.y, clearButtonWidth, backRect.height);
+            var clearRect = new Rect(lastNavigationRight + 2f, backRect.y, clearButtonWidth, backRect.height);
             using (new EditorGUI.DisabledScope(openLayerIds.Count <= 1 || string.IsNullOrEmpty(activeLayerId)))
             {
                 var trashIcon = ArchitectorIcons.Get("TreeEditor.Trash");
@@ -1641,6 +1843,11 @@ namespace Architector.Editor
 
         private void OpenLayer(string layerId, bool recordVisit = true, bool revealTab = true)
         {
+            if (!loaded)
+            {
+                pendingLayerId = layerId ?? string.Empty;
+                return;
+            }
             if (repository?.FindLayer(layerId) == null)
                 return;
             deferInspectorSelection = false;
@@ -1749,7 +1956,9 @@ namespace Architector.Editor
                     "Clear Layer Tabs",
                     $"Close {tabsToClose} other layer tab{(tabsToClose == 1 ? string.Empty : "s")} and keep '{layer.name}' open?\n\nThe layers themselves will not be deleted.",
                     "Clear Tabs",
-                    "Cancel"))
+                    "Cancel",
+                    DialogOptOutDecisionType.ForThisMachine,
+                    ClearLayerTabsDialogKey))
             {
                 return;
             }
@@ -1966,7 +2175,8 @@ namespace Architector.Editor
                     var approvalStyle = new GUIStyle(EditorStyles.boldLabel);
                     approvalStyle.normal.textColor = ApprovalStatusColor(approval.State);
                     GUILayout.Label($"({approval.State})", approvalStyle, GUILayout.ExpandWidth(false), rowHeight);
-                    if (IsPlanned(layer, approval, GetLayerConformance(layer.id)))
+                    var conformance = DisplayedLayerConformance(layer.id);
+                    if (conformance != null && IsPlanned(layer, approval, conformance))
                         GUILayout.Label(
                             new GUIContent("Planned", "The design is approved, but some typed nodes are not linked to code or their contracts do not pass conformance yet."),
                             headerTagStyle,
@@ -1985,7 +2195,11 @@ namespace Architector.Editor
                     GUILayout.FlexibleSpace();
                     DrawRelationshipFilters(layer.id);
                 }
-                DrawConformance(layer.id, GetLayerConformance(layer.id));
+                var shownConformance = DisplayedLayerConformance(layer.id);
+                if (shownConformance != null)
+                    DrawConformance(layer.id, shownConformance);
+                else
+                    EditorGUILayout.LabelField(LayerConformanceFailed(layer.id) ? "Conformance unavailable" : "Checking conformance…", EditorStyles.miniLabel);
                 var hiddenPortals = repository.GetHiddenPortalCount(layer.id);
                 if (hiddenPortals > 0)
                     EditorGUILayout.LabelField(
@@ -2114,6 +2328,90 @@ namespace Architector.Editor
                    || conformance.UnverifiedTypeFactCount > 0;
         }
 
+        // The inspector shows a "checking" line only for a wait expected to be long. A check expected to be very short
+        // runs at once on the Layout event; a check of moderate length runs on the next editor update after a paint,
+        // and until then the last shown report stays on screen, so switching layers does not flicker. The expectation
+        // is how long the last check of that layer (or any layer, for one never checked) took.
+        private const double InstantConformanceSeconds = 0.05;
+        private const double VisibleWaitSeconds = 0.5;
+        [NonSerialized] private string conformanceRequestLayerId = string.Empty;
+        [NonSerialized] private bool conformanceRequestPainted;
+        [NonSerialized] private ArchitectorConformanceReport shownLayerConformance;
+        [NonSerialized] private double lastConformanceSeconds = -1.0;
+        [NonSerialized] private string failedConformanceKey = string.Empty;
+        [NonSerialized] private readonly Dictionary<string, double> conformanceSeconds = new(StringComparer.Ordinal);
+
+        private ArchitectorConformanceReport DisplayedLayerConformance(string layerId)
+        {
+            // Only the Layout event decides what is shown, so Layout and Repaint always draw the same controls.
+            if (Event.current.type == EventType.Layout)
+            {
+                var expected = conformanceSeconds.TryGetValue(layerId, out var seconds) ? seconds : lastConformanceSeconds;
+                var failed = string.Equals(failedConformanceKey, ConformanceKey(layerId), StringComparison.Ordinal);
+                if (!failed && !IsLayerConformanceCurrent(layerId) && expected >= 0.0 && expected < InstantConformanceSeconds)
+                    TryLayerConformance(layerId);
+                if (IsLayerConformanceCurrent(layerId))
+                    shownLayerConformance = layerConformance;
+                else if (failed)
+                    shownLayerConformance = null;
+                else
+                {
+                    if (!string.Equals(conformanceRequestLayerId, layerId, StringComparison.Ordinal))
+                    {
+                        conformanceRequestLayerId = layerId;
+                        conformanceRequestPainted = false;
+                        EditorApplication.update -= StepLayerConformance;
+                        EditorApplication.update += StepLayerConformance;
+                    }
+                    var sameLayer = layerConformance != null && string.Equals(layerConformanceLayerId, layerId, StringComparison.Ordinal);
+                    if (sameLayer)
+                        shownLayerConformance = layerConformance;
+                    else if (expected < 0.0 || expected >= VisibleWaitSeconds)
+                        shownLayerConformance = null;
+                }
+            }
+            if (Event.current.type == EventType.Repaint && conformanceRequestLayerId.Length > 0)
+                conformanceRequestPainted = true;
+            return shownLayerConformance;
+        }
+
+        private bool LayerConformanceFailed(string layerId) =>
+            string.Equals(failedConformanceKey, ConformanceKey(layerId), StringComparison.Ordinal);
+
+        private string ConformanceKey(string layerId) => $"{layerId}|{repository.SemanticRevision}|{typeIndex.Generation}";
+
+        // A layer whose check fails is not checked again until the architecture or the code changes.
+        private void TryLayerConformance(string layerId)
+        {
+            try
+            {
+                GetLayerConformance(layerId);
+            }
+            catch (ArchitectorDataException)
+            {
+                failedConformanceKey = ConformanceKey(layerId);
+            }
+        }
+
+        private bool IsLayerConformanceCurrent(string layerId) =>
+            layerConformance != null
+            && string.Equals(layerConformanceLayerId, layerId, StringComparison.Ordinal)
+            && layerConformanceRepositoryRevision == repository.SemanticRevision
+            && layerConformanceTypeGeneration == typeIndex.Generation;
+
+        private void StepLayerConformance()
+        {
+            if (!conformanceRequestPainted)
+                return;
+            EditorApplication.update -= StepLayerConformance;
+            var layerId = conformanceRequestLayerId;
+            conformanceRequestLayerId = string.Empty;
+            if (repository?.FindLayer(layerId) == null)
+                return;
+            TryLayerConformance(layerId);
+            Repaint();
+        }
+
         private ArchitectorConformanceReport GetLayerConformance(string layerId)
         {
             if (layerConformance == null
@@ -2121,7 +2419,9 @@ namespace Architector.Editor
                 || layerConformanceRepositoryRevision != repository.SemanticRevision
                 || layerConformanceTypeGeneration != typeIndex.Generation)
             {
+                var watch = System.Diagnostics.Stopwatch.StartNew();
                 layerConformance = ArchitectorConformance.Evaluate(repository, typeIndex, new[] { layerId }, int.MaxValue);
+                lastConformanceSeconds = conformanceSeconds[layerId] = watch.Elapsed.TotalSeconds;
                 layerConformanceLayerId = layerId;
                 layerConformanceRepositoryRevision = repository.SemanticRevision;
                 layerConformanceTypeGeneration = typeIndex.Generation;
@@ -2997,6 +3297,14 @@ namespace Architector.Editor
                     overflow = new RectOffset()
                 };
             }
+            reviewCountStyle ??= new GUIStyle(EditorStyles.miniBoldLabel)
+            {
+                alignment = TextAnchor.LowerRight,
+                fontSize = 10,
+                padding = new RectOffset(),
+                margin = new RectOffset(),
+                clipping = TextClipping.Overflow
+            };
             if (layerTabNavigationStyle == null)
             {
                 layerTabNavigationStyle = new GUIStyle(EditorStyles.miniButton)

@@ -3,7 +3,7 @@ using UnityEngine;
 
 namespace Architector.Editor
 {
-    internal static class ArchitectorAiWorkUi
+    public static class ArchitectorAiWorkUi
     {
         public const float StatusHeight = 30f;
 
@@ -41,19 +41,55 @@ namespace Architector.Editor
             });
         }
 
-        public static void DrawSettingsBanner(ArchitectorAiWorkCoordinator aiWork)
+        public static void DrawSettingsBanner(ArchitectorAiWorkCoordinator aiWork, string windowName = "Settings")
         {
             if (aiWork?.IsActive != true)
                 return;
+            DrawBanner(aiWork, aiWork.SettingsLocked, windowName,
+                "Toggle Settings and Integrations editing independently from Architector workspaces", () =>
+                {
+                    if (aiWork.SettingsLocked)
+                    {
+                        if (ConfirmManualUnlock("Architector Settings and Integrations"))
+                            aiWork.UnlockSettingsByUser();
+                    }
+                    else
+                    {
+                        aiWork.RelockSettings();
+                    }
+                });
+        }
+
+        public static void DrawWorkspaceBanner(ArchitectorAiWorkCoordinator aiWork, string windowName)
+        {
+            if (aiWork?.IsActive != true)
+                return;
+            DrawBanner(aiWork, aiWork.WorkspacesLocked, windowName,
+                "Toggle workspace editing, Review included, while the AI session remains active", () =>
+                {
+                    if (aiWork.WorkspacesLocked)
+                    {
+                        if (ConfirmManualUnlock("Architector workspaces and Review"))
+                            aiWork.UnlockWorkspacesByUser();
+                    }
+                    else
+                    {
+                        aiWork.RelockWorkspaces();
+                    }
+                });
+        }
+
+        private static void DrawBanner(ArchitectorAiWorkCoordinator aiWork, bool locked, string windowName, string tooltip, System.Action toggle)
+        {
             var rect = GUILayoutUtility.GetRect(0f, StatusHeight, GUILayout.ExpandWidth(true));
             rect.x += 4f;
             rect.width = Mathf.Max(0f, rect.width - 8f);
             rect.y += 2f;
             rect.height -= 4f;
             var interrupted = aiWork.IsAwaitingAgentResume;
-            DrawStatusControl(rect, aiWork.SettingsLocked, interrupted, interrupted ? "AI Interrupted — Settings" : "AI Working — Settings", interrupted
+            DrawStatusControl(rect, locked, interrupted, (interrupted ? "AI Interrupted — " : "AI Working — ") + windowName, interrupted
                 ? "Compilation interrupted the confirmed AI session; click to clear the recovered lock"
-                : "Toggle Settings editing independently from Architector workspaces", () =>
+                : tooltip, () =>
             {
                 if (interrupted)
                 {
@@ -61,15 +97,7 @@ namespace Architector.Editor
                         aiWork.AbandonInterruptedSessionByUser();
                     return;
                 }
-                if (aiWork.SettingsLocked)
-                {
-                    if (ConfirmManualUnlock("Architector Settings"))
-                        aiWork.UnlockSettingsByUser();
-                }
-                else
-                {
-                    aiWork.RelockSettings();
-                }
+                toggle();
             }, true);
         }
 

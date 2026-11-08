@@ -22,6 +22,8 @@ namespace Architector.Editor.Agents
         private string installError;
         private bool manualSetupExpanded;
         private IReadOnlyList<ArchitectorSetupItem> setupItems;
+        private IReadOnlyList<ArchitectorSetupItem> shownSetupItems;
+        [NonSerialized] private ArchitectorDeferredWork deferred;
         private ArchitectorTypeIndex typeIndex;
         private Request packageRequest;
         private string packageError;
@@ -58,6 +60,7 @@ namespace Architector.Editor.Agents
             aiWork = session.AiWork;
             typeIndex = session.TypeIndex;
             repository.Changed += OnChanged;
+            aiWork.Changed += Repaint;
             foreach (var client in ArchitectorMcpClient.All)
                 RefreshClient(client);
         }
@@ -70,6 +73,9 @@ namespace Architector.Editor.Agents
             ArchitectorIntegrationUpdates.Changed -= Repaint;
             if (repository != null)
                 repository.Changed -= OnChanged;
+            if (aiWork != null)
+                aiWork.Changed -= Repaint;
+            deferred?.Cancel();
         }
 
         private void OnChanged()
@@ -114,6 +120,24 @@ namespace Architector.Editor.Agents
                 return;
             }
 
+            ArchitectorAiWorkUi.DrawSettingsBanner(aiWork, "Integrations");
+            var aiLocked = aiWork?.SettingsLocked == true;
+            if (aiLocked)
+                ArchitectorAiWorkUi.ConsumeInputWhenLocked();
+            deferred ??= new ArchitectorDeferredWork(this);
+            if (Event.current.type == EventType.Layout && setupItems == null && !deferred.Pending)
+                deferred.Request("Checking setup", () =>
+                {
+                    setupItems = ArchitectorSetupCheck.Run(repository, typeIndex);
+                    shownSetupItems = setupItems;
+                });
+            if (shownSetupItems == null)
+                deferred.DrawStatus();
+            else
+                deferred.MarkPainted();
+            var firstCheck = shownSetupItems == null && deferred.Pending;
+
+            using (new EditorGUI.DisabledScope(aiLocked || firstCheck))
             using (new EditorGUILayout.VerticalScope(ArchitectorFoldoutBox.ContentStyle))
             {
                 DrawSetupCheck();
@@ -132,8 +156,12 @@ namespace Architector.Editor.Agents
             SessionState.SetBool(ExpandedKey + "setup", setupExpanded);
             if (!box.Expanded)
                 return;
-            setupItems ??= ArchitectorSetupCheck.Run(repository, typeIndex);
-            foreach (var item in setupItems)
+            if (shownSetupItems == null)
+            {
+                EditorGUILayout.LabelField("Checking…", EditorStyles.miniLabel);
+                return;
+            }
+            foreach (var item in shownSetupItems)
             {
                 using (new EditorGUILayout.HorizontalScope())
                 {

@@ -431,6 +431,12 @@ namespace Architector.Editor
             {
                 pointerOverCanvas = false;
             }
+            // Following the size change after opening is only for the inspector that appears a frame later. Once the
+            // person works in the canvas, a size change (an inspector opening or closing on a click) leaves the view alone.
+            if (focusedOnOpen
+                && (current.type == EventType.KeyDown
+                    || ((current.type == EventType.MouseDown || current.type == EventType.ScrollWheel) && canvasRect.Contains(mouse))))
+                focusedOnOpen = false;
             if (current.type == EventType.ExecuteCommand && current.commandName == CommandEventName && pendingCommand != null)
             {
                 var command = pendingCommand;

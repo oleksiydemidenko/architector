@@ -62,7 +62,7 @@ namespace Architector.Editor.Agents
             {
                 var expanded = SessionState.GetBool(ExpandedKey + entry.Id, false);
                 var update = entry.Updates == null ? null : ArchitectorIntegrationUpdates.State(entry.Updates.Id).Update;
-                var title = entry.DisplayName + "   ·   " + string.Join(", ", entry.Tags);
+                var title = entry.DisplayName + "   ·   " + string.Join(", ", entry.Tags.Select(ArchitectorIntegrationTagColors.Text));
                 if (update?.Available == true)
                     title += "   ·   " + ArchitectorFoldoutBox.WarningText(update.availableVersion + " available");
                 using (var box = new ArchitectorFoldoutBox(new GUIContent(title), ref expanded,
@@ -135,7 +135,16 @@ namespace Architector.Editor.Agents
                     usedWidth = 0f;
                 }
                 var selected = string.Equals(integrationTag, tag, StringComparison.OrdinalIgnoreCase);
-                if (GUILayout.Toggle(selected, label, EditorStyles.miniButton, GUILayout.Width(width)) && !selected)
+                var previousBackground = GUI.backgroundColor;
+                var style = EditorStyles.miniButton;
+                if (!string.IsNullOrEmpty(tag))
+                {
+                    style = ArchitectorIntegrationTagColors.ButtonStyle(tag);
+                    GUI.backgroundColor = Color.Lerp(Color.white, ArchitectorIntegrationTagColors.For(tag), selected ? 0.55f : 0.25f);
+                }
+                var pressed = GUILayout.Toggle(selected, label, style, GUILayout.Width(width));
+                GUI.backgroundColor = previousBackground;
+                if (pressed && !selected)
                 {
                     integrationTag = tag;
                     ResetIntegrationSearch();

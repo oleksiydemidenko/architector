@@ -1,4 +1,5 @@
 using System;
+using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEditorInternal;
 using UnityEngine;
@@ -11,6 +12,7 @@ namespace Architector.Editor
         private const float FoldoutHeight = 20f;
         private const float FoldoutInset = 11f;
         private const float BoxSpacing = 6f;
+        private static readonly Regex ColorTags = new("</?color[^>]*>", RegexOptions.Compiled);
         private static GUIStyle headerStyle;
         private static GUIStyle bodyStyle;
         private static GUIStyle contentStyle;
@@ -23,6 +25,8 @@ namespace Architector.Editor
         public ArchitectorFoldoutBox(GUIContent title, ref bool expanded, Texture trailingIcon = null)
         {
             EnsureStyles();
+            if (!GUI.enabled && title.text.IndexOf("<color", StringComparison.Ordinal) >= 0)
+                title = new GUIContent(ColorTags.Replace(title.text, string.Empty), title.image, title.tooltip);
             var rect = GUILayoutUtility.GetRect(0f, HeaderHeight, GUILayout.ExpandWidth(true));
             DrawHeaderBackground(rect);
             var foldoutRect = new Rect(
@@ -36,10 +40,14 @@ namespace Architector.Editor
             if (trailingIcon != null)
             {
                 var iconX = foldoutRect.x + headerStyle.CalcSize(title).x + 4f;
+                var previousColor = GUI.color;
+                if (!GUI.enabled)
+                    GUI.color = new Color(previousColor.r, previousColor.g, previousColor.b, previousColor.a * 0.4f);
                 GUI.DrawTexture(new Rect(Mathf.Min(iconX, rect.xMax - 22f), rect.y + 5f, 16f, 16f), trailingIcon, ScaleMode.ScaleToFit);
+                GUI.color = previousColor;
             }
             EditorGUI.indentLevel = previousIndent;
-            if (Event.current.type == EventType.MouseDown && Event.current.button == 0 && rect.Contains(Event.current.mousePosition))
+            if (GUI.enabled && Event.current.type == EventType.MouseDown && Event.current.button == 0 && rect.Contains(Event.current.mousePosition))
             {
                 expanded = !expanded;
                 Event.current.Use();
