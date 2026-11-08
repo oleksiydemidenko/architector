@@ -56,6 +56,8 @@ Reading works from files; writing needs the Editor, because validation, the type
 | `architector_query` | yes | Layers, approval, conformance and type queries |
 | `architector_edit` | yes | Work sessions, plans, arrangement and approvals |
 
+The server binary is also a command line for agents and scripts that can run shell commands, with the same JSON replies: `architector-mcp facts layer Core/Input`, `architector-mcp query layer_graph --target Core/Input --detail summary`, `architector-mcp edit dry_run_plan --plan plan.json`, `architector-mcp doctor`, `architector-mcp help`. `architector_status` gives the binary's path. `architector-mcp skill install claude` copies the authoring skill into the project.
+
 Keep **Project Settings > Player > Run In Background** on when agents talk to the Editor; otherwise it stops answering while its window has no focus.
 
 ## Known Limitations

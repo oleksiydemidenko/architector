@@ -4,10 +4,10 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Architector.CodeFacts;
 
-public static class McpServer
+public static partial class McpServer
 {
     private const string ProtocolVersion = "2025-06-18";
-    private const string Instructions = "Architector holds the architecture of this Unity project as layers with contracts. Before changing an unfamiliar file or type, call architector_route and read only what it names. Use architector_digest for approved layers. Code facts work without Unity: before reading a layer's code call architector_query layer_facts; before moving a scope call scope_what_if; layer_dump and lookup give ids by name. Writing needs the open Unity Editor: use architector_edit with a work session (begin_work, dry_run_plan, apply_plan, end_work). Saving does not approve. Approving needs the user's confirmation in the Editor unless capabilities reports agent_may_approve.";
+    private const string Instructions = "Architector holds the architecture of this Unity project as layers with contracts. Before changing an unfamiliar file or type, call architector_route and read only what it names. Use architector_digest for approved layers. Code facts work without Unity: before reading a layer's code call architector_query layer_facts; before moving a scope call scope_what_if; layer_dump and lookup give ids by name. Writing needs the open Unity Editor: use architector_edit with a work session (begin_work, dry_run_plan, apply_plan, end_work). Saving does not approve. Approving needs the user's confirmation in the Editor unless capabilities reports agent_may_approve. With a shell, the same binary is a command line: architector_status gives its path (cli); run it with help.";
     private static readonly UTF8Encoding Utf8 = new(false);
     private static string? root;
     private static FactsCache? facts;
@@ -19,6 +19,9 @@ public static class McpServer
             Console.WriteLine(Version);
             return 0;
         }
+        // With a command as its first argument the binary is the architector command line; otherwise an MCP server.
+        if (args.Length > 0 && IsCliCommand(args[0]))
+            return RunCli(args);
         root = FindProject(args);
         if (root != null)
         {
@@ -209,7 +212,9 @@ public static class McpServer
             ["project"] = root,
             ["has_architecture"] = root != null && HasData(),
             ["has_digest"] = root != null && File.Exists(Path.Combine(DataRoot, "Architecture.digest.md")),
-            ["editor_connected"] = root != null && EditorReachable()
+            ["editor_connected"] = root != null && EditorReachable(),
+            ["cli"] = Environment.ProcessPath?.Replace(Path.DirectorySeparatorChar, '/'),
+            ["cli_help"] = "Agents with a shell can run this binary as a command line (help lists the commands); replies are the same JSON."
         };
         return status.ToJsonString();
     }
@@ -276,11 +281,21 @@ public static class McpServer
         return Text(answer.ToJsonString(FactsQueries.Compact), answer["success"]?.GetValue<bool>() != true);
     }
 
+    private const string NotRunning = "The Unity Editor is not running for this project, or it is compiling. Open the project and try again. architector_route and architector_digest work without it.";
+
     private static JsonNode Bridge(string tool, JsonNode? arguments)
     {
-        const string notRunning = "The Unity Editor is not running for this project, or it is compiling. Open the project and try again. architector_route and architector_digest work without it.";
+        var answer = BridgeAnswer(tool, arguments);
+        if (answer == null)
+            return Text(NotRunning, true);
+        return Text(answer, !((bool?)JsonNode.Parse(answer)!["success"] ?? false));
+    }
+
+    // The Editor's raw reply, or null when no Editor serves this project.
+    private static string? BridgeAnswer(string tool, JsonNode? arguments)
+    {
         if (!File.Exists(BridgeState))
-            return Text(notRunning, true);
+            return null;
         try
         {
             var bridge = JsonNode.Parse(File.ReadAllText(BridgeState))!;
@@ -289,14 +304,11 @@ public static class McpServer
             using var writer = new StreamWriter(stream, Utf8) { AutoFlush = true, NewLine = "\n" };
             using var reader = new StreamReader(stream, Utf8);
             writer.WriteLine(new JsonObject { ["token"] = (string?)bridge["token"], ["tool"] = tool, ["parameters"] = arguments?.DeepClone() ?? new JsonObject() }.ToJsonString());
-            var answer = reader.ReadLine();
-            if (answer == null)
-                return Text(notRunning, true);
-            return Text(answer, !((bool?)JsonNode.Parse(answer)!["success"] ?? false));
+            return reader.ReadLine();
         }
         catch (Exception exception) when (exception is SocketException or IOException)
         {
-            return Text(notRunning, true);
+            return null;
         }
     }
 

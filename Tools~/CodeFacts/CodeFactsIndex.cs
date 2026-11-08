@@ -443,6 +443,26 @@ public sealed class CodeIndex
         File.Move(temporary, path, true);
     }
 
+    // "fresh" when the saved index matches the code, "stale" when the code changed since, "missing" when none is saved.
+    public static string SnapshotState(string root, string referenceSet)
+    {
+        var path = SnapshotPath(root, referenceSet);
+        if (!File.Exists(path))
+            return "missing";
+        try
+        {
+            using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var reader = new BinaryReader(file, Encoding.UTF8);
+            if (reader.ReadString() != "ArchitectorCodeIndex" || reader.ReadInt32() != FormatVersion)
+                return "stale";
+            return reader.ReadString() == ComputeSignature(root) ? "fresh" : "stale";
+        }
+        catch (Exception exception) when (exception is IOException or EndOfStreamException or FormatException)
+        {
+            return "stale";
+        }
+    }
+
     public static CodeIndex? TryLoad(string path, string signature)
     {
         if (!File.Exists(path))

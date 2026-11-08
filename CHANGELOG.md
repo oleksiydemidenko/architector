@@ -13,6 +13,15 @@
 - Replies are compact (counts and the most frequent type pairs); full lists come by `offset`/`limit` paging or `output: "file"`. The same answers are available from the command line: `dotnet run --project Tools~/DependencyEvidence -- <root> --facts=<action> --args=<json>`.
 - The server binary grows from about 12 to about 19 MB (Roslyn and .NET reference assemblies inside); it still needs no .NET SDK.
 
+**Fast after the first analysis.** The analysed code (types, owners' inputs, references, members, rule facts) is saved under `Library/Architector` and reused until a C# file, the csproj or `code-facts.json` changes. Editing the graph never repeats the analysis: layer scopes, owners and evidence are applied on top in a fraction of a second. On a project of about 1,500 files the first analysis takes about 10 to 15 seconds; a restarted server answers its first call in under a second, and `DependencyEvidence` runs in 0.4 s instead of 10 s.
+
+**A command line in the same binary.** `architector-mcp` started with a command is the `architector` command line, so agents that can run shell commands need no tool schemas in their context:
+
+- `facts evidence|layer|what-if|dump|lookup` (the code facts, identical JSON to the MCP actions), `query <action>` and `edit <action> [--plan plan.json]` (any gateway action through the open Editor), `status`, `doctor` (project, data, code index, Editor, package and agent skills, each with what to fix), `commands` (every command as JSON) and `help [command]`.
+- Every reply is JSON with `success`; `--pretty` indents it. Exit codes: 0 success, 1 internal error, 2 usage, 4 setup missing, 6 `success=false`, 7 Unity Editor not reachable (retry when it is open).
+- `skill install <claude|codex|all>` copies the packaged `architector-authoring` skill into the project (`.claude/skills`, `.agents/skills`) with a version stamp; `skill sync` keeps the copies it installed at the package version. A copy it did not install is never replaced without `--force`.
+- `architector_status` reports the binary's path as `cli`, so an agent connected over MCP learns it can use the command line.
+
 **Plans and work sessions:**
 
 - Semantic plans accept a node's title instead of its id: `"Node Title"` or `"Layer/Path::Node Title"`.

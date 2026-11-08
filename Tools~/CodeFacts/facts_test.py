@@ -87,6 +87,32 @@ assert "error" in lookup[1], lookup
 failed, text = query({"action": "layer_facts", "target": "Missing"})
 assert failed and "layer_not_found" in text, text
 
+
+def cli(*arguments):
+    result = subprocess.run([server, *arguments, "--project", project], capture_output=True, text=True, encoding="utf-8")
+    return result.returncode, result.stdout.strip()
+
+
+code, text = cli("facts", "layer", "Core")
+assert code == 0 and text == query({"action": "layer_facts", "target": "Core"})[1], text
+code, text = cli("facts", "what-if", "--move", "Sample.Ui.HudView=Sample/Player")
+assert code == 0 and json.loads(text)["undeclared"] == "1 -> 0", text
+code, text = cli("facts", "lookup", "Sample/Core::Clock::Advance")
+assert code == 0 and json.loads(text)["results"][0]["member"] == "member_advance", text
+assert cli("facts", "layer", "Missing")[0] == 6
+assert cli("facts", "nothing")[0] == 2
+assert cli("query", "work_status")[0] == 7
+code, text = cli("status")
+assert code == 0 and json.loads(text)["cli"], text
+code, text = cli("commands")
+assert code == 0 and any(item["command"] == "facts layer" for item in json.loads(text)["commands"]), text
+code, text = cli("skill", "install", "claude")
+assert code == 4 and json.loads(text)["code"] == "package_not_found", text
+code, text = cli("doctor")
+assert code == 0 and any(item["check"] == "code_index" for item in json.loads(text)["checks"]), text
+help_text = subprocess.run([server, "help", "facts"], capture_output=True, text=True, encoding="utf-8").stdout
+assert "facts what-if" in help_text and "Exit codes" in help_text, help_text
+
 if evidence_tool:
     for arguments in ({"action": "code_evidence"}, {"action": "layer_facts", "target": "Core"}, {"action": "scope_what_if", "moves": [{"folder": "Assets/Ui", "to": "Sample/Core"}]}, {"action": "layer_dump", "target": "Ui"}):
         action = arguments.pop("action")
