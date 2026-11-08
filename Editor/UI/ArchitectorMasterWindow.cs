@@ -639,10 +639,13 @@ namespace Architector.Editor
             EditorGUI.DrawRect(new Rect(headerRect.x, headerRect.yMax - 1f, headerRect.width, 1f), separatorColor);
             var versionRect = new Rect(headerRect.x + 6f, headerRect.y - 1f, 100f, headerRect.height);
             GUI.Label(versionRect, $"v{ArchitectorPackagePaths.Version}", versionStyle);
-            const float settingsSize = 24f;
+            // The bottom pixel is the separator, so the buttons sit in the 29 px above it with the same 3 px margin on
+            // top, bottom and right, and the same gap between them.
+            const float headerMargin = 3f;
+            const float settingsSize = HeaderHeight - 1f - headerMargin * 2f;
             var settingsRect = new Rect(
-                headerRect.xMax - settingsSize - 4f,
-                headerRect.y + (headerRect.height - settingsSize) * 0.5f,
+                headerRect.xMax - settingsSize - headerMargin,
+                headerRect.y + headerMargin,
                 settingsSize,
                 settingsSize);
             using (new EditorGUI.DisabledScope(aiWork?.WorkspacesLocked == true))
@@ -655,7 +658,7 @@ namespace Architector.Editor
             {
                 var aiButtonWidth = ArchitectorAiWorkUi.WorkspaceButtonWidth(aiWork);
                 var aiRect = new Rect(
-                    settingsRect.x - aiButtonWidth - 4f,
+                    settingsRect.x - aiButtonWidth - headerMargin,
                     settingsRect.y,
                     aiButtonWidth,
                     settingsRect.height);
@@ -667,7 +670,7 @@ namespace Architector.Editor
             {
                 var noticeWidth = ArchitectorAiWorkUi.WorkflowNoticeWidth(mode);
                 ArchitectorAiWorkUi.DrawWorkflowNotice(
-                    new Rect(noticeRight - noticeWidth - 4f, settingsRect.y, noticeWidth, settingsRect.height),
+                    new Rect(noticeRight - noticeWidth - headerMargin, settingsRect.y, noticeWidth, settingsRect.height),
                     mode);
             }
 
