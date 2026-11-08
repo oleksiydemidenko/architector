@@ -4,7 +4,7 @@
 
 - Editing nodes and relationships is about 15 times faster: on 50 layers an edit with the window's refresh drops from about 3 s to 0.2 s. Only the layers an edit touches are cloned, validated, encoded and reinstalled; approval hashes and conformance are recomputed only where they can change.
 - `layer_graph` with `detail=summary` returns the layer as compact text: paths and names instead of IDs, no empty fields, incoming relationships folded into one line per source layer.
-- **Settings > Workspace Geometry > Fit Layer On Open** (on by default): each opened layer is centered and zoomed out to fit the window as it is now, instead of returning to the last saved position.
+- **Settings > Workspace Geometry > Fit Layer On Open** (on by default): opening a layer runs Focus View (**F**) instead of returning to the last saved position, and runs it again while the canvas settles (the inspector appearing, a window resize) until you move the view.
 - Renaming a layer, in the window or through a semantic plan, retitles the Portals that lead to it; their stored titles used to keep the old name. `ArchitectorRepository.RefreshAllPortalTitles()` repairs titles left stale by earlier renames.
 - The Hotkeys button (**?**) moved from the header to the canvas's top-right corner, clear of the layer tabs and the inspector, and moves with the inspector. In the header the agent-work button covered it.
 - **Settings > Arrange > Improvement Time** (5 s by default) limits how long Arrange improves a layer; the layout itself is always complete.

@@ -49,7 +49,11 @@ namespace Architector.Editor
         private readonly Dictionary<string, string[]> nodeRows = new(StringComparer.Ordinal);
         private readonly Dictionary<(string value, int width, GUIStyle style), string> fittedText = new();
         private double viewStateSaveAt;
-        private bool fitLayerPending;
+        private bool focusOnOpen;
+        private bool focusedOnOpen;
+        private Vector2 focusedSize;
+        private Vector2 focusedPan;
+        private float focusedZoom;
         private bool edgeRoutesDragged;
         private bool hideRoutesWhileDragging = true;
         private readonly HashSet<string> hiddenRouteNodeIds = new(StringComparer.Ordinal);
@@ -143,13 +147,8 @@ namespace Architector.Editor
             if (layerId != layer.id)
             {
                 ResetForLayer(layer.id, userState);
-                fitLayerPending = repository.Settings.geometry.fitLayerOnOpen;
-            }
-            // A layout pass hands the canvas a placeholder rect, not the window's size, so the layer is fitted in the first repaint.
-            if (fitLayerPending && Event.current.type == EventType.Repaint)
-            {
-                fitLayerPending = false;
-                FocusView(repository, repository.LoadLayer(layer.id).layout.nodes.Select(node => node.nodeId).ToArray(), userState, null);
+                focusOnOpen = repository.Settings.geometry.fitLayerOnOpen;
+                focusedOnOpen = false;
             }
 
             currentRepositoryRevision = repository.Revision;
@@ -172,6 +171,18 @@ namespace Architector.Editor
                 IndexDocuments(cachedDocuments);
             }
             var documents = cachedDocuments;
+            // Opening a layer runs the F command (Focus View) in a repaint, where the canvas has its real size. The inspector can
+            // appear a frame later and narrow the canvas, so F runs again while the size changes and the view is untouched.
+            if (Event.current.type == EventType.Repaint
+                && (focusOnOpen || (focusedOnOpen && selectedNodeIds.Count == 0 && canvasSize != focusedSize && pan == focusedPan && Mathf.Approximately(zoom, focusedZoom))))
+            {
+                focusOnOpen = false;
+                RunCommand(ArchitectorShortcuts.FocusView, documents, repository, typeIndex, userState, execute, requestRepaint, openLayer);
+                focusedOnOpen = true;
+                focusedSize = canvasSize;
+                focusedPan = pan;
+                focusedZoom = zoom;
+            }
             FlushViewStateWhenDue(userState);
             if (cachedPortalRelationshipRowsRevision != currentRepositoryRevision)
             {
