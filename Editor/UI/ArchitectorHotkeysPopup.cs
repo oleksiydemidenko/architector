@@ -9,7 +9,7 @@ namespace Architector.Editor
 {
     public sealed class ArchitectorHotkeysPopup : PopupWindowContent
     {
-        private const float WindowWidth = 460f;
+        private const float MinimumWidth = 460f;
         private const float Padding = 12f;
         private const float KeyColumnWidth = 140f;
         private const float RowHeight = 18f;
@@ -97,7 +97,23 @@ namespace Architector.Editor
             var height = Padding * 2f + ButtonHeight;
             foreach (var section in Sections)
                 height += TitleHeight + section.rows.Length * RowHeight + SectionSpacing;
-            return new Vector2(WindowWidth, height);
+            return new Vector2(Width(), height);
+        }
+
+        // Wide enough for the longest description, so no row is cut off; never narrower than before, never wider than 900.
+        private float Width()
+        {
+            EnsureStyles();
+            var widest = Sections
+                .SelectMany(section => section.rows)
+                .Select(row =>
+                {
+                    var text = row.shortcut != null && problems.TryGetValue(row.shortcut, out var problem) ? $"{row.action}. {problem}" : row.action;
+                    return actionStyle.CalcSize(new GUIContent(text)).x;
+                })
+                .DefaultIfEmpty(0f)
+                .Max();
+            return Mathf.Clamp(Mathf.Ceil(Padding * 2f + KeyColumnWidth + widest + 8f), MinimumWidth, 900f);
         }
 
         public override void OnGUI(Rect rect)
