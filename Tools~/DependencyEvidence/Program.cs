@@ -18,7 +18,7 @@ public static class Program
 
         var jsonPath = Option(args, "json");
         // --no-platform-references analyses like the self-contained server, which has no .NET assemblies on disk.
-        var model = FactsModel.Build(root, args.Contains("--no-platform-references") ? Array.Empty<Microsoft.CodeAnalysis.MetadataReference>() : FactsModel.PlatformReferences());
+        var model = Model(root, args);
         var architecture = model.Architecture;
         if (model.ScopedLayers.Count == 0)
         {
@@ -135,10 +135,24 @@ public static class Program
         var arguments = JsonNode.Parse(argumentsText);
         var model = FactsQueries.ArchitectureOnlyActions.Contains(action)
             ? FactsModel.ArchitectureOnly(root)
-            : FactsModel.Build(root, FactsModel.PlatformReferences());
+            : Model(root, args);
         var answer = FactsQueries.Answer(model, action, arguments, root);
         Console.WriteLine(answer.ToJsonString(args.Contains("--compact") ? FactsQueries.Compact : FactsQueries.Indented));
         return answer["success"]?.GetValue<bool>() == true ? 0 : 1;
+    }
+
+    // The analysed code is kept in Library/Architector and reused until a C# file changes; --fresh analyses again.
+    // --no-platform-references analyses like a host without .NET assemblies on disk (for comparisons only).
+    private static FactsModel Model(string root, string[] args)
+    {
+        var none = args.Contains("--no-platform-references");
+        var referenceSet = none ? "none" : "tpa";
+        Func<IEnumerable<Microsoft.CodeAnalysis.MetadataReference>> references = none
+            ? () => Array.Empty<Microsoft.CodeAnalysis.MetadataReference>()
+            : FactsModel.PlatformReferences;
+        if (args.Contains("--fresh"))
+            File.Delete(CodeIndex.SnapshotPath(root, referenceSet));
+        return FactsModel.Build(root, referenceSet, references);
     }
 
     private static string? Option(string[] args, string name) =>

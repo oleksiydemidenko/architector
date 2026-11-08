@@ -1,110 +1,104 @@
-using System.Diagnostics;
-using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Architector.CodeFacts;
 
-// One Roslyn pass over Assets: every top-level type with its owning layer, and every reference from a type
-// to another first-party type with file and line. DependencyEvidence counts a subset of these references
-// with exactly its old rule, so its totals do not change.
+// The code index seen through the current graph: owners from layer scopes, which references count as dependency
+// evidence (exactly DependencyEvidence's rule), its scope warnings, and the nodes linked to each type. Applying the
+// graph takes a fraction of a second, so graph edits never repeat the Roslyn analysis.
 public sealed class FactsModel
 {
-    private static readonly HashSet<string> UnityEntryBases = new(StringComparer.Ordinal)
-    {
-        "MonoBehaviour", "ScriptableObject", "EditorWindow", "Editor", "StateMachineBehaviour", "ScriptedImporter", "AssetPostprocessor"
-    };
-
-    private static readonly HashSet<string> UnityEntryAttributes = new(StringComparer.Ordinal)
-    {
-        "RuntimeInitializeOnLoadMethod", "InitializeOnLoad", "InitializeOnLoadMethod", "MenuItem", "CreateAssetMenu", "DidReloadScripts"
-    };
-
     public FactsArchitecture Architecture { get; private set; } = new();
     public IReadOnlyList<FactsLayer> ScopedLayers { get; private set; } = Array.Empty<FactsLayer>();
     public List<FactsReference> References { get; } = new();
     public List<FactsType> Types { get; } = new();
     public Dictionary<string, FactsType> TypesByName { get; } = new(StringComparer.Ordinal);
     public IReadOnlyList<string> EvidenceWarnings { get; private set; } = Array.Empty<string>();
-    public int SourceFiles { get; private set; }
-    public long BuildMilliseconds { get; private set; }
+    public FactsExtractors Extractors { get; private set; } = new();
+    public IReadOnlyList<FactsRuleSuggestion> RuleSuggestions { get; private set; } = Array.Empty<FactsRuleSuggestion>();
+    public CodeIndex? Index { get; private set; }
 
-    public static FactsModel Build(string root, IEnumerable<MetadataReference> references)
+    // Analyses the code (or reuses the saved index) and applies the graph. referenceSet names the metadata references,
+    // because the binding they give is part of the index: "tpa" for the SDK runtime, "net100" for the embedded set.
+    public static FactsModel Build(string root, string referenceSet, Func<IEnumerable<MetadataReference>> references)
     {
-        var watch = Stopwatch.StartNew();
-        var model = new FactsModel
-        {
-            Architecture = FactsArchitecture.Load(Path.Combine(root, "Architector")),
-            Extractors = FactsExtractors.Load(Path.Combine(root, "Architector", "code-facts.json"))
-        };
-        model.ScopedLayers = model.Architecture.Layers.Values.Where(layer => layer.Scoped).ToArray();
-        if (model.ScopedLayers.Count == 0)
-            return model;
-
-        var sources = SourceFilePaths(root);
-        model.SourceFiles = sources.Length;
-        var defines = Defines(root);
-        var trees = sources.Select(file => CSharpSyntaxTree.ParseText(
-                File.ReadAllText(file),
-                new CSharpParseOptions(LanguageVersion.Latest, preprocessorSymbols: defines),
-                Path.GetRelativePath(root, file).Replace('\\', '/')))
-            .ToArray();
-        var compilation = CSharpCompilation.Create(
-            "Architector.DependencyEvidence",
-            trees,
-            references,
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true));
-
-        // Two resolvers give the same owners; only the first records warnings, and it is called exactly where
-        // DependencyEvidence calls it, so the warning list stays identical.
-        var evidenceOwners = new OwnerResolver(model.ScopedLayers);
-        var owners = new OwnerResolver(model.ScopedLayers);
-        foreach (var tree in trees)
-        {
-            var semantic = compilation.GetSemanticModel(tree);
-            model.CollectTypes(tree, semantic, owners);
-            var mayOwn = evidenceOwners.MayOwn(tree);
-            foreach (var name in tree.GetRoot().DescendantNodes().OfType<SimpleNameSyntax>())
-            {
-                var declaration = name.Ancestors().FirstOrDefault(node => node is BaseTypeDeclarationSyntax or DelegateDeclarationSyntax);
-                if (declaration == null || semantic.GetDeclaredSymbol(declaration) is not INamedTypeSymbol sourceType)
-                    continue;
-                var sourceLayer = mayOwn ? evidenceOwners.Owner(sourceType) : owners.Owner(sourceType);
-                var info = semantic.GetSymbolInfo(name);
-                var symbol = info.Symbol ?? info.CandidateSymbols.FirstOrDefault();
-                var targetType = (symbol as INamedTypeSymbol ?? symbol?.ContainingType)?.OriginalDefinition;
-                if (targetType == null || !targetType.Locations.Any(location => location.IsInSource))
-                    continue;
-                var targetLayer = mayOwn && sourceLayer != null ? evidenceOwners.Owner(targetType) : owners.Owner(targetType);
-                var sourceTop = Outermost(sourceType);
-                var targetTop = Outermost(targetType);
-                if (SymbolEqualityComparer.Default.Equals(sourceTop, targetTop))
-                    continue;
-                model.References.Add(new FactsReference(
-                    sourceType.Name,
-                    targetType.Name,
-                    FullName(sourceTop),
-                    FullName(targetTop),
-                    sourceLayer?.Id,
-                    targetLayer?.Id,
-                    tree.FilePath,
-                    name.GetLocation().GetLineSpan().StartLinePosition.Line + 1,
-                    mayOwn && sourceLayer != null && targetLayer != null && !ReferenceEquals(sourceLayer, targetLayer)));
-            }
-        }
-        model.EvidenceWarnings = evidenceOwners.Ambiguities.OrderBy(value => value, StringComparer.Ordinal).ToArray();
-        model.SuggestRules();
-        model.LinkTypes();
-        model.BuildMilliseconds = watch.ElapsedMilliseconds;
-        return model;
+        var architecture = FactsArchitecture.Load(Path.Combine(root, "Architector"));
+        if (!architecture.Layers.Values.Any(layer => layer.Scoped))
+            return Apply(root, architecture, null);
+        return Apply(root, architecture, CodeIndex.LoadOrBuild(root, referenceSet, references));
     }
 
     // Graph questions (layer_dump, lookup) need no code analysis.
-    public static FactsModel ArchitectureOnly(string root)
+    public static FactsModel ArchitectureOnly(string root) =>
+        Apply(root, FactsArchitecture.Load(Path.Combine(root, "Architector")), null);
+
+    public static FactsModel Apply(string root, FactsArchitecture architecture, CodeIndex? index)
     {
-        var model = new FactsModel { Architecture = FactsArchitecture.Load(Path.Combine(root, "Architector")) };
-        model.ScopedLayers = model.Architecture.Layers.Values.Where(layer => layer.Scoped).ToArray();
+        var model = new FactsModel
+        {
+            Architecture = architecture,
+            Extractors = FactsExtractors.Load(Path.Combine(root, "Architector", "code-facts.json")),
+            Index = index
+        };
+        model.ScopedLayers = architecture.Layers.Values.Where(layer => layer.Scoped).ToArray();
+        if (index == null || model.ScopedLayers.Count == 0)
+            return model;
+
+        var types = index.Types.ToDictionary(type => type.Key, StringComparer.Ordinal);
+        var namespacesByFile = index.Files.ToDictionary(file => file.Path, file => file.Namespaces, StringComparer.Ordinal);
+        var owners = new OwnerResolver(model.ScopedLayers, types);
+        var evidenceOwners = new OwnerResolver(model.ScopedLayers, types);
+        var mayOwn = new Dictionary<string, bool>(StringComparer.Ordinal);
+        bool MayOwn(string file)
+        {
+            if (!mayOwn.TryGetValue(file, out var value))
+                mayOwn[file] = value = owners.MayOwn(file, namespacesByFile.TryGetValue(file, out var spaces) ? spaces : new List<string>());
+            return value;
+        }
+
+        // DependencyEvidence resolves the owner of every type with a name in a file a layer may own, and the owner of
+        // every target referenced from an owned type there; the same calls give the same scope warnings.
+        foreach (var type in index.Types)
+            foreach (var file in type.NamedIn)
+                if (MayOwn(file))
+                {
+                    evidenceOwners.Owner(type.Key);
+                    break;
+                }
+        foreach (var reference in index.References)
+        {
+            var source = owners.Owner(reference.SourceKey);
+            var target = owners.Owner(reference.TargetKey);
+            var counts = MayOwn(reference.File) && source != null;
+            if (counts)
+                evidenceOwners.Owner(reference.TargetKey);
+            model.References.Add(new FactsReference(
+                reference.SourceName,
+                reference.TargetName,
+                types.TryGetValue(reference.SourceKey, out var sourceType) ? sourceType.FullName : reference.SourceKey,
+                types.TryGetValue(reference.TargetKey, out var targetType) ? targetType.FullName : reference.TargetKey,
+                source?.Id,
+                target?.Id,
+                reference.File,
+                reference.Line,
+                counts && target != null && !ReferenceEquals(source, target)));
+        }
+        model.EvidenceWarnings = evidenceOwners.Ambiguities.OrderBy(value => value, StringComparer.Ordinal).ToArray();
+
+        foreach (var data in index.Types)
+        {
+            var type = new FactsType(data, owners.Owner(data.Key)?.Id);
+            model.Types.Add(type);
+            model.TypesByName.TryAdd(data.FullName, type);
+        }
+        var byKey = model.Types.ToDictionary(type => type.Data.Key, StringComparer.Ordinal);
+        foreach (var type in model.Types)
+            foreach (var derived in type.Data.DerivedBy)
+                if (byKey.TryGetValue(derived, out var derivedType))
+                    type.DerivedOwnerLayers.Add(derivedType.OwnerLayerId ?? string.Empty);
+        foreach (var node in architecture.Layers.Values.SelectMany(layer => layer.Nodes))
+            if (node.TypeName.Length > 0 && model.TypesByName.TryGetValue(node.TypeName, out var linked))
+                linked.Nodes.Add(node.Id);
+        model.RuleSuggestions = index.Suggestions;
         return model;
     }
 
@@ -138,211 +132,36 @@ public sealed class FactsModel
             .ToArray();
     }
 
-    private static string[] Defines(string root)
-    {
-        var project = Path.Combine(root, "Assembly-CSharp.csproj");
-        return File.Exists(project)
-            ? XDocument.Load(project).Descendants().First(node => node.Name.LocalName == "DefineConstants").Value.Split(';')
-            : new[] { "UNITY_EDITOR", "UNITY_2021_2_OR_NEWER", "UNITY_6000_3_OR_NEWER" };
-    }
-
-    private void CollectTypes(SyntaxTree tree, SemanticModel semantic, OwnerResolver owners)
-    {
-        foreach (var declaration in tree.GetRoot().DescendantNodes().OfType<MemberDeclarationSyntax>()
-                     .Where(node => node is BaseTypeDeclarationSyntax or DelegateDeclarationSyntax)
-                     .Where(node => node.Parent is not BaseTypeDeclarationSyntax))
-        {
-            if (semantic.GetDeclaredSymbol(declaration) is not INamedTypeSymbol symbol)
-                continue;
-            var name = FullName(symbol);
-            var line = declaration.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
-            if (!TypesByName.TryGetValue(name, out var type))
-            {
-                type = new FactsType(symbol, name, owners.Owner(symbol)?.Id, $"{tree.FilePath}:{line}");
-                Types.Add(type);
-                TypesByName[name] = type;
-            }
-            else
-                type.Files.Add($"{tree.FilePath}:{line}");
-            Extract(declaration, type, tree.FilePath);
-        }
-    }
-
-    // Project conventions are not universal, so they are read only when Architector/code-facts.json names them.
-    public FactsExtractors Extractors { get; private set; } = new();
-
-    private void Extract(SyntaxNode declaration, FactsType type, string file)
-    {
-        string At(SyntaxNode node) => $"{file}:{node.GetLocation().GetLineSpan().StartLinePosition.Line + 1}";
-        foreach (var generic in declaration.DescendantNodes().OfType<GenericNameSyntax>())
-        {
-            if (generic.Parent is not (InvocationExpressionSyntax or MemberAccessExpressionSyntax))
-                continue;
-            var name = generic.Identifier.ValueText;
-            if (Extractors.GenericCalls.Contains(name))
-                type.AddExtra("generic_calls", $"{name}<{string.Join(", ", generic.TypeArgumentList.Arguments)}>", At(generic));
-            else
-                callCandidates.Add((name, generic.TypeArgumentList.Arguments.Select(ShortTypeName).ToArray(), At(generic)));
-        }
-        foreach (var attribute in declaration.DescendantNodes().OfType<AttributeSyntax>())
-        {
-            var attributeName = FactsExtractors.AttributeName(attribute.Name.ToString().Split('.').Last());
-            var target = attribute.Parent?.Parent;
-            var types = target switch
-            {
-                BaseMethodDeclarationSyntax method => method.ParameterList.Parameters.Select(parameter => parameter.Type?.ToString() ?? string.Empty),
-                FieldDeclarationSyntax field => new[] { field.Declaration.Type.ToString() },
-                PropertyDeclarationSyntax property => new[] { property.Type.ToString() },
-                ParameterSyntax parameter => new[] { parameter.Type?.ToString() ?? string.Empty },
-                _ => null
-            };
-            if (types == null)
-                continue;
-            var kind = Extractors.InjectionAttributes.Contains(attributeName) ? "injected"
-                : Extractors.SerializedAttributes.Contains(attributeName) ? "serialized"
-                : null;
-            if (kind == null)
-            {
-                if (!CommonAttributes.Contains(attributeName))
-                    attributeCandidates.Add((attributeName, At(attribute)));
-                continue;
-            }
-            foreach (var value in types.Where(value => value.Length > 0))
-                type.AddExtra(kind, value, At(attribute));
-        }
-    }
-
-    private static string ShortTypeName(TypeSyntax type)
-    {
-        var text = type.ToString();
-        var generic = text.IndexOf('<');
-        if (generic >= 0)
-            text = text[..generic];
-        return text.Split('.').Last().TrimEnd('?', ']', '[');
-    }
-
-    // Attributes that say nothing about how types are wired; they are never suggested as project rules.
-    private static readonly HashSet<string> CommonAttributes = new(StringComparer.Ordinal)
-    {
-        "Serializable", "NonSerialized", "Obsolete", "Header", "Tooltip", "Range", "Space", "Min", "Multiline", "TextArea",
-        "HideInInspector", "ContextMenu", "ContextMenuItem", "MenuItem", "FormerlySerializedAs", "Test", "TestCase",
-        "TestCaseSource", "SetUp", "TearDown", "OneTimeSetUp", "OneTimeTearDown", "UnityTest", "UnitySetUp", "UnityTearDown",
-        "Category", "Values", "InitializeOnLoadMethod", "RuntimeInitializeOnLoadMethod", "DidReloadScripts", "MethodImpl",
-        "DllImport", "Conditional", "DebuggerHidden", "DebuggerStepThrough", "DebuggerBrowsable", "CallerMemberName",
-        "CallerFilePath", "CallerLineNumber", "NotNull", "CanBeNull", "MaybeNull", "NotNullWhen", "MaybeNullWhen", "Preserve",
-        "UsedImplicitly", "SuppressMessage", "JsonProperty", "JsonIgnore", "ReadOnly", "BurstCompile", "Params", "In", "Out",
-        "Optional", "DefaultValue", "Description", "Pure", "AssertionMethod", "CompilerGenerated", "EditorBrowsable"
-    };
-
-    // Generic calls of the base library that take any type and wire nothing.
-    private static readonly HashSet<string> CommonGenericCalls = new(StringComparer.Ordinal)
-    {
-        "Empty", "Cast", "OfType", "Equals", "Parse", "TryParse", "Default", "SizeOf", "Unsafe", "As", "Repeat", "Range"
-    };
-
-    private readonly List<(string Name, string[] TypeArguments, string At)> callCandidates = new();
-    private readonly List<(string Name, string At)> attributeCandidates = new();
-
-    // What the code repeats but the rules do not cover: generic calls with this project's types as type arguments, and
-    // attributes on fields, properties and parameters. An agent checks a few examples and proposes them for code-facts.json.
-    public IReadOnlyList<FactsRuleSuggestion> RuleSuggestions { get; private set; } = Array.Empty<FactsRuleSuggestion>();
-
-    private const int SuggestionMinimumUses = 10;
-
-    private void SuggestRules()
-    {
-        var ownNames = Types.Select(type => type.Name).ToHashSet(StringComparer.Ordinal);
-        var calls = callCandidates
-            .Where(call => !CommonGenericCalls.Contains(call.Name) && call.TypeArguments.Any(ownNames.Contains))
-            .GroupBy(call => call.Name)
-            .Where(group => group.Count() >= SuggestionMinimumUses)
-            .OrderByDescending(group => group.Count())
-            .Take(5)
-            .Select(group => new FactsRuleSuggestion("genericCalls", group.Key, group.Count(), group.First().At));
-        var attributes = attributeCandidates
-            .GroupBy(attribute => attribute.Name)
-            .Where(group => group.Count() >= SuggestionMinimumUses)
-            .OrderByDescending(group => group.Count())
-            .Take(5)
-            .Select(group => new FactsRuleSuggestion("injectionAttributes", group.Key, group.Count(), group.First().At));
-        RuleSuggestions = calls.Concat(attributes).ToArray();
-        callCandidates.Clear();
-        attributeCandidates.Clear();
-    }
-
-    private void LinkTypes()
-    {
-        foreach (var type in Types)
-        {
-            for (var baseType = type.Symbol.BaseType; baseType != null; baseType = baseType.BaseType)
-            {
-                if (UnityEntryBases.Contains(baseType.Name))
-                    type.Rules.Add("unity_entry");
-                if (TypesByName.TryGetValue(FullName(Outermost(baseType.OriginalDefinition)), out var parent))
-                    parent.DerivedBy.Add(type);
-            }
-            foreach (var contract in type.Symbol.AllInterfaces)
-                if (TypesByName.TryGetValue(FullName(Outermost(contract.OriginalDefinition)), out var parent))
-                    parent.DerivedBy.Add(type);
-            var attributes = type.Symbol.GetAttributes()
-                .Concat(type.Symbol.GetMembers().SelectMany(member => member.GetAttributes()))
-                .Select(attribute => (attribute.AttributeClass?.Name ?? string.Empty).Replace("Attribute", string.Empty));
-            if (attributes.Any(UnityEntryAttributes.Contains))
-                type.Rules.Add("unity_entry");
-        }
-        foreach (var node in Architecture.Layers.Values.SelectMany(layer => layer.Nodes.Select(node => (layer, node))))
-            if (node.node.TypeName.Length > 0 && TypesByName.TryGetValue(node.node.TypeName, out var linked))
-                linked.Nodes.Add(node.node.Id);
-    }
-
-    internal static INamedTypeSymbol Outermost(INamedTypeSymbol type)
-    {
-        while (type.ContainingType != null)
-            type = type.ContainingType;
-        return type;
-    }
-
-    // Namespace and metadata name, as Architector stores a linked type ("Space.Name`1").
-    internal static string FullName(INamedTypeSymbol type)
-    {
-        var space = type.ContainingNamespace is { IsGlobalNamespace: false } ns ? ns.ToDisplayString() + "." : string.Empty;
-        return space + type.MetadataName;
-    }
-
     private sealed class OwnerResolver
     {
         private readonly IReadOnlyList<FactsLayer> layers;
-        private readonly Dictionary<INamedTypeSymbol, FactsLayer?> owners = new(SymbolEqualityComparer.Default);
+        private readonly IReadOnlyDictionary<string, IndexType> types;
+        private readonly Dictionary<string, FactsLayer?> owners = new(StringComparer.Ordinal);
 
-        public OwnerResolver(IReadOnlyList<FactsLayer> layers)
+        public OwnerResolver(IReadOnlyList<FactsLayer> layers, IReadOnlyDictionary<string, IndexType> types)
         {
             this.layers = layers;
+            this.types = types;
         }
 
         public HashSet<string> Ambiguities { get; } = new(StringComparer.Ordinal);
 
-        public bool MayOwn(SyntaxTree tree)
+        public bool MayOwn(string file, IReadOnlyList<string> namespaces)
         {
-            if (layers.Any(layer => layer.Folders.Any(folder => InFolder(tree.FilePath, folder))))
+            if (layers.Any(layer => layer.Folders.Any(folder => InFolder(file, folder))))
                 return true;
-            var namespaces = tree.GetRoot().DescendantNodes().OfType<BaseNamespaceDeclarationSyntax>()
-                .Select(declaration => declaration.Name.ToString())
-                .ToArray();
             return layers.Any(layer => layer.Namespaces.Any(scope => namespaces.Any(name => InNamespace(name, scope) || InNamespace(scope, name))));
         }
 
-        public FactsLayer? Owner(INamedTypeSymbol type)
+        public FactsLayer? Owner(string key)
         {
-            while (type.ContainingType != null)
-                type = type.ContainingType;
-            if (owners.TryGetValue(type, out var cached))
+            if (owners.TryGetValue(key, out var cached))
                 return cached;
-
-            var file = type.Locations.FirstOrDefault(location => location.IsInSource)?.SourceTree?.FilePath ?? string.Empty;
-            var name = type.ContainingNamespace?.IsGlobalNamespace == false ? type.ContainingNamespace.ToDisplayString() : string.Empty;
+            if (!types.TryGetValue(key, out var type))
+                return owners[key] = null;
             var matches = layers
-                .SelectMany(layer => layer.Folders.Where(folder => InFolder(file, folder)).Select(folder => (layer, length: folder.Length))
-                    .Concat(layer.Namespaces.Where(scope => InNamespace(name, scope)).Select(scope => (layer, length: scope.Length))))
+                .SelectMany(layer => layer.Folders.Where(folder => InFolder(type.FirstFile, folder)).Select(folder => (layer, length: folder.Length))
+                    .Concat(layer.Namespaces.Where(scope => InNamespace(type.Namespace, scope)).Select(scope => (layer, length: scope.Length))))
                 .GroupBy(match => match.layer)
                 .Select(group => (layer: group.Key, length: group.Max(match => match.length)))
                 .OrderByDescending(match => match.length)
@@ -351,8 +170,8 @@ public sealed class FactsModel
             if (matches.Length == 1 || matches.Length > 1 && matches[0].length > matches[1].length)
                 owner = matches[0].layer;
             else if (matches.Length > 1)
-                Ambiguities.Add($"type {type.ToDisplayString()} matches the code scope of several layers equally ({string.Join(", ", matches.Where(match => match.length == matches[0].length).Select(match => match.layer.Name))}); it is ignored.");
-            owners[type] = owner;
+                Ambiguities.Add($"type {type.Display} matches the code scope of several layers equally ({string.Join(", ", matches.Where(match => match.length == matches[0].length).Select(match => match.layer.Name))}); it is ignored.");
+            owners[key] = owner;
             return owner;
         }
 
@@ -386,54 +205,28 @@ public sealed record FactsReference(
     public string At => $"{File}:{Line}";
 }
 
+// A top-level type with its owner in the current graph.
 public sealed class FactsType
 {
-    public FactsType(INamedTypeSymbol symbol, string fullName, string? ownerLayerId, string at)
+    public FactsType(IndexType data, string? ownerLayerId)
     {
-        Symbol = symbol;
-        FullName = fullName;
+        Data = data;
         OwnerLayerId = ownerLayerId;
-        Files.Add(at);
     }
 
-    public INamedTypeSymbol Symbol { get; }
-    public string FullName { get; }
-    public string Name => Symbol.Name;
+    public IndexType Data { get; }
+    public string FullName => Data.FullName;
+    public string Name => Data.Name;
     public string? OwnerLayerId { get; }
-    public List<string> Files { get; } = new();
-    public string At => Files[0];
-    public HashSet<FactsType> DerivedBy { get; } = new();
-    public SortedDictionary<string, SortedDictionary<string, string>> Extras { get; } = new(StringComparer.Ordinal);
-
-    public void AddExtra(string kind, string value, string at)
-    {
-        if (!Extras.TryGetValue(kind, out var values))
-            Extras[kind] = values = new SortedDictionary<string, string>(StringComparer.Ordinal);
-        values.TryAdd(value, at);
-    }
-    public HashSet<string> Rules { get; } = new(StringComparer.Ordinal);
+    public List<string> Files => Data.Parts;
+    public string At => Data.Parts.Count > 0 ? Data.Parts[0] : Data.FirstFile;
+    public string Kind => Data.Kind;
+    public string? Base => Data.Base.Length == 0 ? null : Data.Base;
+    public IEnumerable<string> Interfaces => Data.Interfaces;
+    public IReadOnlyList<IndexMember> Members => Data.Members;
+    public SortedDictionary<string, SortedDictionary<string, string>> Extras => Data.Extras;
+    public HashSet<string> Rules => Data.UnityEntry ? new HashSet<string>(StringComparer.Ordinal) { "unity_entry" } : new HashSet<string>(StringComparer.Ordinal);
+    public HashSet<string> DerivedOwnerLayers { get; } = new(StringComparer.Ordinal);
     public List<string> Nodes { get; } = new();
-
-    public string Kind => Symbol.TypeKind switch
-    {
-        TypeKind.Interface => "interface",
-        TypeKind.Struct => Symbol.IsRecord ? "record struct" : "struct",
-        TypeKind.Enum => "enum",
-        TypeKind.Delegate => "delegate",
-        _ => Symbol.IsRecord ? "record" : "class"
-    };
-
-    public string? Base => Symbol.BaseType is { SpecialType: SpecialType.None } baseType ? baseType.ToDisplayString() : null;
-
-    public IEnumerable<string> Interfaces => Symbol.Interfaces.Select(contract => contract.ToDisplayString());
-
-    public bool IsExtensionPoint =>
-        Symbol.DeclaredAccessibility == Accessibility.Public
-        && (Symbol.TypeKind == TypeKind.Interface || Symbol.IsAbstract && Symbol.TypeKind == TypeKind.Class)
-        && DerivedBy.Count > 0;
-
-    public IEnumerable<ISymbol> PublicMembers => Symbol.GetMembers()
-        .Where(member => member.DeclaredAccessibility == Accessibility.Public && !member.IsImplicitlyDeclared)
-        .Where(member => member is not IMethodSymbol method
-                         || method.MethodKind is MethodKind.Ordinary or MethodKind.Constructor or MethodKind.UserDefinedOperator or MethodKind.Conversion);
+    public bool IsExtensionPoint => Data.ExtensionCandidate && Data.DerivedBy.Count > 0;
 }

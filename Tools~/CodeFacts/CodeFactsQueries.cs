@@ -15,9 +15,6 @@ public static class FactsQueries
     public static readonly JsonSerializerOptions Compact = new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     public static readonly JsonSerializerOptions Indented = new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping, WriteIndented = true };
 
-    private static readonly SymbolDisplayFormat MemberFormat =
-        SymbolDisplayFormat.MinimallyQualifiedFormat.RemoveMemberOptions(SymbolDisplayMemberOptions.IncludeContainingType);
-
     private const int PairSamples = 3;
     private const int LayerPairSamples = 5;
 
@@ -131,12 +128,10 @@ public static class FactsQueries
             var detail = Success();
             detail["layer"] = layer.Path;
             detail["type"] = TypeEntry(architecture, type);
-            Page(detail, "members", type.PublicMembers.Select(member => (JsonNode?)new JsonArray(
-                member.Kind.ToString().ToLowerInvariant(),
-                member.ToDisplayString(MemberFormat),
-                member.Locations.FirstOrDefault(location => location.IsInSource) is { } location
-                    ? $"{location.SourceTree!.FilePath}:{location.GetLineSpan().StartLinePosition.Line + 1}"
-                    : null)), arguments, 100);
+            Page(detail, "members", type.Members.Select(member => (JsonNode?)new JsonArray(
+                member.Kind,
+                member.Display,
+                member.At.Length == 0 ? null : member.At)), arguments, 100);
             if (type.Extras.Count > 0)
             {
                 var extra = new JsonObject();
@@ -417,7 +412,7 @@ public static class FactsQueries
         var rules = new List<string>();
         if (usedElsewhere.Contains(type.FullName))
             rules.Add("used_by_other_layers");
-        if (type.DerivedBy.Any(derived => derived.OwnerLayerId != null && derived.OwnerLayerId != layerId))
+        if (type.DerivedOwnerLayers.Any(owner => owner.Length > 0 && owner != layerId))
             rules.Add("inherited_by_other_layers");
         rules.AddRange(type.Rules);
         if (type.IsExtensionPoint)
@@ -489,7 +484,7 @@ public static class FactsQueries
             ["type"] = type.FullName,
             ["kind"] = type.Kind,
             ["at"] = type.At,
-            ["public_members"] = type.PublicMembers.Count()
+            ["public_members"] = type.Members.Count
         };
         if (type.Base != null)
             entry["base"] = type.Base;

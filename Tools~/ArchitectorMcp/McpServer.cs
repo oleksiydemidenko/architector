@@ -22,7 +22,7 @@ public static class McpServer
         root = FindProject(args);
         if (root != null)
         {
-            facts = new FactsCache(root, () => Basic.Reference.Assemblies.Net100.References.All);
+            facts = new FactsCache(root, "net100", () => Basic.Reference.Assemblies.Net100.References.All);
             facts.Warm();
         }
         using var input = new StreamReader(Console.OpenStandardInput(), Utf8);
