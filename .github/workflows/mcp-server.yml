@@ -41,6 +41,12 @@ jobs:
         if: matrix.smoke
         shell: bash
         run: python3 "Tools~/ArchitectorMcp/smoke_test.py" "dist/architector-mcp-${{ matrix.rid }}${{ matrix.ext }}"
+      - name: Code facts test
+        if: matrix.smoke
+        shell: bash
+        run: |
+          dotnet build "Tools~/DependencyEvidence" -c Release -o evidence
+          python3 "Tools~/CodeFacts/facts_test.py" "dist/architector-mcp-${{ matrix.rid }}${{ matrix.ext }}" "evidence/DependencyEvidence.dll"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.rid }}

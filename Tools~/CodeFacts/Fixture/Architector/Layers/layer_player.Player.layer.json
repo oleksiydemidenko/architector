@@ -1,0 +1,20 @@
+{
+    "schemaVersion": 1,
+    "layerId": "layer_player",
+    "name": "Player",
+    "purpose": "The player and its inventory.",
+    "parentGroupId": "group_sample",
+    "orderKey": "b",
+    "scope": { "folders": ["Assets/Player"], "namespaces": [] },
+    "nodes": [
+        {
+            "id": "node_player",
+            "title": "PlayerController",
+            "responsibility": "Ticks the player.",
+            "kind": "standard",
+            "type": { "mode": "linked", "kind": "class", "typeNamespace": "Sample.Player", "name": "PlayerController", "metadataName": "PlayerController" },
+            "members": []
+        }
+    ],
+    "edges": []
+}

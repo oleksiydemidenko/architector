@@ -1,0 +1,33 @@
+{
+    "schemaVersion": 1,
+    "layerId": "layer_core",
+    "name": "Core",
+    "purpose": "Time and shared contracts.",
+    "parentGroupId": "group_sample",
+    "orderKey": "a",
+    "scope": { "folders": ["Assets/Core"], "namespaces": [] },
+    "nodes": [
+        {
+            "id": "node_clock",
+            "title": "Clock",
+            "responsibility": "Counts game time.",
+            "kind": "standard",
+            "type": { "mode": "linked", "kind": "class", "typeNamespace": "Sample.Core", "name": "Clock", "metadataName": "Clock" },
+            "members": [
+                { "id": "member_advance", "kind": "method", "declaration": "public void Advance(float delta)", "symbolKey": "method|Assembly-CSharp:Sample.Core.Clock|Advance|0|System.Single" }
+            ]
+        },
+        {
+            "id": "node_tickable",
+            "title": "ITickable",
+            "responsibility": "Something that advances with the clock.",
+            "kind": "standard",
+            "type": { "mode": "linked", "kind": "interface", "typeNamespace": "Sample.Core", "name": "ITickable", "metadataName": "ITickable" },
+            "members": []
+        },
+        { "id": "node_core_portal_ui", "title": "Ui", "kind": "layerPortal", "members": [] }
+    ],
+    "edges": [
+        { "id": "edge_tickable_clock", "sourceLayerId": "layer_core", "sourceNodeId": "node_tickable", "targetLayerId": "layer_core", "targetNodeId": "node_clock", "kind": "dependency", "label": "reads" }
+    ]
+}

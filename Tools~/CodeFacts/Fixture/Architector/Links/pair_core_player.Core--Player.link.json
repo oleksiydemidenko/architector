@@ -1,0 +1,8 @@
+{
+    "schemaVersion": 2,
+    "pairId": "pair_core_player",
+    "endpoints": [],
+    "relationships": [
+        { "id": "edge_player_clock", "sourceLayerId": "layer_player", "sourceNodeId": "node_player", "targetLayerId": "layer_core", "targetNodeId": "node_clock", "kind": "dependency", "label": "advances" }
+    ]
+}

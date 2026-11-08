@@ -883,10 +883,11 @@ namespace Architector.Editor
                     break;
                 case ArchitectorShortcuts.ActualSize:
                 {
+                    // 1 toggles: to 100%, and from 100% to the farthest zoom out, around the canvas center.
                     var center = canvasSize * 0.5f;
                     var worldAtCenter = ScreenToWorld(center);
-                    zoom = 1f;
-                    pan = center - worldAtCenter;
+                    zoom = Mathf.Approximately(zoom, 1f) ? MinimumZoom : 1f;
+                    pan = center - worldAtCenter * zoom;
                     userState.SaveLayerView(viewId, layerId, pan.x, pan.y, zoom);
                     break;
                 }

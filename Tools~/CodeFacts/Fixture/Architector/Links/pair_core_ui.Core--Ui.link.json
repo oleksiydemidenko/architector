@@ -1,0 +1,9 @@
+{
+    "schemaVersion": 2,
+    "pairId": "pair_core_ui",
+    "endpoints": [],
+    "relationships": [
+        { "id": "edge_ui_registry", "sourceLayerId": "layer_ui", "sourceNodeId": "node_hud", "targetLayerId": "layer_core", "targetNodeId": "node_tickable", "kind": "dependency", "label": "lists" },
+        { "id": "edge_core_hud", "sourceLayerId": "layer_core", "sourceNodeId": "node_clock", "targetLayerId": "layer_ui", "targetNodeId": "node_hud", "kind": "dependency", "label": "unused" }
+    ]
+}

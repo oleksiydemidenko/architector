@@ -2,13 +2,15 @@ using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
 using System.Text.Json.Nodes;
+using Architector.CodeFacts;
 
 public static class McpServer
 {
     private const string ProtocolVersion = "2025-06-18";
-    private const string Instructions = "Architector holds the architecture of this Unity project as layers with contracts. Before changing an unfamiliar file or type, call architector_route and read only what it names. Use architector_digest for approved layers. Writing needs the open Unity Editor: use architector_edit with a work session (begin_work, dry_run_plan, apply_plan, end_work). Saving does not approve. Approving needs the user's confirmation in the Editor unless capabilities reports agent_may_approve.";
+    private const string Instructions = "Architector holds the architecture of this Unity project as layers with contracts. Before changing an unfamiliar file or type, call architector_route and read only what it names. Use architector_digest for approved layers. Code facts work without Unity: before reading a layer's code call architector_query layer_facts; before moving a scope call scope_what_if; layer_dump and lookup give ids by name. Writing needs the open Unity Editor: use architector_edit with a work session (begin_work, dry_run_plan, apply_plan, end_work). Saving does not approve. Approving needs the user's confirmation in the Editor unless capabilities reports agent_may_approve.";
     private static readonly UTF8Encoding Utf8 = new(false);
     private static string? root;
+    private static FactsCache? facts;
 
     public static int Main(string[] args)
     {
@@ -18,6 +20,11 @@ public static class McpServer
             return 0;
         }
         root = FindProject(args);
+        if (root != null)
+        {
+            facts = new FactsCache(root, () => Basic.Reference.Assemblies.Net100.References.All);
+            facts.Warm();
+        }
         using var input = new StreamReader(Console.OpenStandardInput(), Utf8);
         using var output = new StreamWriter(Console.OpenStandardOutput(), Utf8) { AutoFlush = true, NewLine = "\n" };
         while (input.ReadLine() is { } line)
@@ -103,8 +110,8 @@ public static class McpServer
                 }, "queries")),
             Tool("architector_digest", "Read the approved architecture. Without layer it lists the approved layers; with layer it returns that layer's section. Works without Unity.",
                 Schema(new JsonObject { ["layer"] = new JsonObject { ["type"] = "string", ["description"] = "Layer path, for example Core/Player/Movement." } })),
-            Tool("architector_query", "Read Architector data from the open Unity Editor. Prefer the narrow actions node, relationships and dependency_path, or layer_graph with detail=summary, over a full layer_graph.", ActionSchema(
-                new[] { "capabilities", "work_status", "project_summary", "group_contents", "layer_graph", "node", "relationships", "dependency_path", "setup_check", "approval_status", "baseline_diff", "conformance", "find", "type_search", "type_contract", "validate" },
+            Tool("architector_query", "Read Architector data. code_evidence, layer_facts, scope_what_if, layer_dump and lookup answer without Unity from the code and the Architector files; the other actions need the open Unity Editor. Prefer the narrow actions node, relationships and dependency_path, or layer_graph with detail=summary, over a full layer_graph.", ActionSchema(
+                new[] { "capabilities", "work_status", "project_summary", "group_contents", "layer_graph", "node", "relationships", "dependency_path", "setup_check", "approval_status", "baseline_diff", "conformance", "find", "type_search", "type_contract", "validate", "code_evidence", "layer_facts", "scope_what_if", "layer_dump", "lookup" },
                 new JsonObject
                 {
                     ["target"] = TextParameter("Layer or group ID or path; a type for type_contract."),
@@ -115,7 +122,15 @@ public static class McpServer
                     ["detail"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("full", "summary") },
                     ["limit"] = new JsonObject { ["type"] = "integer" },
                     ["offset"] = new JsonObject { ["type"] = "integer", ["description"] = "Use next_offset from the previous result." },
-                    ["include_layout"] = new JsonObject { ["type"] = "boolean" }
+                    ["include_layout"] = new JsonObject { ["type"] = "boolean" },
+                    ["layer"] = TextParameter("code_evidence: only pairs touching this layer."),
+                    ["pair"] = TextParameter("code_evidence: one pair, \"Source/Layer -> Target/Layer\"."),
+                    ["status"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("undeclared", "cycle", "unevidenced") },
+                    ["include"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("references", "owners", "intra"), ["description"] = "code_evidence: page full lists instead of pairs." },
+                    ["type"] = TextParameter("layer_facts: one type of the layer with its public members."),
+                    ["moves"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "object" }, ["description"] = "scope_what_if: [{\"type\" | \"file\" | \"folder\": \"...\", \"to\": \"Layer/Path\"}]." },
+                    ["names"] = new JsonObject { ["type"] = "array", ["items"] = TextParameter("Layer/Path, Layer/Path::Node Title or Layer/Path::Node Title::Member."), ["description"] = "lookup: names to ids." },
+                    ["output"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("reply", "file"), ["description"] = "file writes the full answer under Library/Architector/facts and returns its path." }
                 })),
             Tool("architector_edit", "Change the architecture in the open Unity Editor. Call architector_query with action capabilities for the plan format and rules.", ActionSchema(
                 new[] { "begin_work", "resume_work", "end_work", "approve_layers", "revoke_approvals", "revert_to_approved", "dry_run", "apply", "dry_run_plan", "apply_plan", "arrange_layer", "arrange_changed_layers", "relink_node", "validate_external", "reload_external" },
@@ -175,7 +190,7 @@ public static class McpServer
         {
             "architector_route" => HasData() ? Text(Route(arguments), false) : Text(NoData, true),
             "architector_digest" => Digest(arguments),
-            "architector_query" => Bridge("query", arguments),
+            "architector_query" => FactsQueries.Actions.Contains((string?)arguments?["action"] ?? string.Empty) ? Facts(arguments) : Bridge("query", arguments),
             "architector_edit" => Bridge("edit", arguments),
             _ => Text("Unknown tool: " + name, true)
         };
@@ -249,6 +264,16 @@ public static class McpServer
             return Text("No approved layer is called " + layer + ". Call architector_digest without layer for the list.", true);
         var end = position + 1 < headings.Count ? headings[position + 1].Index : lines.Length;
         return Text(string.Join("\n", lines[headings[position].Index..end]).TrimEnd(), false);
+    }
+
+    private static JsonNode Facts(JsonNode? arguments)
+    {
+        if (!HasData())
+            return Text(NoData, true);
+        var action = (string?)arguments?["action"] ?? string.Empty;
+        var model = FactsQueries.ArchitectureOnlyActions.Contains(action) ? facts!.Architecture() : facts!.Get();
+        var answer = FactsQueries.Answer(model, action, arguments, root!);
+        return Text(answer.ToJsonString(FactsQueries.Compact), answer["success"]?.GetValue<bool>() != true);
     }
 
     private static JsonNode Bridge(string tool, JsonNode? arguments)

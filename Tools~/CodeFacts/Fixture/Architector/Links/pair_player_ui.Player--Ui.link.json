@@ -1,0 +1,8 @@
+{
+    "schemaVersion": 2,
+    "pairId": "pair_player_ui",
+    "endpoints": [],
+    "relationships": [
+        { "id": "edge_hud_player", "sourceLayerId": "layer_ui", "sourceNodeId": "node_hud", "targetLayerId": "layer_player", "targetNodeId": "node_player", "kind": "dependency", "label": "shows" }
+    ]
+}

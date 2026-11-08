@@ -26,7 +26,7 @@ namespace Architector.Editor
                 (ArchitectorShortcuts.Arrange, null, "Arrange the selection, or the whole layer"),
                 (ArchitectorShortcuts.ArrangeAsCenters, null, "Arrange around the selected nodes"),
                 (ArchitectorShortcuts.SelectAll, null, "Select all nodes"),
-                (ArchitectorShortcuts.ActualSize, null, "Zoom to 100%"),
+                (ArchitectorShortcuts.ActualSize, null, "Zoom to 100%; press again to zoom out fully"),
                 (ArchitectorShortcuts.NewNode, null, "Create an empty node at the pointer"),
                 (ArchitectorShortcuts.Rename, null, "Rename the selected node"),
                 (ArchitectorShortcuts.LinkType, null, "Link or relink the type of the selected node"),

@@ -13,5 +13,15 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../ContextRoute/Program.cs" />
+    <Compile Include="../CodeFacts/*.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Code facts: Roslyn analyses Assets in the server itself, so no .NET SDK is needed. The embedded .NET reference
+         assemblies give the same binding as the SDK-hosted DependencyEvidence (checked pair by pair). -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+    <PackageReference Include="Basic.Reference.Assemblies.Net100" Version="1.8.14" />
+    <TrimmerRootAssembly Include="Microsoft.CodeAnalysis" />
+    <TrimmerRootAssembly Include="Microsoft.CodeAnalysis.CSharp" />
+    <TrimmerRootAssembly Include="Basic.Reference.Assemblies.Net100" />
   </ItemGroup>
 </Project>

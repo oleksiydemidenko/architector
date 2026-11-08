@@ -1,0 +1,20 @@
+{
+    "schemaVersion": 1,
+    "layerId": "layer_ui",
+    "name": "Ui",
+    "purpose": "The heads-up display.",
+    "parentGroupId": "group_sample",
+    "orderKey": "c",
+    "scope": { "folders": [], "namespaces": ["Sample.Ui"] },
+    "nodes": [
+        {
+            "id": "node_hud",
+            "title": "HudView",
+            "responsibility": "Shows the inventory.",
+            "kind": "standard",
+            "type": { "mode": "linked", "kind": "class", "typeNamespace": "Sample.Ui", "name": "HudView", "metadataName": "HudView" },
+            "members": []
+        }
+    ],
+    "edges": []
+}
