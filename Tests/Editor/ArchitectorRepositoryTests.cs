@@ -70,6 +70,57 @@ namespace Architector.Editor.Tests
         }
 
         [Test]
+        public void RenamingALayerRetitlesThePortalsThatLeadToIt()
+        {
+            var sourceLayerId = repository.CreateLayer(string.Empty, "Source");
+            var targetLayerId = repository.CreateLayer(string.Empty, "Target");
+            var pair = repository.CreateLayerPortalPair(sourceLayerId, targetLayerId, 0f, 0f);
+            string Title(ArchitectorRepository from, string layerId, string nodeId) =>
+                from.LoadLayer(layerId).semantic.nodes.Single(node => node.id == nodeId).title;
+
+            repository.RenameEntry(targetLayerId, "Renamed Target");
+            repository.ApplySemanticPlan(
+                new ArchitectorSemanticPlan
+                {
+                    renames = { new ArchitectorPlanRename { kind = "entry", target = sourceLayerId, name = "Renamed Source" } }
+                },
+                "Rename Source");
+
+            var reloaded = new ArchitectorRepository(new ArchitectorPaths(temporaryRoot));
+            Assert.That(Title(reloaded, sourceLayerId, pair.SourceNodeId), Is.EqualTo("Renamed Target"));
+            Assert.That(Title(reloaded, targetLayerId, pair.TargetNodeId), Is.EqualTo("Renamed Source"));
+            Assert.That(reloaded.RefreshAllPortalTitles(), Is.Zero);
+        }
+
+        [Test]
+        public void StalePortalTitlesFromOlderRenamesAreRepaired()
+        {
+            var sourceLayerId = repository.CreateLayer(string.Empty, "Source");
+            var targetLayerId = repository.CreateLayer(string.Empty, "Target");
+            // A relationship keeps the Portal pair alive in a new session; pairs without one are removed on save.
+            repository.CreateCrossLayerEdge(
+                sourceLayerId,
+                repository.CreateEmptyNode(sourceLayerId, 0f, 0f),
+                targetLayerId,
+                repository.CreateEmptyNode(targetLayerId, 0f, 0f),
+                ArchitectorEdgeKinds.Dependency);
+            var linkPath = Directory.GetFiles(Path.Combine(temporaryRoot, "Architector", "Links")).Single();
+            var link = ArchitectorJson.Deserialize<ArchitectorStoredLinkDocument>(File.ReadAllText(linkPath));
+            var exit = link.endpoints.Single(endpoint => endpoint.layerId == sourceLayerId);
+            exit.title = "Old Target";
+            File.WriteAllText(linkPath, ArchitectorJson.Serialize(link));
+            string ExitTitle(ArchitectorRepository from) =>
+                from.LoadLayer(sourceLayerId).semantic.nodes.Single(node => node.id == exit.nodeId).title;
+            var stale = new ArchitectorRepository(new ArchitectorPaths(temporaryRoot));
+            Assert.That(ExitTitle(stale), Is.EqualTo("Old Target"));
+
+            Assert.That(stale.RefreshAllPortalTitles(), Is.EqualTo(1));
+            Assert.That(stale.RefreshAllPortalTitles(), Is.Zero);
+
+            Assert.That(ExitTitle(new ArchitectorRepository(new ArchitectorPaths(temporaryRoot))), Is.EqualTo("Target"));
+        }
+
+        [Test]
         public void UnlabeledFilesFromOlderVersionsAreRenamedOnTheNextSave()
         {
             var layerId = repository.CreateLayer(string.Empty, "Door Control");

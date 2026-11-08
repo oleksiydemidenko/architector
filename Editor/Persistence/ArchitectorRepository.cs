@@ -1527,7 +1527,7 @@ namespace Architector.Editor
 
         public void RenameEntry(string id, string newName)
         {
-            ExecuteProjectChange("Rename Entry", project =>
+            ExecuteRepositoryChange("Rename Entry", (project, layers) =>
             {
                 var trimmed = (newName ?? string.Empty).Trim();
                 if (string.IsNullOrEmpty(trimmed))
@@ -1545,7 +1545,70 @@ namespace Architector.Editor
                 }
 
                 RequireLayer(project, id).name = trimmed;
+                RefreshPortalTitles(project, layerId => ArchitectorLazyLayers.Peek(layers, layerId), layerId => layers[layerId], id);
             });
+        }
+
+        /// <summary>
+        /// Repairs Portal titles stored before layer renames refreshed them. Returns how many Portals were retitled.
+        /// </summary>
+        public int RefreshAllPortalTitles()
+        {
+            var refreshed = 0;
+            var stale = Project.layers
+                .SelectMany(layer => LoadLayer(layer.id).semantic.nodes)
+                .Any(node => IsPortal(node) && IsStalePortalTitle(node, Project));
+            if (!stale)
+                return 0;
+            ExecuteRepositoryChange("Refresh Portal Titles", (project, layers) => refreshed = RefreshPortalTitles(
+                project,
+                layerId => ArchitectorLazyLayers.Peek(layers, layerId),
+                layerId => layers[layerId],
+                null));
+            return refreshed;
+        }
+
+        // A Portal is titled after the layer it leads to; a number suffix keeps it unique inside its layer.
+        private int RefreshPortalTitles(
+            ArchitectorProjectDocument project,
+            Func<string, ArchitectorLayerDocuments> peek,
+            Func<string, ArchitectorLayerDocuments> mutable,
+            string targetLayerId)
+        {
+            var names = project.layers.ToDictionary(layer => layer.id, layer => layer.name, StringComparer.Ordinal);
+            var refreshed = 0;
+            foreach (var layerId in names.Keys.ToArray())
+            {
+                var staleIds = peek(layerId).semantic.nodes
+                    .Where(node => IsPortal(node)
+                                   && (targetLayerId == null || string.Equals(node.portal.targetLayerId, targetLayerId, StringComparison.Ordinal))
+                                   && IsStalePortalTitle(node, project))
+                    .Select(node => node.id)
+                    .ToHashSet(StringComparer.Ordinal);
+                if (staleIds.Count == 0)
+                    continue;
+                var semantic = mutable(layerId).semantic;
+                foreach (var node in semantic.nodes.Where(node => staleIds.Contains(node.id)))
+                {
+                    node.title = string.Empty;
+                    node.title = MakeUniqueNodeTitle(semantic, names[node.portal.targetLayerId]);
+                    refreshed++;
+                }
+            }
+            return refreshed;
+        }
+
+        private static bool IsStalePortalTitle(ArchitectorNodeRecord portal, ArchitectorProjectDocument project)
+        {
+            var name = project.layers.FirstOrDefault(layer => layer.id == portal.portal.targetLayerId)?.name;
+            if (name == null)
+                return false;
+            var title = portal.title ?? string.Empty;
+            if (string.Equals(title, name, StringComparison.OrdinalIgnoreCase))
+                return false;
+            return !(title.Length > name.Length + 1
+                     && title.StartsWith(name + " ", StringComparison.OrdinalIgnoreCase)
+                     && title.Substring(name.Length + 1).All(char.IsDigit));
         }
 
         public ArchitectorDeleteSummary GetDeleteSummary(string id)

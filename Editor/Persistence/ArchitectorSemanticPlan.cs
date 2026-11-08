@@ -448,6 +448,11 @@ namespace Architector.Editor
                         var layer = project.layers.FirstOrDefault(candidate => candidate.id == id)
                                     ?? throw new ArchitectorDataException($"Explorer entry reference '{item.target}' does not exist.");
                         layer.name = name;
+                        RefreshPortalTitles(
+                            project,
+                            layerId => documents.TryGetValue(layerId, out var known) ? known : LoadLayer(layerId),
+                            layerId => GetPlanDocuments(layerId, documents),
+                            layer.id);
                         break;
                     }
                     case "node":

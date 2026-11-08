@@ -49,6 +49,7 @@ namespace Architector.Editor
         private readonly Dictionary<string, string[]> nodeRows = new(StringComparer.Ordinal);
         private readonly Dictionary<(string value, int width, GUIStyle style), string> fittedText = new();
         private double viewStateSaveAt;
+        private bool fitLayerPending;
         private bool edgeRoutesDragged;
         private bool hideRoutesWhileDragging = true;
         private readonly HashSet<string> hiddenRouteNodeIds = new(StringComparer.Ordinal);
@@ -142,8 +143,13 @@ namespace Architector.Editor
             if (layerId != layer.id)
             {
                 ResetForLayer(layer.id, userState);
-                if (repository.Settings.geometry.fitLayerOnOpen)
-                    FocusView(repository, repository.LoadLayer(layer.id).layout.nodes.Select(node => node.nodeId).ToArray(), userState, null);
+                fitLayerPending = repository.Settings.geometry.fitLayerOnOpen;
+            }
+            // A layout pass hands the canvas a placeholder rect, not the window's size, so the layer is fitted in the first repaint.
+            if (fitLayerPending && Event.current.type == EventType.Repaint)
+            {
+                fitLayerPending = false;
+                FocusView(repository, repository.LoadLayer(layer.id).layout.nodes.Select(node => node.nodeId).ToArray(), userState, null);
             }
 
             currentRepositoryRevision = repository.Revision;
