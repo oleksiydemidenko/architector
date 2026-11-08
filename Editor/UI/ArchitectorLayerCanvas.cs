@@ -270,6 +270,14 @@ namespace Architector.Editor
                 DrawConnectionAffordance(documents);
                 DrawSelectedEdgeAction(documents);
                 DrawSelectionMarquee(palette.selection.ToColor());
+                if (searchOpen && searchText.Trim().Length > 0)
+                {
+                    // Everything fades to about a third; the found nodes are drawn again at full strength.
+                    var veil = palette.workspace.ToColor();
+                    veil.a = 0.68f;
+                    EditorGUI.DrawRect(localRect, veil);
+                    DrawNodes(documents, palette, repository, localRect, searchMatches);
+                }
 
                 if (documents.semantic.nodes.Count == 0)
                 {
@@ -277,7 +285,105 @@ namespace Architector.Editor
                     GUI.Label(hintRect, "Right-click empty space to create a node", EditorStyles.centeredGreyMiniLabel);
                 }
             }
+            if (searchOpen)
+                DrawSearchBar(repository, userState, requestRepaint);
             GUI.EndGroup();
+        }
+
+        private const string SearchControlName = "ArchitectorCanvasSearch";
+        private bool searchOpen;
+        private bool searchFocusPending;
+        private string searchText = string.Empty;
+        private readonly HashSet<string> searchMatches = new(StringComparer.Ordinal);
+
+        private static Rect SearchBarRect() => new(8f, 8f, 340f, 24f);
+
+        public bool SearchOpen => searchOpen;
+
+        private void OpenSearch()
+        {
+            searchOpen = true;
+            searchFocusPending = true;
+        }
+
+        private void CloseSearch()
+        {
+            searchOpen = false;
+            searchFocusPending = false;
+            searchText = string.Empty;
+            searchMatches.Clear();
+            if (GUI.GetNameOfFocusedControl() == SearchControlName)
+                GUIUtility.keyboardControl = 0;
+        }
+
+        // Ctrl+F: a field in the canvas's top-left corner. Matching nodes (title or linked type name) are selected and
+        // stay at full strength while the rest fades; Enter focuses them like F, Esc or the close button ends the search.
+        private void DrawSearchBar(ArchitectorRepository repository, ArchitectorUserStateStore userState, Action requestRepaint)
+        {
+            var current = Event.current;
+            var bar = SearchBarRect();
+            var field = new Rect(bar.x + 4f, bar.y + 3f, 200f, 18f);
+            var close = new Rect(bar.xMax - 22f, bar.y + 3f, 18f, 18f);
+            if (current.type == EventType.KeyDown && GUI.GetNameOfFocusedControl() == SearchControlName)
+            {
+                if (current.keyCode == KeyCode.Escape)
+                {
+                    CloseSearch();
+                    current.Use();
+                    requestRepaint?.Invoke();
+                    return;
+                }
+                if (current.keyCode is KeyCode.Return or KeyCode.KeypadEnter)
+                {
+                    if (searchMatches.Count > 0)
+                        FocusView(repository, searchMatches.ToArray(), userState, requestRepaint);
+                    current.Use();
+                    return;
+                }
+            }
+            if (current.type == EventType.Repaint)
+                EditorStyles.helpBox.Draw(bar, false, false, false, false);
+            GUI.SetNextControlName(SearchControlName);
+            var next = EditorGUI.TextField(field, searchText, EditorStyles.toolbarSearchField);
+            if (searchFocusPending)
+            {
+                EditorGUI.FocusTextInControl(SearchControlName);
+                if (current.type == EventType.Repaint)
+                    searchFocusPending = false;
+                requestRepaint?.Invoke();
+            }
+            if (!string.Equals(next, searchText, StringComparison.Ordinal))
+            {
+                searchText = next;
+                UpdateSearchMatches();
+                requestRepaint?.Invoke();
+            }
+            var found = searchText.Trim().Length == 0 ? string.Empty : searchMatches.Count == 1 ? "1 node" : $"{searchMatches.Count} nodes";
+            GUI.Label(new Rect(field.xMax + 6f, bar.y + 4f, close.x - field.xMax - 8f, 16f), found, EditorStyles.miniLabel);
+            if (GUI.Button(close, new GUIContent("×", "Close the search (Esc)"), EditorStyles.miniButton))
+            {
+                CloseSearch();
+                requestRepaint?.Invoke();
+            }
+        }
+
+        private void UpdateSearchMatches()
+        {
+            searchMatches.Clear();
+            var query = searchText.Trim();
+            if (query.Length == 0)
+                return;
+            foreach (var node in nodesById.Values)
+            {
+                var typeName = node.type?.name ?? string.Empty;
+                if ((node.title ?? string.Empty).Contains(query, StringComparison.OrdinalIgnoreCase)
+                    || typeName.Contains(query, StringComparison.OrdinalIgnoreCase))
+                    searchMatches.Add(node.id);
+            }
+            selectedEdgeId = string.Empty;
+            showSelectedEdgeDeleteAction = false;
+            selectedNodeIds.Clear();
+            selectedNodeIds.UnionWith(searchMatches);
         }
 
         public void CancelInteraction()
@@ -329,6 +435,9 @@ namespace Architector.Editor
             }
             var boxSelectionControlId = GUIUtility.GetControlID(BoxSelectionControlHint, FocusType.Passive);
             var panControlId = GUIUtility.GetControlID(PanControlHint, FocusType.Passive);
+            // The search bar is drawn after the canvas in every event, so control ids stay stable; its clicks are its own.
+            if (searchOpen && (current.isMouse || current.type == EventType.ScrollWheel) && SearchBarRect().Contains(mouse))
+                return;
             if (panning && current.rawType == EventType.MouseUp && current.button == 2)
             {
                 panning = false;
@@ -866,6 +975,10 @@ namespace Architector.Editor
                     break;
                 case ArchitectorShortcuts.FocusLayer:
                     FocusView(repository, allNodes, userState, requestRepaint);
+                    break;
+                case ArchitectorShortcuts.Search:
+                    OpenSearch();
+                    requestRepaint?.Invoke();
                     break;
                 case ArchitectorShortcuts.Arrange:
                     ArrangeSelection(repository, documents, userState, execute, requestRepaint, selected);
@@ -1785,11 +1898,14 @@ namespace Architector.Editor
             ArchitectorLayerDocuments documents,
             ArchitectorThemePaletteSettings palette,
             ArchitectorRepository repository,
-            Rect viewRect)
+            Rect viewRect,
+            ISet<string> only = null)
         {
             EnsureNodeStyles();
             foreach (var nodeLayout in documents.layout.nodes)
             {
+                if (only != null && !only.Contains(nodeLayout.nodeId))
+                    continue;
                 if (!nodesById.TryGetValue(nodeLayout.nodeId, out var node))
                     continue;
 
@@ -2044,6 +2160,7 @@ namespace Architector.Editor
 
         private void ResetForLayer(string newLayerId, ArchitectorUserStateStore userState)
         {
+            CloseSearch();
             CancelRouting();
             hiddenRouteNodeIds.Clear();
             layerId = newLayerId;

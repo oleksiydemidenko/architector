@@ -8,6 +8,7 @@ namespace Architector.Editor
     {
         public const string FocusView = "Architector/Canvas/Focus View";
         public const string FocusLayer = "Architector/Canvas/Focus Whole Layer";
+        public const string Search = "Architector/Canvas/Find Nodes";
         public const string Arrange = "Architector/Canvas/Arrange";
         public const string ArrangeAsCenters = "Architector/Canvas/Arrange As Centers";
         public const string SelectAll = "Architector/Canvas/Select All";
@@ -53,6 +54,9 @@ namespace Architector.Editor
 
         [Shortcut(FocusLayer, typeof(ArchitectorMasterWindow), KeyCode.F, ShortcutModifiers.Shift)]
         private static void OnFocusLayer(ShortcutArguments arguments) => Send(arguments, FocusLayer);
+
+        [Shortcut(Search, typeof(ArchitectorMasterWindow), KeyCode.F, ShortcutModifiers.Action)]
+        private static void OnSearch(ShortcutArguments arguments) => Send(arguments, Search);
 
         [Shortcut(Arrange, typeof(ArchitectorMasterWindow), KeyCode.A)]
         private static void OnArrange(ShortcutArguments arguments) => Send(arguments, Arrange);

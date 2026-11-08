@@ -23,6 +23,7 @@ namespace Architector.Editor
             {
                 (ArchitectorShortcuts.FocusView, null, "Focus the selection, or the whole layer"),
                 (ArchitectorShortcuts.FocusLayer, null, "Focus the whole layer"),
+                (ArchitectorShortcuts.Search, null, "Find nodes by name; Enter focuses them, Esc closes"),
                 (ArchitectorShortcuts.Arrange, null, "Arrange the selection, or the whole layer"),
                 (ArchitectorShortcuts.ArrangeAsCenters, null, "Arrange around the selected nodes"),
                 (ArchitectorShortcuts.SelectAll, null, "Select all nodes"),
