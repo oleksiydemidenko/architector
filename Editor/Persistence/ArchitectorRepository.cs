@@ -759,6 +759,26 @@ namespace Architector.Editor
             });
         }
 
+        /// <summary>
+        /// The structure Arrange works from: visible nodes with their sizes and relationships, not positions.
+        /// Equal fingerprints mean an arranged layer has nothing new to place.
+        /// </summary>
+        public string ArrangeFingerprint(string layerId)
+        {
+            var view = LoadLayerView(layerId);
+            var parts = view.layout.nodes
+                .Select(node => $"n|{node.nodeId}|{node.width}|{node.height}")
+                .Concat(view.semantic.edges.Select(edge => $"e|{edge.sourceNodeId}|{edge.targetNodeId}|{edge.kind}"))
+                .OrderBy(part => part, StringComparer.Ordinal);
+            var hash = 14695981039346656037UL;
+            foreach (var character in string.Join("\n", parts))
+            {
+                hash ^= character;
+                hash *= 1099511628211UL;
+            }
+            return hash.ToString("x16");
+        }
+
         public void ArrangeNodes(
             string layerId,
             IReadOnlyCollection<string> nodeIds = null,

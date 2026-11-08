@@ -97,7 +97,7 @@ namespace Architector.Editor
             if (!string.IsNullOrEmpty(error))
                 EditorGUILayout.HelpBox(error, MessageType.Error);
 
-            GUILayout.FlexibleSpace();
+            EditorGUILayout.Space(6f);
             using (new EditorGUILayout.HorizontalScope())
             {
                 GUILayout.FlexibleSpace();
@@ -106,6 +106,22 @@ namespace Architector.Editor
                 if (GUILayout.Button(unlocking ? "Unlock" : "Lock", GUILayout.Width(90f)))
                     Submit(repository);
             }
+            FitHeightToContent();
+        }
+
+        // The window grows with its content, so an error message never pushes the buttons out of view.
+        private void FitHeightToContent()
+        {
+            if (Event.current.type != EventType.Repaint)
+                return;
+            var height = Mathf.Ceil(GUILayoutUtility.GetLastRect().yMax + 8f);
+            if (Mathf.Abs(position.height - height) < 1f)
+                return;
+            var next = position;
+            next.height = height;
+            minSize = new Vector2(next.width, height);
+            maxSize = new Vector2(next.width, height);
+            position = next;
         }
 
         private void Submit(ArchitectorRepository repository)
@@ -117,6 +133,10 @@ namespace Architector.Editor
                     if (!repository.UnlockGroupForSession(groupId, password, keepUnlocked))
                     {
                         error = "The password is incorrect.";
+                        password = string.Empty;
+                        focusPassword = true;
+                        GUIUtility.keyboardControl = 0;
+                        Repaint();
                         return;
                     }
                 }

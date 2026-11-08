@@ -1765,6 +1765,37 @@ namespace Architector.Editor.Tests
         }
 
         [Test]
+        public void ArrangeFingerprintFollowsStructureNotPositionsAndOneUndoRevertsAnArrange()
+        {
+            var layerId = repository.CreateLayer(string.Empty, "Arranged");
+            var first = repository.CreateEmptyNode(layerId, 0f, 0f);
+            var second = repository.CreateEmptyNode(layerId, 900f, 900f);
+            repository.CreateEdge(layerId, first, second, "auto");
+            Vector2 Position(string nodeId)
+            {
+                var node = repository.LoadLayer(layerId).layout.nodes.Single(candidate => candidate.nodeId == nodeId);
+                return new Vector2(node.x, node.y);
+            }
+            var fingerprint = repository.ArrangeFingerprint(layerId);
+            var before = Position(second);
+
+            repository.ArrangeNodes(layerId);
+            Assert.That(Position(second), Is.Not.EqualTo(before), "Arrange moves the far node.");
+            Assert.That(repository.ArrangeFingerprint(layerId), Is.EqualTo(fingerprint), "Positions are not part of the fingerprint.");
+            repository.Undo();
+            Assert.That(Position(second), Is.EqualTo(before), "One undo reverts one layer's arrange.");
+
+            repository.CreateEmptyNode(layerId, 300f, 0f);
+            Assert.That(repository.ArrangeFingerprint(layerId), Is.Not.EqualTo(fingerprint), "A new node changes the fingerprint.");
+
+            var state = new ArchitectorUserStateStore(repository.Paths);
+            state.SetArranged(layerId, fingerprint);
+            Assert.That(new ArchitectorUserStateStore(repository.Paths).IsArranged(layerId, fingerprint), Is.True);
+            state.SetArranged(layerId, string.Empty);
+            Assert.That(new ArchitectorUserStateStore(repository.Paths).IsArranged(layerId, fingerprint), Is.False);
+        }
+
+        [Test]
         public void UserViewStateIsStoredSeparatelyForEveryLayer()
         {
             var firstLayerId = repository.CreateLayer(string.Empty, "First");

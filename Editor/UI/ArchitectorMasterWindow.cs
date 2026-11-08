@@ -87,10 +87,12 @@ namespace Architector.Editor
         private GUIStyle layerTabStyle;
         private GUIStyle layerTabNavigationStyle;
         private GUIStyle tabCloseStyle;
-        private GUIStyle conformanceDiagnosticStyle;
+        // Unity keeps window fields across a domain reload but brings a GUIStyle back without word wrap, so wrapped styles are rebuilt.
+        [NonSerialized] private GUIStyle conformanceDiagnosticStyle;
         private Texture2D layerIcon;
         private string loadedLayerIconPath = string.Empty;
         private bool scrollActiveLayerIntoView = true;
+        [NonSerialized] private float lastTabsViewportWidth;
         private string pressedLayerTabId = string.Empty;
         private Vector2 pressedLayerTabPosition;
         private float layerTabDropIndicatorX = -1f;
@@ -101,7 +103,8 @@ namespace Architector.Editor
         private IReadOnlyList<ArchitectorBaselineChange> baselineChanges = Array.Empty<ArchitectorBaselineChange>();
         private bool baselineChangesExpanded = true;
         private Vector2 baselineChangesScroll;
-        private GUIStyle baselineChangeStyle;
+        [NonSerialized] private GUIStyle baselineChangeStyle;
+        [NonSerialized] private GUIStyle headerTagStyle;
         private readonly Dictionary<string, ArchitectorExplorerEntryStatus> explorerStatus = new(StringComparer.Ordinal);
         private int explorerStatusRevision = -1;
         private int explorerStatusTypeGeneration = -1;
@@ -429,7 +432,9 @@ namespace Architector.Editor
                 EditorGUILayout.LabelField("Only names of related layers or nodes changed.", EditorStyles.wordWrappedMiniLabel);
                 return;
             }
-            baselineChangeStyle ??= new GUIStyle(EditorStyles.wordWrappedMiniLabel) { richText = true };
+            baselineChangeStyle ??= new GUIStyle(EditorStyles.wordWrappedMiniLabel);
+            baselineChangeStyle.richText = true;
+            baselineChangeStyle.wordWrap = true;
             var palette = EditorGUIUtility.isProSkin ? repository.Settings.palette.dark : repository.Settings.palette.light;
             baselineChangesScroll = EditorGUILayout.BeginScrollView(
                 baselineChangesScroll,
@@ -441,7 +446,30 @@ namespace Architector.Editor
                 GUILayout.MaxHeight(Mathf.Max(80f, position.height * 0.35f)));
             var rowWidth = ArchitectorNodeInspector.Width - 12f - GUI.skin.verticalScrollbar.fixedWidth - 6f;
             foreach (var change in baselineChanges)
+            {
                 GUILayout.Label(FormatBaselineChange(change, palette), baselineChangeStyle, GUILayout.Width(rowWidth));
+                // A row opens what changed; a removal or a change of the layer itself has nothing on the canvas to show.
+                var revealable = !string.Equals(change.Change, ArchitectorBaselineChanges.Removed, StringComparison.Ordinal)
+                                 && change.Subject is "node" or "portal" or "relationship";
+                if (!revealable)
+                    continue;
+                var rowRect = GUILayoutUtility.GetLastRect();
+                EditorGUIUtility.AddCursorRect(rowRect, MouseCursor.Link);
+                if (Event.current.type == EventType.Repaint && rowRect.Contains(Event.current.mousePosition))
+                {
+                    var hover = GUI.skin.settings.selectionColor;
+                    hover.a = Mathf.Min(hover.a, 0.2f);
+                    EditorGUI.DrawRect(rowRect, hover);
+                }
+                if (Event.current.type == EventType.MouseUp && Event.current.button == 0 && rowRect.Contains(Event.current.mousePosition))
+                {
+                    if (!string.Equals(activeLayerId, layerId, StringComparison.Ordinal))
+                        OpenLayer(layerId);
+                    layerCanvas.RevealChange(change.Subject, change.Id);
+                    Event.current.Use();
+                    Repaint();
+                }
+            }
             EditorGUILayout.EndScrollView();
         }
 
@@ -1319,6 +1347,13 @@ namespace Architector.Editor
             var contentWidth = Mathf.Max(0f, tabWidths.Sum() - Mathf.Max(0, tabWidths.Length - 1) * TabBorderOverlap);
             var maximumScroll = Mathf.Max(0f, contentWidth - viewport.width);
             layerTabsScroll = Mathf.Round(Mathf.Clamp(layerTabsScroll, 0f, maximumScroll));
+            // The strip narrows when the inspector slides out; the active tab must not end up behind it.
+            if (Event.current.type == EventType.Repaint && !Mathf.Approximately(viewport.width, lastTabsViewportWidth))
+            {
+                if (viewport.width < lastTabsViewportWidth)
+                    scrollActiveLayerIntoView = true;
+                lastTabsViewportWidth = viewport.width;
+            }
             if (scrollActiveLayerIntoView)
             {
                 EnsureActiveTabVisible(tabIds, tabWidths, viewport.width, maximumScroll);
@@ -1896,22 +1931,30 @@ namespace Architector.Editor
                 var approval = repository.GetLayerApprovalStatus(layer.id);
                 using (new EditorGUILayout.HorizontalScope())
                 {
-                    GUILayout.Label(layer.name, EditorStyles.boldLabel, GUILayout.ExpandWidth(false));
+                    // One height and vertical centering for every item, so the mini tags sit on the line of the bold title.
+                    var rowHeight = GUILayout.Height(EditorGUIUtility.singleLineHeight);
+                    headerTagStyle ??= new GUIStyle(EditorStyles.miniBoldLabel);
+                    headerTagStyle.margin = new RectOffset(3, 3, 2, 2);
+                    headerTagStyle.padding = new RectOffset(2, 2, 0, 0);
+                    headerTagStyle.alignment = TextAnchor.MiddleLeft;
+                    GUILayout.Label(layer.name, EditorStyles.boldLabel, GUILayout.ExpandWidth(false), rowHeight);
                     var approvalStyle = new GUIStyle(EditorStyles.boldLabel);
                     approvalStyle.normal.textColor = ApprovalStatusColor(approval.State);
-                    GUILayout.Label($"({approval.State})", approvalStyle, GUILayout.ExpandWidth(false));
+                    GUILayout.Label($"({approval.State})", approvalStyle, GUILayout.ExpandWidth(false), rowHeight);
                     if (IsPlanned(layer, approval, GetLayerConformance(layer.id)))
                         GUILayout.Label(
                             new GUIContent("Planned", "The design is approved, but some typed nodes are not linked to code or their contracts do not pass conformance yet."),
-                            EditorStyles.miniBoldLabel,
-                            GUILayout.ExpandWidth(false));
+                            headerTagStyle,
+                            GUILayout.ExpandWidth(false),
+                            rowHeight);
                     if (layer.approval?.approvedByAgent == true)
                     {
                         GUILayout.Label(
                             new GUIContent("By Agent", "An agent approved this layer without your review."),
-                            EditorStyles.miniBoldLabel,
-                            GUILayout.ExpandWidth(false));
-                        if (GUILayout.Button(new GUIContent("Confirm", "Record that you reviewed this layer."), EditorStyles.miniButton, GUILayout.ExpandWidth(false)))
+                            headerTagStyle,
+                            GUILayout.ExpandWidth(false),
+                            rowHeight);
+                        if (GUILayout.Button(new GUIContent("Confirm", "Record that you reviewed this layer."), EditorStyles.miniButton, GUILayout.ExpandWidth(false), rowHeight))
                             Run(() => repository.ApproveLayers(new[] { layer.id }));
                     }
                     GUILayout.FlexibleSpace();
@@ -2184,14 +2227,12 @@ namespace Architector.Editor
 
         private void EnsureConformanceDiagnosticStyle()
         {
-            conformanceDiagnosticStyle ??= new GUIStyle(EditorStyles.wordWrappedLabel)
-            {
-                wordWrap = true,
-                clipping = TextClipping.Clip,
-                fixedHeight = 0f,
-                stretchHeight = true,
-                alignment = TextAnchor.UpperLeft
-            };
+            conformanceDiagnosticStyle ??= new GUIStyle(EditorStyles.wordWrappedLabel);
+            conformanceDiagnosticStyle.wordWrap = true;
+            conformanceDiagnosticStyle.clipping = TextClipping.Clip;
+            conformanceDiagnosticStyle.fixedHeight = 0f;
+            conformanceDiagnosticStyle.stretchHeight = true;
+            conformanceDiagnosticStyle.alignment = TextAnchor.UpperLeft;
             var textColor = EditorStyles.wordWrappedLabel.normal.textColor;
             conformanceDiagnosticStyle.normal.textColor = textColor;
             conformanceDiagnosticStyle.onNormal.textColor = textColor;
@@ -2342,6 +2383,15 @@ namespace Architector.Editor
             menu.AddItem(new GUIContent("Rename"), false, () => BeginRename(groupId));
             menu.AddItem(new GUIContent(DeleteMenuCaption(groupId)), false, () => DeleteExplorerSelection(groupId));
             menu.AddSeparator(string.Empty);
+            menu.AddItem(
+                new GUIContent("Arrange"),
+                false,
+                () => ArrangeLayers(ExplorerArrangeTargets(groupId), true));
+            menu.AddItem(
+                new GUIContent("Arrange All Again"),
+                false,
+                () => ArrangeLayers(ExplorerArrangeTargets(groupId), false));
+            menu.AddSeparator(string.Empty);
             if (!repository.IsGroupLocked(groupId))
                 menu.AddItem(new GUIContent("Lock…"), false, () => ArchitectorGroupLockWindow.ShowLock(groupId));
             else if (repository.IsGroupLockedForEditing(groupId))
@@ -2387,9 +2437,122 @@ namespace Architector.Editor
                 currentGroupId = groupId;
             }));
             menu.AddSeparator(string.Empty);
+            var arrangeTargets = ExplorerArrangeTargets(layerId);
+            // One layer is arranged when asked; a selection of several skips layers already arranged and unchanged.
+            menu.AddItem(
+                new GUIContent(arrangeTargets.Count > 1 ? $"Arrange {arrangeTargets.Count} Layers" : "Arrange"),
+                false,
+                () => ArrangeLayers(arrangeTargets, arrangeTargets.Count > 1));
+            menu.AddSeparator(string.Empty);
             menu.AddItem(new GUIContent("Rename"), false, () => BeginRename(layerId));
             menu.AddItem(new GUIContent(DeleteMenuCaption(layerId)), false, () => DeleteExplorerSelection(layerId));
             RequestContextMenu(menu, GUIUtility.GUIToScreenPoint(Event.current.mousePosition));
+        }
+
+        // The clicked entry, or the whole Explorer selection when the clicked entry is part of it; groups expand to every layer below them.
+        private IReadOnlyList<string> ExplorerArrangeTargets(string entryId)
+        {
+            var entries = selectedExplorerEntryIds.Contains(entryId) && selectedExplorerEntryIds.Count > 1
+                ? selectedExplorerEntryIds.ToArray()
+                : new[] { entryId };
+            var layers = new List<string>();
+            void Collect(string id)
+            {
+                if (repository.FindLayer(id) != null)
+                {
+                    if (!layers.Contains(id))
+                        layers.Add(id);
+                    return;
+                }
+                var group = repository.FindGroup(id);
+                if (group == null)
+                    return;
+                foreach (var layerId in group.layerIds)
+                    Collect(layerId);
+                foreach (var child in repository.Project.groups.Where(candidate => candidate.parentGroupId == id))
+                    Collect(child.id);
+            }
+            foreach (var entry in entries)
+                Collect(entry);
+            return layers;
+        }
+
+        private void ArrangeLayers(IReadOnlyList<string> layerIds, bool skipArranged)
+        {
+            if (aiWork?.WorkspacesLocked == true)
+            {
+                ShowNotification(new GUIContent("AI work is in progress. Unlock Architector to edit manually."));
+                return;
+            }
+            var arranged = new List<string>();
+            var skipped = 0;
+            var failures = new List<string>();
+            var undone = false;
+            try
+            {
+                for (var index = 0; index < layerIds.Count; index++)
+                {
+                    var layer = repository.FindLayer(layerIds[index]);
+                    if (layer == null)
+                        continue;
+                    if (skipArranged && userState.IsArranged(layer.id, repository.ArrangeFingerprint(layer.id)))
+                    {
+                        skipped++;
+                        continue;
+                    }
+                    // Cancel is read between layers; one layer's arrangement cannot be interrupted.
+                    if (EditorUtility.DisplayCancelableProgressBar(
+                            "Arrange",
+                            $"{layer.name} ({index + 1} of {layerIds.Count})",
+                            (float)index / layerIds.Count))
+                    {
+                        EditorUtility.ClearProgressBar();
+                        var choice = EditorUtility.DisplayDialogComplex(
+                            "Arrange",
+                            $"{arranged.Count} of {layerIds.Count} layers are arranged. Stop keeps them; Cancel And Undo returns every layer to where it was.",
+                            "Continue",
+                            "Stop",
+                            "Cancel And Undo");
+                        if (choice == 1)
+                            break;
+                        if (choice == 2)
+                        {
+                            for (var step = 0; step < arranged.Count && repository.CanUndo; step++)
+                                repository.Undo();
+                            foreach (var undoneLayer in arranged)
+                                userState.SetArranged(undoneLayer, string.Empty);
+                            undone = true;
+                            break;
+                        }
+                    }
+                    var revision = repository.Revision;
+                    try
+                    {
+                        repository.ArrangeNodes(layer.id);
+                    }
+                    catch (ArchitectorDataException exception)
+                    {
+                        failures.Add($"{layer.name}: {exception.Message}");
+                        continue;
+                    }
+                    if (repository.Revision != revision)
+                        arranged.Add(layer.id);
+                    userState.SetArranged(layer.id, repository.ArrangeFingerprint(layer.id));
+                }
+            }
+            finally
+            {
+                EditorUtility.ClearProgressBar();
+            }
+            var summary = undone
+                ? "Arrange cancelled; every layer is back where it was."
+                : $"Arranged {arranged.Count} {(arranged.Count == 1 ? "layer" : "layers")}"
+                  + (skipped > 0 ? $", {skipped} already arranged and unchanged" : string.Empty)
+                  + (failures.Count > 0 ? $", {failures.Count} not arranged" : string.Empty) + ".";
+            ShowNotification(new GUIContent(summary));
+            if (failures.Count > 0)
+                Debug.LogWarning("Architector Arrange skipped these layers:\n" + string.Join("\n", failures));
+            Repaint();
         }
 
         private void CreateGroup(string parentGroupId)

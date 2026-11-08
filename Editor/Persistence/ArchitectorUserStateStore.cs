@@ -82,6 +82,20 @@ namespace Architector.Editor
             Save();
         }
 
+        public bool IsArranged(string layerId, string fingerprint)
+        {
+            return document.arrangedLayers.Any(record => record.layerId == layerId && record.fingerprint == fingerprint);
+        }
+
+        public void SetArranged(string layerId, string fingerprint)
+        {
+            document.arrangedLayers.RemoveAll(record => record.layerId == layerId);
+            if (!string.IsNullOrEmpty(fingerprint))
+                document.arrangedLayers.Add(new ArchitectorArrangedLayerRecord { layerId = layerId, fingerprint = fingerprint });
+            document.arrangedLayers.Sort((left, right) => string.CompareOrdinal(left.layerId, right.layerId));
+            Save();
+        }
+
         public ArchitectorWindowNavigationRecord GetMasterNavigation()
         {
             return ArchitectorJson.Clone(document.masterNavigation);
@@ -143,6 +157,7 @@ namespace Architector.Editor
                 document.layerViews ??= new System.Collections.Generic.List<ArchitectorLayerViewStateRecord>();
                 document.layerInspectors ??= new System.Collections.Generic.List<ArchitectorLayerInspectorStateRecord>();
                 document.masterNavigation ??= new ArchitectorWindowNavigationRecord();
+                document.arrangedLayers ??= new System.Collections.Generic.List<ArchitectorArrangedLayerRecord>();
                 document.masterNavigation.openLayerIds ??= new System.Collections.Generic.List<string>();
                 document.masterNavigation.layerVisitHistory ??= new System.Collections.Generic.List<string>();
             }

@@ -5,6 +5,12 @@
 - Editing nodes and relationships is about 15 times faster: on 50 layers an edit with the window's refresh drops from about 3 s to 0.2 s. Only the layers an edit touches are cloned, validated, encoded and reinstalled; approval hashes and conformance are recomputed only where they can change.
 - `layer_graph` with `detail=summary` returns the layer as compact text: paths and names instead of IDs, no empty fields, incoming relationships folded into one line per source layer.
 - **Settings > Workspace Geometry > Fit Layer On Open** (on by default): opening a layer runs Focus View (**F**) instead of returning to the last saved position, and runs it again while the canvas settles (the inspector appearing, a window resize) until you move the view.
+- **Arrange** in the Explorer context menu: on a layer, on several selected layers and on a group (every layer below it), with a progress bar. Cancel offers Continue, Stop (keep the arranged layers) and Cancel And Undo. Several layers or a group skip layers already arranged whose nodes, sizes and relationships have not changed since; **Arrange All Again** on a group arranges them anyway. The mark lives in the local user state, which agents never read.
+- **Changes since approval** rows open what changed: a click selects and focuses the node, Portal or relationship. Removals and changes of the layer itself are not clickable.
+- The active layer tab stays visible when the inspector slides out and narrows the tab strip.
+- Conformance messages wrap inside their box again; after a script reload the window kept a copy of the message style without word wrap.
+- The Unlock and Lock windows grow with their content: after a wrong password the buttons stay visible, and the password field is cleared and focused for another try.
+- Planned and By Agent next to the layer name sit on the line of the title.
 - Renaming a layer, in the window or through a semantic plan, retitles the Portals that lead to it; their stored titles used to keep the old name. `ArchitectorRepository.RefreshAllPortalTitles()` repairs titles left stale by earlier renames.
 - The Hotkeys button (**?**) moved from the header to the canvas's top-right corner, clear of the layer tabs and the inspector, and moves with the inspector. In the header the agent-work button covered it.
 - **Settings > Arrange > Improvement Time** (5 s by default) limits how long Arrange improves a layer; the layout itself is always complete.

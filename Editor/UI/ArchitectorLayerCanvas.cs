@@ -54,6 +54,8 @@ namespace Architector.Editor
         private Vector2 focusedSize;
         private Vector2 focusedPan;
         private float focusedZoom;
+        private string pendingRevealSubject = string.Empty;
+        private string pendingRevealId = string.Empty;
         private bool edgeRoutesDragged;
         private bool hideRoutesWhileDragging = true;
         private readonly HashSet<string> hiddenRouteNodeIds = new(StringComparer.Ordinal);
@@ -119,6 +121,45 @@ namespace Architector.Editor
         public bool IsDraggingNode => draggingNode;
         public string SelectionKey => selectedEdgeId + "|" + string.Join(",", selectedNodeIds.OrderBy(id => id, StringComparer.Ordinal));
 
+        /// <summary>
+        /// Selects a node, Portal or relationship and focuses it like F in the next repaint.
+        /// </summary>
+        public void RevealChange(string subject, string id)
+        {
+            pendingRevealSubject = subject ?? string.Empty;
+            pendingRevealId = id ?? string.Empty;
+        }
+
+        private void RevealPendingChange(ArchitectorLayerDocuments documents, ArchitectorRepository repository, ArchitectorUserStateStore userState, Action requestRepaint)
+        {
+            var id = pendingRevealId;
+            var subject = pendingRevealSubject;
+            pendingRevealId = string.Empty;
+            pendingRevealSubject = string.Empty;
+            if (string.Equals(subject, "relationship", StringComparison.Ordinal))
+            {
+                var edge = documents.semantic.edges.FirstOrDefault(candidate => candidate.id == id);
+                if (edge == null)
+                    return;
+                var ends = new[] { edge.sourceNodeId, edge.targetNodeId }.Where(nodesById.ContainsKey).Distinct().ToArray();
+                selectedNodeIds.Clear();
+                selectedEdgeId = edge.id;
+                showSelectedEdgeDeleteAction = false;
+                var layouts = documents.layout.nodes.Where(node => ends.Contains(node.nodeId)).ToArray();
+                if (layouts.Length == 0)
+                    return;
+                selectedEdgeActionWorldPosition = new Vector2(
+                    layouts.Average(node => node.x + node.width * 0.5f),
+                    layouts.Average(node => node.y + node.height * 0.5f));
+                FocusView(repository, ends, userState, requestRepaint);
+                return;
+            }
+            if (!nodesById.ContainsKey(id))
+                return;
+            SelectOnly(id);
+            FocusView(repository, new[] { id }, userState, requestRepaint);
+        }
+
         public void SelectOnly(string nodeId)
         {
             selectedEdgeId = string.Empty;
@@ -183,6 +224,8 @@ namespace Architector.Editor
                 focusedPan = pan;
                 focusedZoom = zoom;
             }
+            if (pendingRevealId.Length > 0 && Event.current.type == EventType.Repaint)
+                RevealPendingChange(documents, repository, userState, requestRepaint);
             FlushViewStateWhenDue(userState);
             if (cachedPortalRelationshipRowsRevision != currentRepositoryRevision)
             {

@@ -518,6 +518,15 @@ namespace Architector.Editor
         public List<ArchitectorLayerViewStateRecord> layerViews = new();
         public List<ArchitectorLayerInspectorStateRecord> layerInspectors = new();
         public ArchitectorWindowNavigationRecord masterNavigation = new();
+        public List<ArchitectorArrangedLayerRecord> arrangedLayers = new();
+    }
+
+    // Local to this machine, never read by agents: a layer whose structure still matches is not arranged again by a group Arrange.
+    [Serializable]
+    public sealed class ArchitectorArrangedLayerRecord
+    {
+        public string layerId = string.Empty;
+        public string fingerprint = string.Empty;
     }
 
     [Serializable]
