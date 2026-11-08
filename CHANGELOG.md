@@ -4,6 +4,8 @@
 
 - Editing nodes and relationships is about 15 times faster: on 50 layers an edit with the window's refresh drops from about 3 s to 0.2 s. Only the layers an edit touches are cloned, validated, encoded and reinstalled; approval hashes and conformance are recomputed only where they can change.
 - `layer_graph` with `detail=summary` returns the layer as compact text: paths and names instead of IDs, no empty fields, incoming relationships folded into one line per source layer.
+- **Settings > Workspace Geometry > Fit Layer On Open** (off by default): each opened layer is centered and zoomed out to fit the window as it is now, instead of returning to the last saved position.
+- The Hotkeys button (**?**) moved from the header to the canvas's top-right corner, clear of the layer tabs and the inspector, and moves with the inspector. In the header the agent-work button covered it.
 - **Settings > Arrange > Improvement Time** (5 s by default) limits how long Arrange improves a layer; the layout itself is always complete.
 - An available update shows its version in yellow and a warning icon in Settings and on its integration in Integrations; the change list is a foldout sized to its text.
 - The Project panel shows **Review (N)** when layers are changed, approved by an agent or in draft.

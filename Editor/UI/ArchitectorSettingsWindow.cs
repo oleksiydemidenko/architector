@@ -212,6 +212,9 @@ namespace Architector.Editor
             geometry.minimumNodeGap = EditorGUILayout.FloatField("Minimum Node Gap", geometry.minimumNodeGap);
             geometry.gridSize = EditorGUILayout.FloatField("Grid Size", geometry.gridSize);
             geometry.snapToGrid = EditorGUILayout.Toggle("Snap To Grid", geometry.snapToGrid);
+            geometry.fitLayerOnOpen = EditorGUILayout.Toggle(
+                new GUIContent("Fit Layer On Open", "Each time a layer is opened, the canvas centers the whole layer and zooms out to fit the current window size, instead of restoring the last position on that layer."),
+                geometry.fitLayerOnOpen);
             EditorGUILayout.Space(6f);
             EditorGUILayout.LabelField("Arrange", EditorStyles.boldLabel);
             DrawArrange(arrange);

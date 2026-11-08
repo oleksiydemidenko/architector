@@ -606,10 +606,7 @@ namespace Architector.Editor
                 if (GUI.Button(settingsRect, ArchitectorIcons.Get("Settings"), GUI.skin.button))
                     ArchitectorSettingsWindow.Open();
             }
-            var helpRect = new Rect(settingsRect.x - settingsSize - 4f, settingsRect.y, settingsSize, settingsSize);
-            if (GUI.Button(helpRect, new GUIContent("?", "Hotkeys"), GUI.skin.button))
-                PopupWindow.Show(helpRect, new ArchitectorHotkeysPopup());
-            var noticeRight = helpRect.x;
+            var noticeRight = settingsRect.x;
             if (aiWork?.IsActive == true)
             {
                 var aiButtonWidth = ArchitectorAiWorkUi.WorkspaceButtonWidth(aiWork);
@@ -1749,6 +1746,8 @@ namespace Architector.Editor
                 var canvasRect = GUILayoutUtility.GetRect(10f, 10000f, 10f, 10000f, GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true));
                 if (Event.current.type == EventType.Repaint)
                     lastCanvasRect = canvasRect;
+                var hotkeysRect = HotkeysButtonRect(canvasRect);
+                DrawHotkeysButton(hotkeysRect);
                 if (Event.current.type == EventType.MouseDown
                     && Event.current.button == 0
                     && canvasRect.Contains(Event.current.mousePosition))
@@ -1758,7 +1757,32 @@ namespace Architector.Editor
                 }
                 layerCanvas.Draw(canvasRect, layer, repository, typeIndex, userState, nodeClipboard, Run, Repaint, RequestContextMenu, layerId => OpenLayer(layerId), aiWork?.WorkspacesLocked != true);
                 HandleLayerPortalDrop(canvasRect, layer);
+                if (Event.current.type == EventType.Repaint)
+                    PaintHotkeysButton(hotkeysRect);
             }
+        }
+
+        private static Rect HotkeysButtonRect(Rect canvasRect)
+        {
+            const float size = 22f;
+            const float margin = 8f;
+            return new Rect(canvasRect.xMax - size - margin, canvasRect.y + margin, size, size);
+        }
+
+        private static readonly GUIContent HotkeysContent = new("?", "Hotkeys");
+
+        // The button runs before the canvas in every event, so a click on it never reaches the canvas and control ids stay stable;
+        // the canvas paints over it, so it is painted again on top without taking a control id.
+        private static void DrawHotkeysButton(Rect rect)
+        {
+            if (GUI.Button(rect, HotkeysContent, GUI.skin.button))
+                PopupWindow.Show(rect, new ArchitectorHotkeysPopup());
+        }
+
+        private static void PaintHotkeysButton(Rect rect)
+        {
+            var hover = GUI.enabled && rect.Contains(Event.current.mousePosition);
+            GUI.skin.button.Draw(rect, HotkeysContent, hover, false, false, false);
         }
 
         private void DrawNodeInspector()

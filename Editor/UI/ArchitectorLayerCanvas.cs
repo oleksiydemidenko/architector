@@ -140,7 +140,11 @@ namespace Architector.Editor
                 return;
             canvasSize = rect.size;
             if (layerId != layer.id)
+            {
                 ResetForLayer(layer.id, userState);
+                if (repository.Settings.geometry.fitLayerOnOpen)
+                    FocusView(repository, repository.LoadLayer(layer.id).layout.nodes.Select(node => node.nodeId).ToArray(), userState, null);
+            }
 
             currentRepositoryRevision = repository.Revision;
             hideRoutesWhileDragging = repository.Settings.optimization.hideRoutesWhileDragging;

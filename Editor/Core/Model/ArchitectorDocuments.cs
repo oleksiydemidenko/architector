@@ -115,6 +115,7 @@ namespace Architector.Editor
         public float minimumNodeGap = 48f;
         public float gridSize = 16f;
         public bool snapToGrid = true;
+        public bool fitLayerOnOpen;
     }
 
     [Serializable]
