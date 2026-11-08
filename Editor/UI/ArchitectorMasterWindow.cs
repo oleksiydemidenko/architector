@@ -224,6 +224,7 @@ namespace Architector.Editor
 
         private void OnDisable()
         {
+            FinishArrange(false);
             layerCanvas?.CancelRouting();
             CommitRename();
             PersistNavigation();
@@ -311,10 +312,12 @@ namespace Architector.Editor
                 return;
             }
 
+            if (Arranging)
+                HandleArrangeBarInput();
             var aiLocked = aiWork?.WorkspacesLocked == true;
             if (aiLocked)
                 ArchitectorAiWorkUi.ConsumeInputWhenLocked();
-            else
+            else if (!Arranging)
             {
                 HandleUndoRedoShortcut();
                 HandleExplorerDeleteShortcut();
@@ -324,7 +327,7 @@ namespace Architector.Editor
             currentDrawDataError = string.Empty;
             try
             {
-                using (new EditorGUI.DisabledScope(aiLocked))
+                using (new EditorGUI.DisabledScope(aiLocked || Arranging))
                 using (new EditorGUILayout.HorizontalScope())
                 {
                     if (windowMode == WindowMode.Master)
@@ -348,6 +351,8 @@ namespace Architector.Editor
                     currentDrawDataError);
             else if (!aiLocked)
                 SchedulePendingContextMenu();
+            if (Arranging)
+                PaintArrangeBar();
             if (Event.current.type == EventType.Repaint)
                 PersistNavigation();
         }
@@ -2477,6 +2482,21 @@ namespace Architector.Editor
             return layers;
         }
 
+        // Arrange runs one layer per editor update, so the window repaints between layers and its own bar offers Stop and Cancel And Undo.
+        private sealed class ArrangeRun
+        {
+            public IReadOnlyList<string> LayerIds;
+            public bool SkipArranged;
+            public int Index;
+            public int Skipped;
+            public readonly List<string> Arranged = new();
+            public readonly List<string> Failures = new();
+        }
+
+        [NonSerialized] private ArrangeRun arrangeRun;
+
+        private bool Arranging => arrangeRun != null;
+
         private void ArrangeLayers(IReadOnlyList<string> layerIds, bool skipArranged)
         {
             if (aiWork?.WorkspacesLocked == true)
@@ -2484,75 +2504,112 @@ namespace Architector.Editor
                 ShowNotification(new GUIContent("AI work is in progress. Unlock Architector to edit manually."));
                 return;
             }
-            var arranged = new List<string>();
-            var skipped = 0;
-            var failures = new List<string>();
-            var undone = false;
-            try
+            if (Arranging || layerIds.Count == 0)
+                return;
+            arrangeRun = new ArrangeRun { LayerIds = layerIds, SkipArranged = skipArranged };
+            EditorApplication.update -= StepArrange;
+            EditorApplication.update += StepArrange;
+            Repaint();
+        }
+
+        private void StepArrange()
+        {
+            var run = arrangeRun;
+            if (run == null || repository == null)
             {
-                for (var index = 0; index < layerIds.Count; index++)
+                EditorApplication.update -= StepArrange;
+                return;
+            }
+            while (run.Index < run.LayerIds.Count)
+            {
+                var layer = repository.FindLayer(run.LayerIds[run.Index++]);
+                if (layer == null)
+                    continue;
+                if (run.SkipArranged && userState.IsArranged(layer.id, repository.ArrangeFingerprint(layer.id)))
                 {
-                    var layer = repository.FindLayer(layerIds[index]);
-                    if (layer == null)
-                        continue;
-                    if (skipArranged && userState.IsArranged(layer.id, repository.ArrangeFingerprint(layer.id)))
-                    {
-                        skipped++;
-                        continue;
-                    }
-                    // Cancel is read between layers; one layer's arrangement cannot be interrupted.
-                    if (EditorUtility.DisplayCancelableProgressBar(
-                            "Arrange",
-                            $"{layer.name} ({index + 1} of {layerIds.Count})",
-                            (float)index / layerIds.Count))
-                    {
-                        EditorUtility.ClearProgressBar();
-                        var choice = EditorUtility.DisplayDialogComplex(
-                            "Arrange",
-                            $"{arranged.Count} of {layerIds.Count} layers are arranged. Stop keeps them; Cancel And Undo returns every layer to where it was.",
-                            "Continue",
-                            "Stop",
-                            "Cancel And Undo");
-                        if (choice == 1)
-                            break;
-                        if (choice == 2)
-                        {
-                            for (var step = 0; step < arranged.Count && repository.CanUndo; step++)
-                                repository.Undo();
-                            foreach (var undoneLayer in arranged)
-                                userState.SetArranged(undoneLayer, string.Empty);
-                            undone = true;
-                            break;
-                        }
-                    }
-                    var revision = repository.Revision;
-                    try
-                    {
-                        repository.ArrangeNodes(layer.id);
-                    }
-                    catch (ArchitectorDataException exception)
-                    {
-                        failures.Add($"{layer.name}: {exception.Message}");
-                        continue;
-                    }
+                    run.Skipped++;
+                    continue;
+                }
+                var revision = repository.Revision;
+                try
+                {
+                    repository.ArrangeNodes(layer.id);
                     if (repository.Revision != revision)
-                        arranged.Add(layer.id);
+                        run.Arranged.Add(layer.id);
                     userState.SetArranged(layer.id, repository.ArrangeFingerprint(layer.id));
                 }
+                catch (ArchitectorDataException exception)
+                {
+                    run.Failures.Add($"{layer.name}: {exception.Message}");
+                }
+                Repaint();
+                return;
             }
-            finally
+            FinishArrange(false);
+        }
+
+        private void FinishArrange(bool undo)
+        {
+            var run = arrangeRun;
+            if (run == null)
+                return;
+            EditorApplication.update -= StepArrange;
+            arrangeRun = null;
+            if (undo)
             {
-                EditorUtility.ClearProgressBar();
+                for (var step = 0; step < run.Arranged.Count && repository.CanUndo; step++)
+                    repository.Undo();
+                foreach (var layerId in run.Arranged)
+                    userState.SetArranged(layerId, string.Empty);
             }
-            var summary = undone
+            var summary = undo
                 ? "Arrange cancelled; every layer is back where it was."
-                : $"Arranged {arranged.Count} {(arranged.Count == 1 ? "layer" : "layers")}"
-                  + (skipped > 0 ? $", {skipped} already arranged and unchanged" : string.Empty)
-                  + (failures.Count > 0 ? $", {failures.Count} not arranged" : string.Empty) + ".";
+                : $"Arranged {run.Arranged.Count} {(run.Arranged.Count == 1 ? "layer" : "layers")}"
+                  + (run.Skipped > 0 ? $", {run.Skipped} already arranged and unchanged" : string.Empty)
+                  + (run.Failures.Count > 0 ? $", {run.Failures.Count} not arranged" : string.Empty) + ".";
             ShowNotification(new GUIContent(summary));
-            if (failures.Count > 0)
-                Debug.LogWarning("Architector Arrange skipped these layers:\n" + string.Join("\n", failures));
+            if (run.Failures.Count > 0)
+                Debug.LogWarning("Architector Arrange skipped these layers:\n" + string.Join("\n", run.Failures));
             Repaint();
+        }
+
+        private (Rect bar, Rect stop, Rect cancel) ArrangeBarRects()
+        {
+            var canvas = lastCanvasRect.width > 1f ? lastCanvasRect : new Rect(0f, 0f, position.width, position.height);
+            var bar = new Rect(canvas.x + 8f, canvas.yMax - 36f, Mathf.Max(220f, canvas.width - 16f), 28f);
+            var cancel = new Rect(bar.xMax - 124f, bar.y + 4f, 120f, 20f);
+            var stop = new Rect(cancel.x - 64f, bar.y + 4f, 60f, 20f);
+            return (bar, stop, cancel);
+        }
+
+        // Read before the disabled workspace, so a click on the bar never reaches the canvas under it.
+        private void HandleArrangeBarInput()
+        {
+            var current = Event.current;
+            if (current.type != EventType.MouseDown || current.button != 0)
+                return;
+            var (bar, stop, cancel) = ArrangeBarRects();
+            if (stop.Contains(current.mousePosition))
+                FinishArrange(false);
+            else if (cancel.Contains(current.mousePosition))
+                FinishArrange(true);
+            else if (!bar.Contains(current.mousePosition))
+                return;
+            current.Use();
+        }
+
+        private void PaintArrangeBar()
+        {
+            var run = arrangeRun;
+            if (run == null || Event.current.type != EventType.Repaint)
+                return;
+            var (bar, stop, cancel) = ArrangeBarRects();
+            EditorStyles.helpBox.Draw(bar, false, false, false, false);
+            var next = run.Index < run.LayerIds.Count ? repository.FindLayer(run.LayerIds[run.Index])?.name : null;
+            var text = $"Arranging {run.Index} of {run.LayerIds.Count}" + (next == null ? string.Empty : $": {next}");
+            EditorGUI.ProgressBar(new Rect(bar.x + 4f, bar.y + 4f, stop.x - bar.x - 8f, 20f), (float)run.Index / run.LayerIds.Count, text);
+            GUI.skin.button.Draw(stop, new GUIContent("Stop"), stop.Contains(Event.current.mousePosition), false, false, false);
+            GUI.skin.button.Draw(cancel, new GUIContent("Cancel And Undo"), cancel.Contains(Event.current.mousePosition), false, false, false);
         }
 
         private void CreateGroup(string parentGroupId)
@@ -2776,6 +2833,11 @@ namespace Architector.Editor
             if (aiWork?.WorkspacesLocked == true)
             {
                 ShowNotification(new GUIContent("AI work is in progress. Unlock Architector to edit manually."));
+                return;
+            }
+            if (Arranging)
+            {
+                ShowNotification(new GUIContent("Arrange is running. Stop it to edit."));
                 return;
             }
             try
