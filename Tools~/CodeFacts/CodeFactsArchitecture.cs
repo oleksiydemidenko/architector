@@ -181,6 +181,29 @@ public sealed class FactsNode
 
 public sealed record FactsMember(string Id, string Kind, string Declaration, string SymbolKey);
 
+// Architector/code-facts.json, optional:
+// { "genericCalls": ["Get", "TryGet"], "injectionAttributes": ["Inject"] }
+// genericCalls lists generic method names whose type arguments are reported per type (for example Get<Container, Parameter>);
+// injectionAttributes lists attributes whose constructor or method parameters, fields or properties are reported as injected.
+public sealed class FactsExtractors
+{
+    public HashSet<string> GenericCalls { get; } = new(StringComparer.Ordinal);
+    public HashSet<string> InjectionAttributes { get; } = new(StringComparer.Ordinal);
+    public bool Any => GenericCalls.Count + InjectionAttributes.Count > 0;
+
+    public static FactsExtractors Load(string path)
+    {
+        var extractors = new FactsExtractors();
+        if (!File.Exists(path))
+            return extractors;
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        extractors.GenericCalls.UnionWith(FactsArchitecture.Strings(document.RootElement, "genericCalls"));
+        extractors.InjectionAttributes.UnionWith(FactsArchitecture.Strings(document.RootElement, "injectionAttributes")
+            .Select(name => name.EndsWith("Attribute", StringComparison.Ordinal) ? name[..^"Attribute".Length] : name));
+        return extractors;
+    }
+}
+
 public sealed class FactsRelationship
 {
     public string Id = string.Empty;

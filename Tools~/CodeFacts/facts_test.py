@@ -49,7 +49,10 @@ owners = answer({"action": "code_evidence", "include": "owners", "limit": 50})
 assert ["Sample.Tools.Helper", None, "Assets/Tools/Helper.cs:3"] in owners["items"], owners
 
 core = answer({"action": "layer_facts", "target": "Core"})
-assert (core["layer"], core["files"], core["types"]) == ("Sample/Core", 2, 3), core
+assert (core["layer"], core["files"], core["types"]) == ("Sample/Core", 3, 5), core
+wiring = answer({"action": "layer_facts", "target": "Core", "type": "Wiring"})
+assert wiring["extra"] == {"generic_calls": [["Get<Clock>", "Assets/Core/Wiring.cs:18"]], "injected": [["ITickable", "Assets/Core/Wiring.cs:9"]]}, wiring
+assert next(item for item in core["type_list"] if item["type"] == "Sample.Core.Wiring")["generic_calls"] == 1, core
 candidates = {item["type"]: item for item in core["node_candidates"]}
 assert candidates["Sample.Core.Registry`1"]["rules"] == ["used_by_other_layers", "inherited_by_other_layers", "extension_point"], candidates
 assert candidates["Sample.Core.Registry`1"]["node"] is None and candidates["Sample.Core.Clock"]["node"] == "node_clock", candidates

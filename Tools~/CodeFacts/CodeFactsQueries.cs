@@ -136,6 +136,13 @@ public static class FactsQueries
                 member.Locations.FirstOrDefault(location => location.IsInSource) is { } location
                     ? $"{location.SourceTree!.FilePath}:{location.GetLineSpan().StartLinePosition.Line + 1}"
                     : null)), arguments, 100);
+            if (type.Extras.Count > 0)
+            {
+                var extra = new JsonObject();
+                foreach (var (kind, values) in type.Extras)
+                    extra[kind] = Array(values.Select(pair => (JsonNode?)new JsonArray(pair.Key, pair.Value)));
+                detail["extra"] = extra;
+            }
             return detail;
         }
 
@@ -470,6 +477,8 @@ public static class FactsQueries
             entry["parts"] = Array(type.Files.Skip(1).Select(value => (JsonNode?)value));
         if (type.Nodes.Count > 0)
             entry["nodes"] = Array(type.Nodes.Select(value => (JsonNode?)value));
+        foreach (var (kind, values) in type.Extras)
+            entry[kind] = values.Count;
         return entry;
     }
 

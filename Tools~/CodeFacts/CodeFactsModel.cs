@@ -33,7 +33,11 @@ public sealed class FactsModel
     public static FactsModel Build(string root, IEnumerable<MetadataReference> references)
     {
         var watch = Stopwatch.StartNew();
-        var model = new FactsModel { Architecture = FactsArchitecture.Load(Path.Combine(root, "Architector")) };
+        var model = new FactsModel
+        {
+            Architecture = FactsArchitecture.Load(Path.Combine(root, "Architector")),
+            Extractors = FactsExtractors.Load(Path.Combine(root, "Architector", "code-facts.json"))
+        };
         model.ScopedLayers = model.Architecture.Layers.Values.Where(layer => layer.Scoped).ToArray();
         if (model.ScopedLayers.Count == 0)
             return model;
@@ -151,14 +155,46 @@ public sealed class FactsModel
                 continue;
             var name = FullName(symbol);
             var line = declaration.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
-            if (TypesByName.TryGetValue(name, out var existing))
+            if (!TypesByName.TryGetValue(name, out var type))
             {
-                existing.Files.Add($"{tree.FilePath}:{line}");
-                continue;
+                type = new FactsType(symbol, name, owners.Owner(symbol)?.Id, $"{tree.FilePath}:{line}");
+                Types.Add(type);
+                TypesByName[name] = type;
             }
-            var type = new FactsType(symbol, name, owners.Owner(symbol)?.Id, $"{tree.FilePath}:{line}");
-            Types.Add(type);
-            TypesByName[name] = type;
+            else
+                type.Files.Add($"{tree.FilePath}:{line}");
+            if (Extractors.Any)
+                Extract(declaration, type, tree.FilePath);
+        }
+    }
+
+    // Project conventions are not universal, so they are read only when Architector/code-facts.json names them.
+    public FactsExtractors Extractors { get; private set; } = new();
+
+    private void Extract(SyntaxNode declaration, FactsType type, string file)
+    {
+        string At(SyntaxNode node) => $"{file}:{node.GetLocation().GetLineSpan().StartLinePosition.Line + 1}";
+        foreach (var generic in declaration.DescendantNodes().OfType<GenericNameSyntax>())
+            if (Extractors.GenericCalls.Contains(generic.Identifier.ValueText) && generic.Parent is InvocationExpressionSyntax or MemberAccessExpressionSyntax)
+                type.AddExtra("generic_calls", $"{generic.Identifier.ValueText}<{string.Join(", ", generic.TypeArgumentList.Arguments)}>", At(generic));
+        foreach (var attribute in declaration.DescendantNodes().OfType<AttributeSyntax>())
+        {
+            var attributeName = attribute.Name.ToString().Split('.').Last();
+            if (attributeName.EndsWith("Attribute", StringComparison.Ordinal))
+                attributeName = attributeName[..^"Attribute".Length];
+            if (!Extractors.InjectionAttributes.Contains(attributeName))
+                continue;
+            var target = attribute.Parent?.Parent;
+            var injected = target switch
+            {
+                BaseMethodDeclarationSyntax method => method.ParameterList.Parameters.Select(parameter => parameter.Type?.ToString() ?? string.Empty),
+                FieldDeclarationSyntax field => new[] { field.Declaration.Type.ToString() },
+                PropertyDeclarationSyntax property => new[] { property.Type.ToString() },
+                ParameterSyntax parameter => new[] { parameter.Type?.ToString() ?? string.Empty },
+                _ => Array.Empty<string>()
+            };
+            foreach (var service in injected.Where(value => value.Length > 0))
+                type.AddExtra("injected", service, At(attribute));
         }
     }
 
@@ -293,6 +329,14 @@ public sealed class FactsType
     public List<string> Files { get; } = new();
     public string At => Files[0];
     public HashSet<FactsType> DerivedBy { get; } = new();
+    public SortedDictionary<string, SortedDictionary<string, string>> Extras { get; } = new(StringComparer.Ordinal);
+
+    public void AddExtra(string kind, string value, string at)
+    {
+        if (!Extras.TryGetValue(kind, out var values))
+            Extras[kind] = values = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        values.TryAdd(value, at);
+    }
     public HashSet<string> Rules { get; } = new(StringComparer.Ordinal);
     public List<string> Nodes { get; } = new();
 

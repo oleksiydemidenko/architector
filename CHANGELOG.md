@@ -8,6 +8,7 @@
 - `layer_facts`: a layer's files and types (kind, base type, interfaces, public members), its references to and from other layers with type pairs, and node candidates by rule (used or inherited by other layers, Unity entry points, extension points), each with file:line and the node it is linked to. No responsibilities are generated.
 - `scope_what_if`: for types, files or folders moved to other layers, the undeclared pairs and cycles added and removed, the relationships that would lose their evidence and the linked nodes that would change layer. Changes nothing.
 - `layer_dump`: a layer's nodes and relationships with ids, without layout, paged. `lookup`: layer, node and member ids by name.
+- Project conventions are optional: `Architector/code-facts.json` with `genericCalls` (for example `Get` reports `Get<Container, Parameter>` per type) and `injectionAttributes` (for example `Inject` reports the injected parameter, field and property types). `layer_facts` shows their counts per type and the full lists with file:line for one `type`. Without the file nothing extra is computed.
 - Replies are compact (counts and the most frequent type pairs); full lists come by `offset`/`limit` paging or `output: "file"`. The same answers are available from the command line: `dotnet run --project Tools~/DependencyEvidence -- <root> --facts=<action> --args=<json>`.
 - The server binary grows from about 12 to about 19 MB (Roslyn and .NET reference assemblies inside); it still needs no .NET SDK.
 
