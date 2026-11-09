@@ -71,5 +71,32 @@ namespace Architector.Editor
             }
             return string.Empty;
         }
+
+        // The layers a reference names: a layer id, its full Explorer path, or any trailing part of the path
+        // ("Group/Layer" for "Root/Group/Layer"; a layer name is the shortest such part). One match resolves; several
+        // are ambiguous and are returned as candidates. The code facts engine applies the same rule.
+        public static IReadOnlyList<string> MatchLayers(ArchitectorProjectDocument project, string reference)
+        {
+            var value = (reference ?? string.Empty).Trim().Trim(Separator);
+            if (value.Length == 0)
+                return Array.Empty<string>();
+            if (project.layers.Any(layer => layer.id == value))
+                return new[] { value };
+            var normalized = string.Join(Separator.ToString(), value.Split(Separator).Select(segment => segment.Trim()));
+            var paths = project.layers.Select(layer => (layer.id, Path: Describe(project, layer.id))).ToArray();
+            var exact = paths.Where(entry => string.Equals(entry.Path, normalized, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (exact.Length > 0)
+                return exact.Select(entry => entry.id).ToArray();
+            return paths
+                .Where(entry => entry.Path.EndsWith(Separator + normalized, StringComparison.OrdinalIgnoreCase))
+                .Select(entry => entry.id)
+                .ToArray();
+        }
+
+        public static string ResolveLayer(ArchitectorProjectDocument project, string reference)
+        {
+            var matches = MatchLayers(project, reference);
+            return matches.Count == 1 ? matches[0] : string.Empty;
+        }
     }
 }

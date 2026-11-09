@@ -34,14 +34,16 @@ namespace Architector.Editor
         public static void EnsureLayersCanBeApproved(
             ArchitectorProjectDocument project,
             IReadOnlyDictionary<string, ArchitectorLayerDocuments> layers,
-            IEnumerable<string> layerIds)
+            IEnumerable<string> layerIds,
+            ArchitectorSettingsDocument settings = null)
         {
             var unanchored = ArchitectorConformance.FindUnanchoredLinkedNodes(project, layers, layerIds)
-                .FirstOrDefault();
+                .FirstOrDefault(item => ArchitectorStandaloneNodes.Reason(settings, item.Layer.id, item.Node.id).Length == 0);
             if (unanchored.Node == null)
                 return;
             throw new ArchitectorDataException(
-                $"Layer '{unanchored.Layer.name}' cannot be approved because Linked node '{unanchored.Node.title}' has no relationship.");
+                $"Layer '{unanchored.Layer.name}' cannot be approved because Linked node '{unanchored.Node.title}' has no relationship. "
+                + "Add a dependency to or from the node that uses this type or that it uses, or mark the node standalone with the reason when the type really stands alone.");
         }
 
         public static string ComputeSemanticHash(ArchitectorLayerRecord layer, ArchitectorLayerDocument semantic)

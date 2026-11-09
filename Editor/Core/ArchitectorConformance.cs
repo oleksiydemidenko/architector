@@ -33,6 +33,8 @@ namespace Architector.Editor
         public const string DependencyCycle = "dependency_cycle";
         public const string LayersUnchecked = "layers_unchecked";
         public const string LinkedToUncheckedLayer = "linked_to_unchecked_layer";
+        public const string LinkedNodeOutsideScope = "linked_node_outside_scope";
+        public const string StandaloneNode = "standalone_node";
     }
 
     public sealed class ArchitectorConformanceDiagnostic
@@ -157,6 +159,21 @@ namespace Architector.Editor
                 {
                     foreach (var unanchored in unanchoredNodes)
                     {
+                        var standalone = ArchitectorStandaloneNodes.Reason(repository.Settings, layer.id, unanchored.Node.id);
+                        if (standalone.Length > 0)
+                        {
+                            report.WarningCount++;
+                            AddDiagnostic(report, limit, Diagnostic(
+                                ArchitectorConformanceSeverities.Warning,
+                                ArchitectorConformanceCodes.StandaloneNode,
+                                layer,
+                                unanchored.Node,
+                                null,
+                                "At least one relationship",
+                                "Standalone: " + standalone,
+                                $"Linked node '{unanchored.Node.title}' has no relationship on purpose: {standalone}"));
+                            continue;
+                        }
                         report.ErrorCount++;
                         AddDiagnostic(report, limit, Diagnostic(
                             ArchitectorConformanceSeverities.Error,
@@ -166,7 +183,7 @@ namespace Architector.Editor
                             null,
                             "At least one relationship",
                             "No relationship",
-                            $"Linked node '{unanchored.Node.title}' has no relationship."));
+                            $"Linked node '{unanchored.Node.title}' has no relationship. Every linked node takes part in its layer's contract: add a dependency to or from the node that uses this type or that it uses. If the type really stands alone (for example it is wired only in scenes or prefabs), mark the node standalone with the reason (set_standalone)."));
                     }
                 }
                 foreach (var cycle in cycles.Where(cycle => cycle.LayerIds.Contains(layer.id)))
@@ -180,8 +197,10 @@ namespace Architector.Editor
                         semantic.nodes.First(node => string.Equals(node.id, member.NodeId, StringComparison.Ordinal)),
                         null,
                         "Acyclic dependencies",
-                        $"Cycle of {cycle.Members.Count} nodes in {cycle.LayerIds.Count} layers",
-                        $"Dependency cycle: {repository.DescribeDependencyCycle(cycle)}."));
+                        cycle.CrossesLayers ? $"Cycle of {cycle.Members.Count} nodes in {cycle.LayerIds.Count} layers" : $"Cycle of {cycle.Members.Count} nodes inside one layer",
+                        cycle.CrossesLayers
+                            ? $"Dependency cycle: {repository.DescribeDependencyCycle(cycle)}."
+                            : $"Dependency cycle inside one layer (allowed; the Reject rule applies between layers): {repository.DescribeDependencyCycle(cycle)}."));
                 }
                 foreach (var other in ArchitectorUncheckedGroups.LinksToUnchecked(layer.id, documents.Values, uncheckedLayers))
                 {
@@ -197,6 +216,23 @@ namespace Architector.Editor
                         Observed = $"{other.Count()} with '{otherName}'",
                         Message = $"Layer '{layer.name}' has {other.Count()} relationship(s) with '{otherName}', where checks are off. Remove them, or move the layer out of that group and turn its checks on."
                     });
+                }
+                foreach (var node in semantic.nodes.Where(candidate => string.Equals(candidate.type?.mode, "linked", StringComparison.Ordinal)))
+                {
+                    var owner = ArchitectorScopeOwners.OwnerOf(repository.Project, node.type);
+                    if (owner == null || owner.id == layer.id)
+                        continue;
+                    var ownerPath = ArchitectorEntryPaths.Describe(repository.Project, owner.id);
+                    report.WarningCount++;
+                    AddDiagnostic(report, limit, Diagnostic(
+                        ArchitectorConformanceSeverities.Warning,
+                        ArchitectorConformanceCodes.LinkedNodeOutsideScope,
+                        layer,
+                        node,
+                        null,
+                        $"Type in the code scope of '{layer.name}'",
+                        $"In the code scope of '{ownerPath}'",
+                        $"Linked node '{node.title}' is in '{layer.name}', but its type's code belongs to the scope of '{ownerPath}'. Move the node there or change the scopes; code facts and architector_route place the type in '{ownerPath}'."));
                 }
                 MergeLinked(report, limit, LinkedResult(layer, semantic, typeIndex));
             }

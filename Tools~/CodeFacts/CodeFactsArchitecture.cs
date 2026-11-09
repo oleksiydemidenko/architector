@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 
 namespace Architector.CodeFacts;
@@ -60,16 +62,26 @@ public sealed class FactsArchitecture
 
     public FactsLayer? FindLayer(string? reference)
     {
+        var matches = MatchLayers(reference);
+        return matches.Length == 1 ? matches[0] : null;
+    }
+
+    // A layer id, its full Explorer path, or any trailing part of the path ("Group/Layer" for "Root/Group/Layer"; a
+    // layer name is the shortest such part). The Unity gateway applies the same rule (ArchitectorEntryPaths.MatchLayers).
+    public FactsLayer[] MatchLayers(string? reference)
+    {
         if (string.IsNullOrWhiteSpace(reference))
-            return null;
-        var value = reference.Trim().Trim('/');
+            return System.Array.Empty<FactsLayer>();
+        var value = string.Join("/", reference.Trim().Trim('/').Split('/').Select(segment => segment.Trim()));
         if (Layers.TryGetValue(value, out var byId))
-            return byId;
-        var byPath = Layers.Values.Where(layer => string.Equals(layer.Path, value, StringComparison.OrdinalIgnoreCase)).ToArray();
-        if (byPath.Length == 1)
-            return byPath[0];
-        var byName = Layers.Values.Where(layer => string.Equals(layer.Name, value, StringComparison.OrdinalIgnoreCase)).ToArray();
-        return byName.Length == 1 ? byName[0] : null;
+            return new[] { byId };
+        var exact = Layers.Values.Where(layer => string.Equals(layer.Path, value, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (exact.Length > 0)
+            return exact;
+        return Layers.Values
+            .Where(layer => layer.Path.EndsWith("/" + value, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(layer => layer.Path, StringComparer.Ordinal)
+            .ToArray();
     }
 
     public FactsNode? FindNode(string nodeId)
@@ -187,6 +199,9 @@ public sealed record FactsMember(string Id, string Kind, string Declaration, str
 // injectionAttributes: attributes whose constructor or method parameters, fields or properties are reported as injected.
 // serializedAttributes: attributes whose field or property types are reported as wired in the Inspector.
 // presets add common conventions; without the file, or without "presets", the "unity" preset is on. "presets": [] turns it off.
+// "suggestions": { "exclude": ["Assets/Plugins/**"] } leaves uses in those folders out of the rule suggestions.
+// A genericCalls entry may be an object, { "name": "Get", "access": "read" | "write" }, for the behaviour facts; without
+// it the method name decides (Get, Read, Has, Try, Is, Find read; Set, Write, Add, Remove, Change, Apply, Clear write).
 // These rules only add facts per type; they never change the dependency evidence.
 public sealed class FactsExtractors
 {
@@ -221,6 +236,67 @@ public sealed class FactsExtractors
     public HashSet<string> SerializedAttributes { get; } = new(StringComparer.Ordinal);
     public List<string> ActivePresets { get; } = new();
     public List<string> Problems { get; } = new();
+    public List<string> SuggestionExclude { get; } = new();
+    public Dictionary<string, string> CallAccess { get; } = new(StringComparer.Ordinal);
+    // "wiring": { "testFolders": [...] }: assets under these folders count as test or sample uses.
+    public static readonly string[] DefaultTestFolders = { "**/Tests/**", "**/Test/**", "**/Samples/**", "**/Examples/**" };
+    public List<string> TestFolders { get; } = new(DefaultTestFolders);
+    private List<Regex> testFolderPatterns = DefaultTestFolders.Select(Glob).ToList();
+
+    public bool InTestFolder(string file) => testFolderPatterns.Any(pattern => pattern.IsMatch(file));
+
+    private static readonly string[] ReadPrefixes = { "Get", "Read", "Has", "Try", "Is", "Find", "Load", "Resolve", "Fetch" };
+    private static readonly string[] WritePrefixes = { "Set", "Write", "Add", "Remove", "Change", "Apply", "Clear", "Register", "Bind", "Create", "Instantiate" };
+
+    // Whether a generic call reads or writes, for the behaviour facts: the project's own setting first, then the name.
+    public string Access(string callName)
+    {
+        if (CallAccess.TryGetValue(callName, out var access))
+            return access;
+        if (ReadPrefixes.Any(prefix => callName.StartsWith(prefix, StringComparison.Ordinal)))
+            return "read";
+        return WritePrefixes.Any(prefix => callName.StartsWith(prefix, StringComparison.Ordinal)) ? "write" : "use";
+    }
+    private readonly List<Regex> suggestionExcludePatterns = new();
+
+    // A place is "path:line"; it is excluded when its path matches one of suggestions.exclude.
+    public bool ExcludedFromSuggestions(string place)
+    {
+        if (suggestionExcludePatterns.Count == 0)
+            return false;
+        var separator = place.LastIndexOf(':');
+        var file = separator > 0 ? place[..separator] : place;
+        return suggestionExcludePatterns.Any(pattern => pattern.IsMatch(file));
+    }
+
+    // Git-style globs: ** crosses folders, * and ? stay inside one.
+    public static Regex Glob(string glob)
+    {
+        var pattern = new StringBuilder("^");
+        var value = glob.Trim().Replace('\\', '/');
+        for (var index = 0; index < value.Length; index++)
+        {
+            var symbol = value[index];
+            if (symbol == '*' && index + 1 < value.Length && value[index + 1] == '*')
+            {
+                index++;
+                if (index + 1 < value.Length && value[index + 1] == '/')
+                {
+                    index++;
+                    pattern.Append("(?:.*/)?");
+                }
+                else
+                    pattern.Append(".*");
+            }
+            else if (symbol == '*')
+                pattern.Append("[^/]*");
+            else if (symbol == '?')
+                pattern.Append("[^/]");
+            else
+                pattern.Append(Regex.Escape(symbol.ToString()));
+        }
+        return new Regex(pattern.Append('$').ToString(), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
     public bool Any => GenericCalls.Count + InjectionAttributes.Count + SerializedAttributes.Count > 0;
 
     public static FactsExtractors Load(string path)
@@ -234,8 +310,30 @@ public sealed class FactsExtractors
             if (root.TryGetProperty("presets", out _))
                 presets = FactsArchitecture.Strings(root, "presets").ToArray();
             extractors.GenericCalls.UnionWith(FactsArchitecture.Strings(root, "genericCalls"));
+            if (root.TryGetProperty("genericCalls", out var calls) && calls.ValueKind == JsonValueKind.Array)
+                foreach (var call in calls.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.Object))
+                {
+                    var name = FactsArchitecture.Text(call, "name");
+                    if (name.Length == 0)
+                        continue;
+                    extractors.GenericCalls.Add(name);
+                    var access = FactsArchitecture.Text(call, "access");
+                    if (access is "read" or "write")
+                        extractors.CallAccess[name] = access;
+                    else if (access.Length > 0)
+                        extractors.Problems.Add($"genericCalls entry '{name}' has access '{access}'; use read or write.");
+                }
             extractors.InjectionAttributes.UnionWith(FactsArchitecture.Strings(root, "injectionAttributes").Select(AttributeName));
             extractors.SerializedAttributes.UnionWith(FactsArchitecture.Strings(root, "serializedAttributes").Select(AttributeName));
+            if (root.TryGetProperty("wiring", out var wiring) && wiring.ValueKind == JsonValueKind.Object && wiring.TryGetProperty("testFolders", out _))
+            {
+                extractors.TestFolders.Clear();
+                extractors.TestFolders.AddRange(FactsArchitecture.Strings(wiring, "testFolders"));
+                extractors.testFolderPatterns = extractors.TestFolders.Select(Glob).ToList();
+            }
+            if (root.TryGetProperty("suggestions", out var suggestions) && suggestions.ValueKind == JsonValueKind.Object)
+                extractors.SuggestionExclude.AddRange(FactsArchitecture.Strings(suggestions, "exclude"));
+            extractors.suggestionExcludePatterns.AddRange(extractors.SuggestionExclude.Select(Glob));
         }
         foreach (var preset in presets)
         {

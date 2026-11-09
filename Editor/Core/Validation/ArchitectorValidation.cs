@@ -69,6 +69,10 @@ namespace Architector.Editor
             if (!Enum.IsDefined(typeof(ArchitectorDependencyCyclePolicy), settings.rules.dependencyCycles))
                 throw new ArchitectorDataException("Unknown dependency cycle policy.");
             settings.rules.uncheckedGroupIds ??= new List<string>();
+            settings.rules.standaloneNodes ??= new List<ArchitectorStandaloneNodeRecord>();
+            if (settings.rules.standaloneNodes.Any(item => item == null || string.IsNullOrWhiteSpace(item.layerId) || string.IsNullOrWhiteSpace(item.nodeId) || string.IsNullOrWhiteSpace(item.reason))
+                || settings.rules.standaloneNodes.Select(item => item.layerId + "|" + item.nodeId).Distinct(StringComparer.Ordinal).Count() != settings.rules.standaloneNodes.Count)
+                throw new ArchitectorDataException("Standalone nodes must be listed once each, by layer and node ID, with a reason.");
             if (settings.rules.uncheckedGroupIds.Any(string.IsNullOrEmpty)
                 || settings.rules.uncheckedGroupIds.Distinct(StringComparer.Ordinal).Count() != settings.rules.uncheckedGroupIds.Count)
                 throw new ArchitectorDataException("Groups with checks off must be listed once each, by ID.");
@@ -346,7 +350,7 @@ namespace Architector.Editor
                 .Select(node => new ArchitectorEndpoint(layer.id, node.id)));
             var uncheckedLayers = ArchitectorUncheckedGroups.LayerIds(project, settings);
             var cycle = ArchitectorDependencyCycles.Find(endpoints, relationships)
-                .FirstOrDefault(candidate => candidate.LayerIds.Any(layerId => !uncheckedLayers.Contains(layerId)));
+                .FirstOrDefault(candidate => candidate.CrossesLayers && candidate.LayerIds.Any(layerId => !uncheckedLayers.Contains(layerId)));
             if (cycle == null)
                 return;
             throw new ArchitectorDataException(

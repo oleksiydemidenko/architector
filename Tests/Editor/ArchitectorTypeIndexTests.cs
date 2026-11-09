@@ -414,6 +414,60 @@ namespace Architector.Editor.Tests
         }
 
         [Test]
+        public void NodeContractsLinkMembersByName()
+        {
+            var type = index.Types.Single(candidate => candidate.MetadataName == typeof(DeclarationContract).FullName);
+            var available = index.GetMembers(LinkedTypeRecord(type)).ToArray();
+            var created = repository.ApplySemanticPlan(new ArchitectorSemanticPlan
+            {
+                layers = { new ArchitectorPlanLayer { reference = "contracts", name = "Contracts" } },
+                nodes = { new ArchitectorPlanNode { reference = "contract", layer = "contracts", title = "Contract" } }
+            });
+            var layerId = created.References["contracts"];
+            repository.ApplySemanticPlan(new ArchitectorSemanticPlan
+            {
+                nodeContracts = { new ArchitectorPlanNodeContract
+                {
+                    layer = "Contracts", node = "Contract", mode = "linked", typeKey = type.Key,
+                    members = new List<ArchitectorPlanMember>
+                    {
+                        new() { name = "Register", parameters = new List<string> { "Object" } },
+                        new() { name = "Initialize", parameters = new List<string> { "Object[]" } },
+                        new() { name = "Owner" },
+                        new() { kind = "method", name = "Defaults", parameters = new List<string> { "ArchitectorTypeIndexTestStatus", "String", "Int32" } }
+                    }
+                } }
+            }, typeIndex: index);
+
+            var linked = repository.LoadLayer(layerId).semantic.nodes.Single().members.Select(member => member.symbolKey).ToArray();
+            Assert.That(linked, Is.EquivalentTo(available
+                .Where(member => new[] { "Register", "Initialize", "Owner", "Defaults" }.Contains(ArchitectorMemberReferences.Name(member)))
+                .Select(member => member.SymbolKey)));
+            var missing = Assert.Throws<ArchitectorDataException>(() => repository.DryRunSemanticPlan(new ArchitectorSemanticPlan
+            {
+                nodeContracts = { new ArchitectorPlanNodeContract
+                {
+                    layer = layerId, node = "Contract",
+                    members = new List<ArchitectorPlanMember> { new() { name = "Register", parameters = new List<string> { "Int32" } } }
+                } }
+            }, typeIndex: index));
+            Assert.That(missing.Message, Does.Contain("Register").And.Contain("\"parameters\": [\"Object\"]"));
+        }
+
+        [TestCase("System.Single", "Single")]
+        [TestCase("System.Collections.Generic.List`1[System.Int32]", "List")]
+        [TestCase("System.Collections.Generic.Dictionary`2[System.String,System.Collections.Generic.List`1[System.Int32]]", "Dictionary")]
+        [TestCase("ref:Sample.Outer+Inner", "ref:Inner")]
+        [TestCase("System.Int32[]", "Int32[]")]
+        [TestCase("System.Int32[,]", "Int32[,]")]
+        [TestCase("System.Collections.Generic.List`1[System.Int32][]", "List[]")]
+        [TestCase("!!0", "!!0")]
+        public void MemberReferencesShortenParameterTypes(string identity, string expected)
+        {
+            Assert.That(ArchitectorMemberReferences.ShortName(identity), Is.EqualTo(expected));
+        }
+
+        [Test]
         public void ManualNodeResolvesItsBaseTypeByKey()
         {
             var baseType = index.Types.Single(candidate => candidate.MetadataName == typeof(DeclarationContract).FullName);

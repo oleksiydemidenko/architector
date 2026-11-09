@@ -21,9 +21,9 @@ public static partial class McpServer
         new("facts evidence", "facts evidence [--layer L] [--pair \"A -> B\"] [--status undeclared|cycle|unevidenced] [--include references|owners|intra]",
             "Every reference between layers, grouped by pair with declared, undeclared, cycle and unevidenced status; the same totals as DependencyEvidence. Also the active rules and rule suggestions.",
             false, new[] { "layer", "pair", "status", "include", "offset", "limit", "output" }),
-        new("facts layer", "facts layer <layer> [--type T]",
-            "A layer's files and types, references to and from other layers with type pairs, and node candidates with file:line. --type gives one type's public members and project-rule facts.",
-            false, new[] { "type", "offset", "limit", "candidates", "output" }),
+        new("facts layer", "facts layer <layer> [--type T [--section reads|writes|uses|subscribes|unsubscribes|assigns|lifecycle|wiring]]",
+            "A layer's files and types, references to and from other layers with type pairs, node candidates with file:line, and how its scripts are wired in prefabs, scenes and assets (wired, unwired, test_only). --type gives one type's public members with their member_ref for plans, project-rule facts, behaviour facts (what it reads, writes, subscribes to, assigns elsewhere, its Unity callbacks) and wiring places; --section pages one of them. A layer is its id, full path or a unique trailing part of the path.",
+            false, new[] { "type", "section", "offset", "limit", "candidates", "output" }),
         new("facts what-if", "facts what-if --move <Type|Assets/file.cs|Assets/folder>=<Layer> [--move ...]",
             "What moving types, files or folders to other layers would change: undeclared pairs and cycles added and removed, relationships that would lose their evidence. Changes nothing.",
             false, new[] { "move", "output" }),
@@ -33,8 +33,10 @@ public static partial class McpServer
             "Any architector_query action through the open Unity Editor, for example: query layer_graph --target Core/Input --detail summary.",
             true, new[] { "any architector_query parameter" }),
         new("edit", "edit <action> [--plan plan.json] [--<parameter> <value>]...",
-            "Any architector_edit action through the open Unity Editor, for example: edit dry_run_plan --plan plan.json. --plan takes a file or JSON text.",
-            true, new[] { "plan", "any architector_edit parameter" }),
+            "Any architector_edit action through the open Unity Editor, for example: edit dry_run_plan --plan plan.json. --plan takes a file or JSON text. "
+            + "approve_layers needs --approve_changes true for layers changed since their last approval. implements and extends are labels on a dependency relationship (kind dependency, label implements), not relationship kinds. "
+            + "dry_run_plan lists permissions_lost: layer pairs the plan leaves without any dependency, with their code_references. set_standalone --target <layer> --node <node> --reason <why> marks a linked node that has no relationship on purpose.",
+            true, new[] { "plan", "approve_changes", "work_token", "expected_revision", "any architector_edit parameter" }),
         new("status", "status", "The project, its Architector data and whether the Unity Editor is reachable.", false, Array.Empty<string>()),
         new("doctor", "doctor", "Checks everything the tools need and says what to fix: project, data, code index, Editor, package, agent skills.", false, Array.Empty<string>()),
         new("commands", "commands", "Every command as JSON, for tools.", false, Array.Empty<string>()),
@@ -47,6 +49,19 @@ public static partial class McpServer
     private static readonly string[] CliWords = { "facts", "query", "edit", "status", "doctor", "commands", "skill", "help", "--help", "-h" };
 
     private static bool IsCliCommand(string word) => CliWords.Contains(word);
+
+    // A command line call has a command word among its positional arguments, wherever the options stand
+    // ("--project X status" as well as "status --project X"). A positional word that is neither a command nor an
+    // existing folder is a mistyped command, answered as one, so the binary never starts the silent server for it.
+    private static bool IsCliInvocation(string[] args)
+    {
+        if (args.Length > 0 && IsCliCommand(args[0]))
+            return true;
+        var (positional, _) = ParseArguments(args);
+        if (positional.Count == 0)
+            return false;
+        return IsCliCommand(positional[0]) || !Directory.Exists(positional[0]);
+    }
 
     private static bool pretty;
 
@@ -95,9 +110,10 @@ public static partial class McpServer
             }
             return Fail("unknown_command", $"Unknown command '{positional[0]}'. Commands: {string.Join(", ", CliCommands.Select(command => command.Name))}.", ExitUsage);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidOperationException)
+        catch (Exception exception)
         {
-            return Fail("internal_error", exception.Message, ExitInternal);
+            // Every failure is reported as JSON with exit code 1; the command line never ends without output.
+            return Fail("internal_error", $"{exception.GetType().Name}: {exception.Message}", ExitInternal);
         }
     }
 
@@ -125,7 +141,7 @@ public static partial class McpServer
                 if (positional.Count < 3)
                     return Fail("usage", "Usage: architector-mcp facts layer <layer> [--type T]", ExitUsage);
                 arguments["target"] = positional[2];
-                Copy("type", "offset", "limit", "candidates", "output");
+                Copy("type", "section", "offset", "limit", "candidates", "output");
                 break;
             case "dump":
                 action = "layer_dump";
@@ -238,6 +254,9 @@ public static partial class McpServer
         ("codex", Path.Combine(project, ".agents", "skills", SkillName))
     };
 
+    private const string PackageWorkflowLink = "../../Documentation~/Workflow.md";
+    private const string InstalledWorkflowLink = "Workflow.md";
+
     private static int Skill(List<string> positional, Dictionary<string, List<string>> options)
     {
         var sub = positional.Count > 1 ? positional[1] : string.Empty;
@@ -272,8 +291,17 @@ public static partial class McpServer
                 {
                     var target = Path.Combine(folder, Path.GetRelativePath(source, file));
                     Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                    File.Copy(file, target, true);
+                    if (file.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+                        File.WriteAllText(target, File.ReadAllText(file).Replace(PackageWorkflowLink, InstalledWorkflowLink));
+                    else
+                        File.Copy(file, target, true);
                 }
+                // The skill links the package's Workflow by a path that only resolves inside the package, so the
+                // Workflow is installed next to the skill and the link points there.
+                var workflow = Path.Combine(package.Value.Path, "Documentation~", "Workflow.md");
+                if (File.Exists(workflow))
+                    File.WriteAllText(Path.Combine(folder, InstalledWorkflowLink),
+                        File.ReadAllText(workflow).Replace("../Skills~/" + SkillName + "/SKILL.md", "SKILL.md"));
                 File.WriteAllText(stamp, package.Value.Version);
                 status = ours ? "updated" : "installed";
             }

@@ -40,8 +40,8 @@ namespace Architector.Editor
         public ArchitectorPaths Paths { get; }
         public ArchitectorProjectDocument Project { get; private set; }
         public ArchitectorSettingsDocument Settings { get; private set; }
-        // Kept in the Editor session, so a script reload continues the count instead of starting again at 1
-        // (agents compare it with expected_revision).
+        // Kept in the Editor session and in Library/Architector/revision.txt, so a script reload, an Editor restart or
+        // a package update continues the count instead of starting again at 1 (agents compare it with expected_revision).
         public int Revision
         {
             get => revision;
@@ -49,11 +49,37 @@ namespace Architector.Editor
             {
                 revision = value;
                 UnityEditor.SessionState.SetInt(RevisionSessionKey, value);
+                WriteStoredRevision(value);
             }
         }
 
         private int revision;
         private string RevisionSessionKey => "Architector.Revision:" + Paths.RepositoryRoot;
+        private string RevisionPath => System.IO.Path.Combine(Paths.UserStateRoot, "revision.txt");
+
+        private int ReadStoredRevision()
+        {
+            try
+            {
+                return System.IO.File.Exists(RevisionPath) && int.TryParse(System.IO.File.ReadAllText(RevisionPath).Trim(), out var stored) ? stored : 0;
+            }
+            catch (Exception exception) when (exception is System.IO.IOException or UnauthorizedAccessException)
+            {
+                return 0;
+            }
+        }
+
+        private void WriteStoredRevision(int value)
+        {
+            try
+            {
+                System.IO.Directory.CreateDirectory(Paths.UserStateRoot);
+                System.IO.File.WriteAllText(RevisionPath, value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+            catch (Exception exception) when (exception is System.IO.IOException or UnauthorizedAccessException)
+            {
+            }
+        }
         public IReadOnlyDictionary<string, double> LastCommitPhases => commitPhases.Last;
         private SortedDictionary<string, string> sessionFiles;
         private SortedDictionary<string, string> committedFiles;
@@ -72,7 +98,7 @@ namespace Architector.Editor
             EnsureStorageExists();
             var files = ReadDiskFiles(out var stamps);
             Install(ArchitectorStorageCodec.Decode(files), ReadSettings(files), files, stamps);
-            revision = Math.Max(revision, UnityEditor.SessionState.GetInt(RevisionSessionKey, 0));
+            revision = Math.Max(Math.Max(revision, UnityEditor.SessionState.GetInt(RevisionSessionKey, 0)), ReadStoredRevision());
             Revision++;
         }
 
@@ -1751,10 +1777,10 @@ namespace Architector.Editor
             if (nextSettings.rules.dependencyCycles == ArchitectorDependencyCyclePolicy.Reject
                 && Settings.rules.dependencyCycles != ArchitectorDependencyCyclePolicy.Reject)
             {
-                var cycle = FindDependencyCycles().FirstOrDefault();
+                var cycle = FindDependencyCycles().FirstOrDefault(candidate => candidate.CrossesLayers);
                 if (cycle != null)
                     throw new ArchitectorDataException(
-                        $"Dependency cycles cannot be rejected while the graph contains one: {DescribeDependencyCycle(cycle)}. Remove the cycles first.");
+                        $"Dependency cycles cannot be rejected while the graph contains one across layers: {DescribeDependencyCycle(cycle)}. Remove the cycles first.");
             }
             Commit(name, null, null, nextSettings, false, notifyWhenUnchanged: true);
         }

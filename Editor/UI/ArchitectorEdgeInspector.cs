@@ -64,7 +64,7 @@ namespace Architector.Editor
                     edge.kind != ArchitectorEdgeKinds.Dependency
                         ? "Runtime relationships may be reversed or cyclic."
                         : repository.Settings.rules.dependencyCycles == ArchitectorDependencyCyclePolicy.Reject
-                            ? "Dependency relationships must remain acyclic."
+                            ? "Dependency relationships between layers must remain acyclic; a cycle inside one layer is reported, not rejected."
                             : repository.FindDependencyCycles().Any(cycle => cycle.Contains(edge))
                                 ? "This dependency is part of a cycle. The project reports cycles instead of rejecting them."
                                 : "The project reports dependency cycles instead of rejecting them.",

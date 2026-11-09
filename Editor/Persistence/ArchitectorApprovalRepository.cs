@@ -103,7 +103,7 @@ namespace Architector.Editor
                     throw new ArchitectorDataException(
                         $"Layer '{FindLayer(id)?.name ?? id}' has {link.Count()} relationship(s) with '{FindLayer(link.Key)?.name ?? link.Key}', where checks are off. Remove them before approving.");
             }
-            ArchitectorApproval.EnsureLayersCanBeApproved(Project, layers, ids);
+            ArchitectorApproval.EnsureLayersCanBeApproved(Project, layers, ids, Settings);
             var hashes = ids.ToDictionary(
                 id => id,
                 id =>

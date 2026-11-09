@@ -60,6 +60,7 @@ public static class Program
         public string Path = "";
         public string Purpose = "";
         public List<string> Folders = new();
+        public List<string> Namespaces = new();
         public List<(string Title, string Type, List<string> Files)> Nodes = new();
         public HashSet<string> Connected = new();
         public JsonNode Raw = null!;
@@ -134,6 +135,7 @@ public static class Program
                 var groupPath = GroupPath((string?)node["parentGroupId"] ?? "");
                 layer.Path = groupPath.Length > 0 ? groupPath + "/" + layer.Name : layer.Name;
                 layer.Folders.AddRange(node["scope"]?["folders"]?.AsArray().Select(item => ((string)item!).TrimEnd('/')) ?? Enumerable.Empty<string>());
+                layer.Namespaces.AddRange(node["scope"]?["namespaces"]?.AsArray().Select(item => (string)item!).Where(item => item.Length > 0) ?? Enumerable.Empty<string>());
                 foreach (var item in node["nodes"]?.AsArray() ?? new JsonArray())
                 {
                     var type = item!["type"];
@@ -179,6 +181,8 @@ public static class Program
         public string? File;
         public List<string> Types = new();
         public List<(Layer Layer, string Reason)> Layers = new();
+        // Nodes linked to the queried type that sit in another layer than the one whose scope owns its file.
+        public List<(Layer Layer, string Node)> LinkedElsewhere = new();
         public List<(string Path, string Matches)> Documents = new();
         public Model Model = null!;
         public bool Found => Layers.Count > 0 || Documents.Count > 0;
@@ -201,18 +205,37 @@ public static class Program
                     .Select(file => Path.GetRelativePath(root, file).Replace('\\', '/')).FirstOrDefault();
             }
 
+            // The layer whose code scope owns the file answers first, by the rule of the code facts: the longest folder or
+            // namespace scope wins, and an equal tie names every tied layer. A node linked to the type elsewhere is
+            // named next to it, because the graph and the code disagree there.
+            if (route.File != null)
+            {
+                var space = route.File.EndsWith(".cs") && System.IO.File.Exists(Path.Combine(root, route.File))
+                    ? Regex.Match(System.IO.File.ReadAllText(Path.Combine(root, route.File)), @"^\s*namespace\s+([\w.]+)", RegexOptions.Multiline).Groups[1].Value
+                    : string.Empty;
+                var scoped = model.Layers
+                    .Select(layer =>
+                    {
+                        var folder = layer.Folders.Where(folder => route.File == folder || route.File.StartsWith(folder + "/")).OrderByDescending(folder => folder.Length).FirstOrDefault();
+                        var scope = layer.Namespaces.Where(scope => space.Length > 0 && (space == scope || space.StartsWith(scope + "."))).OrderByDescending(scope => scope.Length).FirstOrDefault();
+                        var length = Math.Max(folder?.Length ?? 0, scope?.Length ?? 0);
+                        return (Layer: layer, Length: length, Reason: (folder?.Length ?? 0) >= (scope?.Length ?? 0) ? "scope " + folder : "namespace scope " + scope);
+                    })
+                    .Where(entry => entry.Length > 0).OrderByDescending(entry => entry.Length).ToList();
+                route.Layers.AddRange(scoped.TakeWhile(entry => entry.Length == scoped[0].Length).Select(entry => (entry.Layer, entry.Reason)));
+            }
             foreach (var layer in model.Layers)
             {
                 var node = layer.Nodes.FirstOrDefault(node => (route.File != null && node.Files.Contains(route.File)) || route.Types.Contains(node.Type));
-                if (node.Title != null)
+                if (node.Title == null)
+                    continue;
+                var owned = route.Layers.FindIndex(entry => entry.Layer == layer);
+                if (owned >= 0)
+                    route.Layers[owned] = (layer, route.Layers[owned].Reason + ", node " + node.Title);
+                else if (route.File == null || !route.Layers.Any(entry => entry.Reason.StartsWith("scope", StringComparison.Ordinal) || entry.Reason.StartsWith("namespace", StringComparison.Ordinal)))
                     route.Layers.Add((layer, "node " + node.Title));
-            }
-            if (route.File != null && route.Layers.Count == 0)
-            {
-                var scoped = model.Layers
-                    .Select(layer => (Layer: layer, Folder: layer.Folders.Where(folder => route.File == folder || route.File.StartsWith(folder + "/")).OrderByDescending(folder => folder.Length).FirstOrDefault()))
-                    .Where(entry => entry.Folder != null).OrderByDescending(entry => entry.Folder!.Length).ToList();
-                route.Layers.AddRange(scoped.TakeWhile(entry => entry.Folder!.Length == scoped[0].Folder!.Length).Select(entry => (entry.Layer, "scope " + entry.Folder)));
+                else
+                    route.LinkedElsewhere.Add((layer, node.Title));
             }
 
             var terms = new List<(string Label, Regex Pattern)>();
@@ -264,6 +287,8 @@ public static class Program
                     foreach (var line in Model.Summary(layer))
                         text.AppendLine("    " + line);
             }
+            foreach (var (layer, node) in LinkedElsewhere)
+                text.AppendLine($"  linked node in another layer: {layer.Path}::{node} (the file belongs to the layer above; conformance reports linked_node_outside_scope)");
             foreach (var (path, matches) in Documents)
                 text.AppendLine($"  read: {path} ({matches})");
         }
@@ -284,6 +309,7 @@ public static class Program
                     connected = entry.Layer.Connected.Select(id => Model.Layers.FirstOrDefault(other => other.Id == id)?.Path).Where(path => path != null).Order(StringComparer.Ordinal),
                     design = Model.DigestSections.ContainsKey(entry.Layer.Path) ? null : Model.Summary(entry.Layer)
                 }),
+                linked_elsewhere = LinkedElsewhere.Select(entry => new { layer = entry.Layer.Path, node = entry.Node }),
                 documents = Documents.Select(entry => new { path = entry.Path, matches = entry.Matches })
             };
         }

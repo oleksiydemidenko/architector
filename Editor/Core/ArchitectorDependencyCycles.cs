@@ -35,6 +35,9 @@ namespace Architector.Editor
         public IReadOnlyList<ArchitectorEdgeRecord> Path { get; }
         public IReadOnlyList<string> LayerIds { get; }
 
+        // The Reject rule is about dependency direction between layers; a cycle inside one layer is only reported.
+        public bool CrossesLayers => LayerIds.Count > 1;
+
         public bool Contains(ArchitectorEdgeRecord relationship) =>
             string.Equals(relationship.kind, ArchitectorEdgeKinds.Dependency, StringComparison.Ordinal)
             && memberKeys.Contains(new ArchitectorEndpoint(relationship.sourceLayerId, relationship.sourceNodeId).Key)

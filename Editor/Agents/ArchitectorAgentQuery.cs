@@ -139,7 +139,7 @@ namespace Architector.Editor.Agents
                 window_locking = ArchitectorAgentPreferences.Current.LockWindowsDuringAgentWork,
                 dependency_cycles = CyclePolicyName(repository),
                 query_actions = new[] { "capabilities", "work_status", "project_summary", "group_contents", "layer_graph", "node", "relationships", "dependency_path", "setup_check", "approval_status", "baseline_diff", "conformance", "find", "type_search", "type_contract", "validate" },
-                edit_actions = new[] { "begin_work", "resume_work", "end_work", "approve_layers", "revoke_approvals", "revert_to_approved", "dry_run", "apply", "dry_run_plan", "apply_plan", "arrange_layer", "arrange_changed_layers", "relink_node", "validate_external", "reload_external" },
+                edit_actions = new[] { "begin_work", "resume_work", "end_work", "approve_layers", "revoke_approvals", "revert_to_approved", "dry_run", "apply", "dry_run_plan", "apply_plan", "arrange_layer", "arrange_changed_layers", "relink_node", "set_standalone", "validate_external", "reload_external" },
                 relationship_kinds = ArchitectorEdgeKinds.All,
                 semantic_plan = new
                 {
@@ -159,13 +159,21 @@ namespace Architector.Editor.Agents
                     edgeChanges = new[] { "edge:string", "kind:string", "label:string?" },
                     layerPurposes = new[] { "layer:string", "purpose:string" },
                     layerScopes = new[] { "layer:string", "folders:string[]", "namespaces:string[]" },
-                    deletions = new[] { "kind:entry|node|edge", "target:string", "layer:string?" },
+                    deletions = new[] { "kind:entry|node|edge", "target:string", "layer:string?", "relationship:string?", "label:string?" },
                     rules = new[]
                     {
                         "Every created entity has one plan-unique reference.",
                         "References may also be existing immutable IDs or Explorer paths such as Core/Player/Movement. A node may be named by its title, \"Node Title\" or \"Layer/Path::Node Title\"; an ambiguous title fails with the candidate ids.",
                         "Code facts come from the architector-mcp server without Unity: code_evidence (every cross-layer reference, owners, same-layer references), layer_facts (a layer's files, types, references by layer and node candidates with file:line), scope_what_if (what moving types, files or folders to another layer would change), layer_dump (nodes and relationships with ids, paged) and lookup (names to layer, node and member ids). Before reading a layer's code, call layer_facts and read only the lines it points to; before changing a scope, call scope_what_if. Write responsibilities yourself from the code.",
                         "nodeContracts on a linked node: an omitted members, baseType or interfaces keeps what the node has; an explicit empty list clears it. dry_run_plan lists in warnings every member and interface a plan removes.",
+                        "A linked member may be given as member_ref {kind, name, parameters} from layer_facts with type instead of a symbolKey; parameters are short type names (Single, List, ref:Clock, Int32[]); without parameters any overload of the name matches; an ambiguous or missing member fails with the candidates.",
+                        "deletions take names like additions: a node as \"Layer/Path::Node Title\" (layer optional), a relationship by id or as \"Layer::Source -> Layer::Target\" with optional relationship (kind) and label.",
+                        "dry_run_plan returns permissions_lost: layer pairs the plan leaves without any dependency relationship; the server adds code_references, the references in code that would become undeclared.",
+                        "Layer references accept an id, the full Explorer path or a unique trailing part of it (Group/Layer); an ambiguous one fails with layer_ambiguous and candidates.",
+                        "A linked node without relationships blocks approval. When its type really stands alone (for example wired only in scenes), set_standalone with target, node and a reason from the evidence turns that into a standalone_node warning; an empty reason clears it. The mark is stored in the settings and changes no layer file. Never add a relationship only to satisfy the rule.",
+                        "The Reject cycle rule applies to dependency cycles across layers; a cycle inside one layer is allowed and reported as a dependency_cycle warning.",
+                        "implements and extends are labels on a dependency relationship, not relationship kinds.",
+                        "linked_node_outside_scope warns when a linked node sits outside the layer whose code scope owns its type; architector_route and the code facts place the type by the scope owner.",
                         "Group and layer names are unique among siblings; the path identifies an entry.",
                         "A layer with an approval baseline shows only Portals to other approved layers; layer_graph marks the others visible_in_layer=false. Hidden Portals remain canonical and validated.",
                         "Layer code scope (layerScopes: folders or single files, and namespaces; the most specific entry wins) maps code to layers for the dependency evidence tool; it does not affect approval. Run: dotnet run --project \"" + ArchitectorPackagePaths.DependencyEvidenceProject + "\" -- <repository root>.",
@@ -393,9 +401,9 @@ namespace Architector.Editor.Agents
         internal static ArchitectorAgentResult LayerFailure(ArchitectorRepository repository, string target)
         {
             var text = target?.Trim() ?? string.Empty;
-            var exact = repository.Project.layers
-                .Where(layer => string.Equals(layer.name, text, StringComparison.OrdinalIgnoreCase))
-                .Select(layer => repository.GetEntryPath(layer.id))
+            var exact = ArchitectorEntryPaths.MatchLayers(repository.Project, text)
+                .Select(repository.GetEntryPath)
+                .Take(MaxCandidates)
                 .ToArray();
             if (exact.Length > 1)
                 return ArchitectorAgentResult.Fail("layer_ambiguous", new { target, candidates = exact });
@@ -985,8 +993,7 @@ namespace Architector.Editor.Agents
                 return null;
             return repository.FindLayer(target)
                    ?? repository.FindLayer(ArchitectorEntryPaths.Resolve(repository.Project, target))
-                   ?? SingleOrNull(repository.Project.layers.Where(layer =>
-                       string.Equals(layer.name, target, StringComparison.OrdinalIgnoreCase)));
+                   ?? repository.FindLayer(ArchitectorEntryPaths.ResolveLayer(repository.Project, target));
         }
 
         private static T SingleOrNull<T>(IEnumerable<T> candidates) where T : class

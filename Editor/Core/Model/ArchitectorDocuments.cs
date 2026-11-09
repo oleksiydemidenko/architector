@@ -123,6 +123,17 @@ namespace Architector.Editor
     {
         public ArchitectorDependencyCyclePolicy dependencyCycles;
         public List<string> uncheckedGroupIds = new();
+        // Linked nodes that have no relationship on purpose, with the reason. Kept here and not in the layer files, so
+        // marking a node changes no layer file and no approval.
+        public List<ArchitectorStandaloneNodeRecord> standaloneNodes = new();
+    }
+
+    [Serializable]
+    public sealed class ArchitectorStandaloneNodeRecord
+    {
+        public string layerId = string.Empty;
+        public string nodeId = string.Empty;
+        public string reason = string.Empty;
     }
 
     [Serializable]

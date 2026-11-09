@@ -430,6 +430,13 @@ namespace Architector.Editor
                     }
                 }
             }
+            EditorGUILayout.Space(4f);
+            var standalone = repository.StandaloneReason(layerId, node.id);
+            var editedStandalone = EditorGUILayout.DelayedTextField(
+                new GUIContent("Standalone", "Why this linked node has no relationship on purpose, for example a type wired only in scenes. With a reason, the missing relationship is a warning and does not block approval. Clear the text to remove the mark."),
+                standalone);
+            if (!string.Equals(editedStandalone, standalone, StringComparison.Ordinal))
+                execute(() => repository.SetStandaloneNode(layerId, node.id, editedStandalone));
             EditorGUILayout.Space(8f);
             using (new EditorGUILayout.HorizontalScope())
             {

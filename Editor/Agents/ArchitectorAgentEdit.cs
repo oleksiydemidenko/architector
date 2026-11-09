@@ -157,6 +157,28 @@ namespace Architector.Editor.Agents
                         skipped
                     });
                 }
+                if (action == "set_standalone")
+                {
+                    var stale = CheckRevision(repository, parameters.expected_revision, true);
+                    if (stale != null)
+                        return stale;
+                    aiWork.RequireMutationToken(parameters.work_token);
+                    var layer = ArchitectorAgentQuery.ResolveLayer(repository, @params["target"]?.Value<string>());
+                    if (layer == null)
+                        return ArchitectorAgentQuery.LayerFailure(repository, @params["target"]?.Value<string>());
+                    var reference = @params["node"]?.Value<string>()?.Trim() ?? string.Empty;
+                    var nodes = repository.LoadLayer(layer.id).semantic.nodes;
+                    var node = nodes.FirstOrDefault(candidate => candidate.id == reference);
+                    var titled = nodes.Where(candidate => string.Equals(candidate.title, reference.Split(new[] { "::" }, StringSplitOptions.None).Last().Trim(), StringComparison.OrdinalIgnoreCase)).ToArray();
+                    node ??= titled.Length == 1 ? titled[0] : null;
+                    if (node == null)
+                        return ArchitectorAgentResult.Fail(titled.Length > 1 ? "node_ambiguous" : "node_not_found", new { target = layer.name, node = reference, candidates = titled.Select(candidate => candidate.id).ToArray() });
+                    var reason = @params["reason"]?.Value<string>() ?? string.Empty;
+                    repository.SetStandaloneNode(layer.id, node.id, reason);
+                    return ArchitectorAgentResult.Ok(
+                        reason.Trim().Length > 0 ? $"Node '{node.title}' is marked standalone." : $"The standalone mark of '{node.title}' is cleared.",
+                        new { revision = repository.Revision, node = node.id, standalone = repository.StandaloneReason(layer.id, node.id) });
+                }
                 if (action == "relink_node")
                 {
                     var stale = CheckRevision(repository, parameters.expected_revision, true);
@@ -250,7 +272,7 @@ namespace Architector.Editor.Agents
                 {
                     return ArchitectorAgentResult.Fail("unsupported_action", new
                     {
-                        message = "Valid actions: begin_work, resume_work, end_work, approve_layers, revoke_approvals, revert_to_approved, dry_run, apply, dry_run_plan, apply_plan, arrange_layer, arrange_changed_layers, relink_node, validate_external, reload_external."
+                        message = "Valid actions: begin_work, resume_work, end_work, approve_layers, revoke_approvals, revert_to_approved, dry_run, apply, dry_run_plan, apply_plan, arrange_layer, arrange_changed_layers, relink_node, set_standalone, validate_external, reload_external."
                     });
                 }
 
@@ -478,6 +500,15 @@ namespace Architector.Editor.Agents
                 approval_impacts = ApprovalImpacts(result.Batch.ApprovalImpacts),
                 references = result.References,
                 warnings = result.Warnings.Count == 0 ? null : result.Warnings,
+                permissions_lost = result.PermissionsLost.Count == 0 ? null : result.PermissionsLost.Select(item => (object)new
+                {
+                    source = item.SourcePath,
+                    target = item.TargetPath,
+                    source_layer_id = item.SourceLayerId,
+                    target_layer_id = item.TargetLayerId,
+                    relationships_removed = item.RelationshipsRemoved,
+                    message = $"The plan removes the last dependency from '{item.SourcePath}' to '{item.TargetPath}'; code that references it becomes undeclared."
+                }).ToArray(),
                 can_undo = repository.CanUndo,
                 next_undo = repository.NextUndoName
             });

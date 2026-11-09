@@ -65,6 +65,10 @@ namespace Architector.Editor
         public string kind = "method";
         public string declaration = string.Empty;
         public string symbolKey = string.Empty;
+        // A linked member may be named instead of keyed: name and, for overloads, the short parameter type names the
+        // code facts list (member_ref). Without parameters any overload with the name matches.
+        public string name = string.Empty;
+        public List<string> parameters;
     }
 
     [Serializable]
@@ -174,6 +178,29 @@ namespace Architector.Editor
         public string kind = string.Empty;
         public string target = string.Empty;
         public string layer = string.Empty;
+        // For an edge named by its nodes ("Layer::Source -> Layer::Target"): the relationship kind and label, when the
+        // node pair alone does not select one relationship.
+        public string relationship = string.Empty;
+        public string label = string.Empty;
+    }
+
+    // A layer pair whose last dependency relationship a plan removes: code between the layers would then be undeclared.
+    public sealed class ArchitectorLostPermission
+    {
+        public ArchitectorLostPermission(string sourceLayerId, string sourcePath, string targetLayerId, string targetPath, int relationshipsRemoved)
+        {
+            SourceLayerId = sourceLayerId;
+            SourcePath = sourcePath;
+            TargetLayerId = targetLayerId;
+            TargetPath = targetPath;
+            RelationshipsRemoved = relationshipsRemoved;
+        }
+
+        public string SourceLayerId { get; }
+        public string SourcePath { get; }
+        public string TargetLayerId { get; }
+        public string TargetPath { get; }
+        public int RelationshipsRemoved { get; }
     }
 
     public sealed class ArchitectorSemanticPlanResult
@@ -181,12 +208,16 @@ namespace Architector.Editor
         public ArchitectorSemanticPlanResult(
             ArchitectorCanonicalBatchResult batch,
             IReadOnlyDictionary<string, string> references,
-            IReadOnlyList<string> warnings = null)
+            IReadOnlyList<string> warnings = null,
+            IReadOnlyList<ArchitectorLostPermission> permissionsLost = null)
         {
             Batch = batch;
             References = references;
             Warnings = warnings ?? Array.Empty<string>();
+            PermissionsLost = permissionsLost ?? Array.Empty<ArchitectorLostPermission>();
         }
+
+        public IReadOnlyList<ArchitectorLostPermission> PermissionsLost { get; }
 
         public ArchitectorCanonicalBatchResult Batch { get; }
         public IReadOnlyDictionary<string, string> References { get; }
@@ -207,7 +238,33 @@ namespace Architector.Editor
             ArchitectorTypeIndex typeIndex = null)
         {
             var candidate = BuildLocatedSemanticPlan(plan, typeIndex);
-            return new ArchitectorSemanticPlanResult(CommitSemanticPlan(candidate, actionName, true), candidate.references, planWarnings.ToArray());
+            var lost = PermissionsLostBy(candidate);
+            return new ArchitectorSemanticPlanResult(CommitSemanticPlan(candidate, actionName, true), candidate.references, planWarnings.ToArray(), lost);
+        }
+
+        // Layer pairs allowed by at least one cross-layer dependency before the plan and by none after it.
+        private IReadOnlyList<ArchitectorLostPermission> PermissionsLostBy(SemanticPlanCandidate candidate)
+        {
+            static Dictionary<(string, string), HashSet<string>> Allowed(IEnumerable<ArchitectorEdgeRecord> edges) => edges
+                .Where(edge => edge.kind == ArchitectorEdgeKinds.Dependency && edge.sourceLayerId != edge.targetLayerId)
+                .GroupBy(edge => (edge.sourceLayerId, edge.targetLayerId))
+                .ToDictionary(group => group.Key, group => group.Select(edge => edge.id).ToHashSet(StringComparer.Ordinal));
+            if (Project.layers.Any(layer => HasLayerLoadError(layer.id)))
+                return Array.Empty<ArchitectorLostPermission>();
+            var before = Allowed(Project.layers.SelectMany(layer => PeekLayer(layer.id).semantic.edges));
+            var after = Allowed(candidate.project.layers.SelectMany(layer =>
+                (candidate.documents.TryGetValue(layer.id, out var changed) ? changed : PeekLayer(layer.id)).semantic.edges));
+            return before
+                .Where(pair => !after.ContainsKey(pair.Key)
+                               && candidate.project.layers.Any(layer => layer.id == pair.Key.Item1)
+                               && candidate.project.layers.Any(layer => layer.id == pair.Key.Item2))
+                .Select(pair => new ArchitectorLostPermission(
+                    pair.Key.Item1, ArchitectorEntryPaths.Describe(Project, pair.Key.Item1),
+                    pair.Key.Item2, ArchitectorEntryPaths.Describe(Project, pair.Key.Item2),
+                    pair.Value.Count))
+                .OrderBy(item => item.SourcePath, StringComparer.Ordinal)
+                .ThenBy(item => item.TargetPath, StringComparer.Ordinal)
+                .ToArray();
         }
 
         public ArchitectorSemanticPlanResult ApplySemanticPlan(
@@ -607,6 +664,8 @@ namespace Architector.Editor
             foreach (var item in deletions)
             {
                 var edgeId = ResolveReference(references, item.target);
+                if (edgeId.Contains("->", StringComparison.Ordinal))
+                    edgeId = ResolveEdgeByNodes(project, documents, references, item);
                 if (!deleted.Add(edgeId))
                     throw new ArchitectorDataException($"Relationship reference '{item.target}' is deleted more than once in one semantic plan.");
                 var owner = project.layers.FirstOrDefault(layer =>
@@ -631,7 +690,8 @@ namespace Architector.Editor
             var deletedPortalLayerPairs = new List<(string first, string second)>();
             foreach (var item in items)
             {
-                var layerId = ResolveLayerReference(project, references, item.layer);
+                var (layerPart, _) = SplitNodeName(item.target);
+                var layerId = ResolveLayerReference(project, references, string.IsNullOrWhiteSpace(item.layer) ? layerPart : item.layer);
                 var layerDocuments = GetPlanDocuments(layerId, documents);
                 var nodeId = ResolveNodeReference(layerDocuments.semantic, references, item.target);
                 if (!idsByLayer.TryGetValue(layerId, out var ids))
@@ -819,8 +879,7 @@ namespace Architector.Editor
             var available = typeIndex.GetMembers(result.type).ToDictionary(member => member.SymbolKey, StringComparer.Ordinal);
             foreach (var planned in item.members ?? new List<ArchitectorPlanMember>())
             {
-                if (string.IsNullOrWhiteSpace(planned?.symbolKey) || !available.TryGetValue(planned.symbolKey, out var member))
-                    throw new ArchitectorDataException($"Linked member '{planned?.symbolKey}' is not available on type '{indexedType.FullDisplayName}'.");
+                var member = ResolvePlannedMember(planned, available, indexedType.FullDisplayName);
                 result.members.Add(new ArchitectorMemberRecord
                 {
                     id = NewId("member"),
@@ -831,6 +890,33 @@ namespace Architector.Editor
             }
             result.members = ArchitectorMemberOrder.SortStable(result.members);
             return result;
+        }
+
+        // A linked member by symbolKey, or by name with an optional kind and parameter list (member_ref).
+        private static ArchitectorIndexedMember ResolvePlannedMember(
+            ArchitectorPlanMember planned,
+            IReadOnlyDictionary<string, ArchitectorIndexedMember> available,
+            string owner)
+        {
+            if (planned == null)
+                throw new ArchitectorDataException($"A planned member of '{owner}' is empty.");
+            if (!string.IsNullOrWhiteSpace(planned.symbolKey))
+                return available.TryGetValue(planned.symbolKey, out var keyed)
+                    ? keyed
+                    : throw new ArchitectorDataException($"Linked member '{planned.symbolKey}' is not available on '{owner}'.");
+            if (string.IsNullOrWhiteSpace(planned.name))
+                throw new ArchitectorDataException($"A linked member of '{owner}' needs a symbolKey or a name (member_ref from layer_facts).");
+            var matches = available.Values.Where(member => ArchitectorMemberReferences.Matches(member, planned.kind, planned.name, planned.parameters)).ToArray();
+            // kind defaults to "method", so a name given without a kind also finds a property, field or event.
+            if (matches.Length == 0)
+                matches = available.Values.Where(member => ArchitectorMemberReferences.Matches(member, null, planned.name, planned.parameters)).ToArray();
+            if (matches.Length == 1)
+                return matches[0];
+            var named = available.Values.Where(member => ArchitectorMemberReferences.Matches(member, null, planned.name, null)).Take(8).ToArray();
+            throw new ArchitectorDataException(matches.Length == 0
+                ? $"'{owner}' has no member '{planned.name}'{(planned.parameters == null ? string.Empty : $"({string.Join(", ", planned.parameters)})")}."
+                  + (named.Length == 0 ? string.Empty : $" Members with that name: {string.Join("; ", named.Select(ArchitectorMemberReferences.Describe))}.")
+                : $"Member '{planned.name}' of '{owner}' is ambiguous; add parameters: {string.Join("; ", matches.Take(8).Select(ArchitectorMemberReferences.Describe))}.");
         }
 
         private ArchitectorMemberRecord CreateDraftMember(ArchitectorPlanMember member)
@@ -939,8 +1025,7 @@ namespace Architector.Editor
                     var before = existing.members;
                     existing.members = item.members.Select(member =>
                     {
-                        if (!available.TryGetValue(member.symbolKey, out var indexed))
-                            throw new ArchitectorDataException($"Linked member '{member.symbolKey}' is not available on node '{existing.title}'.");
+                        var indexed = ResolvePlannedMember(member, available, existing.title);
                         return existingByKey.TryGetValue(indexed.SymbolKey, out var saved)
                             ? saved
                             : new ArchitectorMemberRecord
@@ -1098,6 +1183,14 @@ namespace Architector.Editor
             if (project.layers.All(layer => layer.id != id))
                 id = ArchitectorEntryPaths.Resolve(project, value);
             if (project.layers.All(layer => layer.id != id))
+            {
+                var matches = ArchitectorEntryPaths.MatchLayers(project, value);
+                if (matches.Count > 1)
+                    throw new ArchitectorDataException(
+                        $"Layer reference '{value}' is ambiguous: {string.Join(", ", matches.Select(match => ArchitectorEntryPaths.Describe(project, match)))}. Use a longer path.");
+                id = matches.Count == 1 ? matches[0] : id;
+            }
+            if (project.layers.All(layer => layer.id != id))
                 throw new ArchitectorDataException($"Layer reference '{value}' does not exist.");
             return id;
         }
@@ -1130,6 +1223,53 @@ namespace Architector.Editor
                 throw new ArchitectorDataException(
                     $"Node name '{title}' is ambiguous in the selected layer: {string.Join(", ", matches.Select(node => node.id))}. Use the node id.");
             return matches.Length == 1 ? matches[0].id : null;
+        }
+
+        // "Layer/Path::Node Title" splits into its layer part (empty without "::") and the title.
+        private static (string Layer, string Title) SplitNodeName(string value)
+        {
+            var reference = value?.Trim() ?? string.Empty;
+            var separator = reference.LastIndexOf("::", StringComparison.Ordinal);
+            return separator < 0 ? (string.Empty, reference) : (reference.Substring(0, separator).Trim(), reference.Substring(separator + 2).Trim());
+        }
+
+        // An edge named by its two nodes: "Layer::Source -> Layer::Target". A side without a layer uses the deletion's
+        // layer. The kind and label narrow the match; several matches fail with their ids.
+        private string ResolveEdgeByNodes(
+            ArchitectorProjectDocument project,
+            IDictionary<string, ArchitectorLayerDocuments> documents,
+            IReadOnlyDictionary<string, string> references,
+            ArchitectorPlanDeletion item)
+        {
+            var sides = item.target.Split(new[] { "->" }, StringSplitOptions.None);
+            if (sides.Length != 2)
+                throw new ArchitectorDataException($"Relationship reference '{item.target}' must be one id or 'Layer::Source -> Layer::Target'.");
+            (string layerId, string nodeId) Side(string side)
+            {
+                var (layerPart, _) = SplitNodeName(side);
+                var layer = string.IsNullOrWhiteSpace(layerPart) ? item.layer : layerPart;
+                if (string.IsNullOrWhiteSpace(layer))
+                    throw new ArchitectorDataException($"Relationship reference '{item.target}' needs a layer: 'Layer::Node' on each side, or the deletion's layer.");
+                var layerId = ResolveLayerReference(project, references, layer);
+                return (layerId, ResolveNodeReference(GetPlanDocuments(layerId, documents).semantic, references, side.Trim()));
+            }
+            var source = Side(sides[0]);
+            var target = Side(sides[1]);
+            var matches = project.layers
+                .SelectMany(layer => GetPlanDocuments(layer.id, documents).semantic.edges)
+                .Where(edge => edge.sourceLayerId == source.layerId && edge.sourceNodeId == source.nodeId
+                               && edge.targetLayerId == target.layerId && edge.targetNodeId == target.nodeId)
+                .Where(edge => string.IsNullOrWhiteSpace(item.relationship) || string.Equals(edge.kind, item.relationship.Trim(), StringComparison.OrdinalIgnoreCase))
+                .Where(edge => string.IsNullOrWhiteSpace(item.label) || string.Equals(edge.label, item.label.Trim(), StringComparison.OrdinalIgnoreCase))
+                .Select(edge => edge.id)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (matches.Length == 0)
+                throw new ArchitectorDataException($"No relationship matches '{item.target}'{(string.IsNullOrWhiteSpace(item.relationship) ? string.Empty : $" of kind '{item.relationship}'")}.");
+            if (matches.Length > 1)
+                throw new ArchitectorDataException(
+                    $"Relationship reference '{item.target}' matches {matches.Length} relationships: {string.Join(", ", matches)}. Add 'relationship' (kind) or 'label', or use the id.");
+            return matches[0];
         }
 
         private static string ResolveEdgeReference(

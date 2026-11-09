@@ -20,7 +20,7 @@ public static partial class McpServer
             return 0;
         }
         // With a command as its first argument the binary is the architector command line; otherwise an MCP server.
-        if (args.Length > 0 && IsCliCommand(args[0]))
+        if (IsCliInvocation(args))
             return RunCli(args);
         root = FindProject(args);
         if (root != null)
@@ -136,7 +136,7 @@ public static partial class McpServer
                     ["output"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("reply", "file"), ["description"] = "file writes the full answer under Library/Architector/facts and returns its path." }
                 })),
             Tool("architector_edit", "Change the architecture in the open Unity Editor. Call architector_query with action capabilities for the plan format and rules.", ActionSchema(
-                new[] { "begin_work", "resume_work", "end_work", "approve_layers", "revoke_approvals", "revert_to_approved", "dry_run", "apply", "dry_run_plan", "apply_plan", "arrange_layer", "arrange_changed_layers", "relink_node", "validate_external", "reload_external" },
+                new[] { "begin_work", "resume_work", "end_work", "approve_layers", "revoke_approvals", "revert_to_approved", "dry_run", "apply", "dry_run_plan", "apply_plan", "arrange_layer", "arrange_changed_layers", "relink_node", "set_standalone", "validate_external", "reload_external" },
                 new JsonObject
                 {
                     ["expected_revision"] = new JsonObject { ["type"] = "integer" },
@@ -144,9 +144,10 @@ public static partial class McpServer
                     ["work_label"] = TextParameter("What this work session does."),
                     ["plan"] = new JsonObject { ["type"] = "object", ["description"] = "A semantic plan, or {\"plan_token\": \"...\"} from dry_run_plan." },
                     ["layers"] = new JsonObject { ["type"] = "array", ["items"] = TextParameter("Layer ID.") },
-                    ["approve_changes"] = new JsonObject { ["type"] = "boolean" },
-                    ["target"] = TextParameter("Layer ID or path for arrange_layer and relink_node."),
-                    ["node"] = TextParameter("Node ID for relink_node."),
+                    ["approve_changes"] = new JsonObject { ["type"] = "boolean", ["description"] = "approve_layers needs true when the layers changed since their last approval." },
+                    ["target"] = TextParameter("Layer ID or path for arrange_layer, relink_node and set_standalone."),
+                    ["node"] = TextParameter("Node ID for relink_node; node ID or title for set_standalone."),
+                    ["reason"] = TextParameter("set_standalone: why the linked node has no relationship, from the code evidence (for example wired only in scenes). Empty clears the mark."),
                     ["type_key"] = TextParameter("Indexed type key for relink_node."),
                     ["nodes"] = new JsonObject { ["type"] = "array", ["items"] = TextParameter("Node ID.") },
                     ["centers"] = new JsonObject { ["type"] = "array", ["items"] = TextParameter("Node ID.") }
@@ -304,11 +305,41 @@ public static partial class McpServer
             using var writer = new StreamWriter(stream, Utf8) { AutoFlush = true, NewLine = "\n" };
             using var reader = new StreamReader(stream, Utf8);
             writer.WriteLine(new JsonObject { ["token"] = (string?)bridge["token"], ["tool"] = tool, ["parameters"] = arguments?.DeepClone() ?? new JsonObject() }.ToJsonString());
-            return reader.ReadLine();
+            var reply = reader.ReadLine();
+            return tool == "edit" ? WithCodeReferences(reply) : reply;
         }
         catch (Exception exception) when (exception is SocketException or IOException)
         {
             return null;
+        }
+    }
+
+    // The Editor names the layer pairs a plan leaves without any dependency; the code facts add how many references
+    // in code go from one to the other, so the agent sees what the deletion would make undeclared.
+    private static string? WithCodeReferences(string? reply)
+    {
+        if (reply == null || !reply.Contains("\"permissions_lost\"", StringComparison.Ordinal) || root == null)
+            return reply;
+        try
+        {
+            var node = JsonNode.Parse(reply);
+            if (node?["data"]?["permissions_lost"] is not JsonArray lost)
+                return reply;
+            var model = (facts ?? new FactsCache(root, "net100", () => Basic.Reference.Assemblies.Net100.References.All)).Get();
+            foreach (var item in lost.OfType<JsonObject>())
+            {
+                var source = (string?)item["source_layer_id"];
+                var target = (string?)item["target_layer_id"];
+                item["code_references"] = model.References.Count(reference => reference.CountsAsEvidence
+                                                                             && reference.SourceLayerId == source
+                                                                             && reference.TargetLayerId == target);
+            }
+            return node.ToJsonString();
+        }
+        catch (Exception)
+        {
+            // Without code facts the Editor's warning still stands, only without the count.
+            return reply;
         }
     }
 

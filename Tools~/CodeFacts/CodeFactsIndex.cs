@@ -14,7 +14,7 @@ namespace Architector.CodeFacts;
 // The index is saved under Library/Architector and reused while no C# file, csproj or code-facts.json changed.
 public sealed class CodeIndex
 {
-    private const int FormatVersion = 1;
+    private const int FormatVersion = 2;
 
     public string Signature { get; private set; } = string.Empty;
     public string ReferenceSet { get; private set; } = string.Empty;
@@ -22,6 +22,10 @@ public sealed class CodeIndex
     public List<IndexType> Types { get; } = new();
     public List<IndexReference> References { get; } = new();
     public List<FactsRuleSuggestion> Suggestions { get; } = new();
+    // Engine and package assemblies taken from Unity's project files, and types whose base class the analysis still
+    // cannot see (their inherited members are unknown, so names inside them may be missed, never misbound).
+    public int UnityReferenceCount { get; set; }
+    public int UnresolvedBaseTypes { get; set; }
     public long BuildMilliseconds { get; private set; }
     public bool FromDisk { get; private set; }
 
@@ -62,7 +66,7 @@ public sealed class CodeIndex
         hash.AppendData(Encoding.UTF8.GetBytes($"format {FormatVersion}\n"));
         foreach (var file in FactsModel.SourceFilePaths(root))
             Add(file);
-        foreach (var extra in new[] { Path.Combine(root, "Assembly-CSharp.csproj"), Path.Combine(root, "Architector", "code-facts.json") })
+        foreach (var extra in new[] { Path.Combine(root, "Assembly-CSharp.csproj"), Path.Combine(root, "Assembly-CSharp-Editor.csproj"), Path.Combine(root, "Architector", "code-facts.json") })
             if (File.Exists(extra))
                 Add(extra);
         return Convert.ToHexString(hash.GetHashAndReset());
@@ -79,10 +83,12 @@ public sealed class CodeIndex
                 new CSharpParseOptions(LanguageVersion.Latest, preprocessorSymbols: defines),
                 Path.GetRelativePath(root, file).Replace('\\', '/')))
             .ToArray();
+        var unityReferences = UnityReferences(root);
+        index.UnityReferenceCount = unityReferences.Count;
         var compilation = CSharpCompilation.Create(
             "Architector.DependencyEvidence",
             trees,
-            references,
+            references.Concat(unityReferences),
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true));
 
         var byKey = new Dictionary<string, IndexType>(StringComparer.Ordinal);
@@ -131,6 +137,7 @@ public sealed class CodeIndex
                 var type = TypeOf(symbol);
                 type.Parts.Add($"{tree.FilePath}:{declaration.GetLocation().GetLineSpan().StartLinePosition.Line + 1}");
                 extraction.Extract(declaration, type, tree.FilePath);
+                extraction.Behaviour(declaration, symbol, type, semantic, tree.FilePath);
             }
             foreach (var name in rootNode.DescendantNodes().OfType<SimpleNameSyntax>())
             {
@@ -140,7 +147,14 @@ public sealed class CodeIndex
                 var sourceTop = TypeOf(Outermost(sourceType));
                 sourceTop.NamedIn.Add(tree.FilePath);
                 var info = semantic.GetSymbolInfo(name);
-                var symbol = info.Symbol ?? info.CandidateSymbols.FirstOrDefault();
+                // A candidate is used only when the symbol itself is right and only the call around it failed. A type
+                // offered where a value is needed is how an inherited member of an unseen base class looks when the
+                // project also has a type of that name, so it is never counted.
+                var symbol = info.Symbol ?? (info.CandidateReason is CandidateReason.NotAValue or CandidateReason.NotATypeOrNamespace
+                    ? null
+                    : info.CandidateSymbols.FirstOrDefault());
+                if (symbol is INamedTypeSymbol && TypeNameUsedAsValue(name))
+                    continue;
                 var targetType = (symbol as INamedTypeSymbol ?? symbol?.ContainingType)?.OriginalDefinition;
                 if (targetType == null || !targetType.Locations.Any(location => location.IsInSource))
                     continue;
@@ -159,6 +173,7 @@ public sealed class CodeIndex
 
         foreach (var type in index.Types)
             Describe(type, symbols[type.Key], byKey, KeyOf);
+        index.UnresolvedBaseTypes = symbols.Values.Count(symbol => HasUnseenBase(symbol));
         index.Suggestions.AddRange(extraction.Suggest(index.Types));
         index.BuildMilliseconds = watch.ElapsedMilliseconds;
         return index;
@@ -197,10 +212,14 @@ public sealed class CodeIndex
                                       || method.MethodKind is MethodKind.Ordinary or MethodKind.Constructor or MethodKind.UserDefinedOperator or MethodKind.Conversion))
         {
             var location = member.Locations.FirstOrDefault(item => item.IsInSource);
+            var (_, referenceName, parameters) = MemberReference(member);
             type.Members.Add(new IndexMember(
                 member.Kind.ToString().ToLowerInvariant(),
                 member.ToDisplayString(MemberFormat),
-                location == null ? string.Empty : $"{location.SourceTree!.FilePath}:{location.GetLineSpan().StartLinePosition.Line + 1}"));
+                location == null ? string.Empty : $"{location.SourceTree!.FilePath}:{location.GetLineSpan().StartLinePosition.Line + 1}",
+                referenceName,
+                parameters ?? System.Array.Empty<string>(),
+                parameters != null));
         }
         for (var parent = symbol.BaseType; parent != null; parent = parent.BaseType)
         {
@@ -216,6 +235,119 @@ public sealed class CodeIndex
             .Select(attribute => (attribute.AttributeClass?.Name ?? string.Empty).Replace("Attribute", string.Empty))
             .Any(UnityEntryAttributes.Contains))
             type.UnityEntry = true;
+    }
+
+    private static (string Kind, string Name, string[]? Parameters) MemberReference(ISymbol member)
+    {
+        static string[] Parameters(IEnumerable<IParameterSymbol> parameters) => parameters.Select(parameter =>
+            (parameter.RefKind switch { RefKind.Out => "out:", RefKind.Ref => "ref:", RefKind.In => "in:", _ => string.Empty })
+            + ShortMetadataName(parameter.Type)).ToArray();
+        return member switch
+        {
+            IMethodSymbol { MethodKind: MethodKind.Constructor } method => ("constructor", ".ctor", Parameters(method.Parameters)),
+            IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator or MethodKind.Conversion } method => ("operator", method.MetadataName, Parameters(method.Parameters)),
+            IMethodSymbol method => ("method", method.Name, Parameters(method.Parameters)),
+            IPropertySymbol property => ("property", property.MetadataName, property.Parameters.Length > 0 ? Parameters(property.Parameters) : null),
+            IEventSymbol eventSymbol => ("event", eventSymbol.Name, null),
+            IFieldSymbol field => ("field", field.Name, null),
+            _ => (member.Kind.ToString().ToLowerInvariant(), member.Name, null)
+        };
+    }
+
+    // The type's metadata name without namespace, containing type or generic arity, as the type index's symbol keys
+    // reduce to: Single for float, List for List<int>, !0 and !!0 for type parameters, a [] suffix for arrays.
+    internal static string ShortMetadataName(ITypeSymbol type) => type switch
+    {
+        IArrayTypeSymbol array => ShortMetadataName(array.ElementType) + "[" + new string(',', array.Rank - 1) + "]",
+        ITypeParameterSymbol parameter => (parameter.TypeParameterKind == TypeParameterKind.Method ? "!!" : "!") + parameter.Ordinal,
+        IPointerTypeSymbol pointer => ShortMetadataName(pointer.PointedAtType) + "*",
+        _ => type.MetadataName.Split('`')[0]
+    };
+
+    // A type name where C# needs a value is only valid when something else of that name is in scope, such as a member
+    // inherited from a base class the analysis cannot see. Type positions, "Type.Member", qualified names and nameof
+    // stay references.
+    private static bool TypeNameUsedAsValue(SimpleNameSyntax name)
+    {
+        SyntaxNode node = name;
+        while (node.Parent is QualifiedNameSyntax qualified && qualified.Right == node)
+            node = qualified;
+        if (node.Parent is QualifiedNameSyntax or AliasQualifiedNameSyntax or UsingDirectiveSyntax or NameEqualsSyntax
+            or AttributeSyntax or TypeArgumentListSyntax or BaseTypeSyntax or TypeConstraintSyntax)
+            return false;
+        if (node is ExpressionSyntax expression && SyntaxFacts.IsInTypeOnlyContext(expression))
+            return false;
+        if (node.Parent is MemberAccessExpressionSyntax access && access.Expression == node)
+            return false;
+        if (node.Parent is MemberAccessExpressionSyntax nameAccess && nameAccess.Name == node)
+            return false;
+        if (node.Ancestors().OfType<InvocationExpressionSyntax>().Any(call => call.Expression is IdentifierNameSyntax { Identifier.ValueText: "nameof" }))
+            return false;
+        return node.Parent is ArgumentSyntax or EqualsValueClauseSyntax or ArrowExpressionClauseSyntax or ReturnStatementSyntax
+            or AssignmentExpressionSyntax or BinaryExpressionSyntax or ConditionalExpressionSyntax or InitializerExpressionSyntax
+            or ParenthesizedExpressionSyntax or InterpolationSyntax or ExpressionStatementSyntax or PrefixUnaryExpressionSyntax
+            or PostfixUnaryExpressionSyntax or ElementAccessExpressionSyntax;
+    }
+
+    private static bool HasUnseenBase(INamedTypeSymbol symbol)
+    {
+        for (var parent = symbol.BaseType; parent != null; parent = parent.BaseType)
+            if (parent.TypeKind == TypeKind.Error)
+                return true;
+        return false;
+    }
+
+    // The engine and package assemblies Unity's generated project files reference (Assembly-CSharp.csproj and
+    // Assembly-CSharp-Editor.csproj), so members inherited from engine and package base classes bind to them and never
+    // to a project type of the same name. Left out: the .NET assemblies (the host brings its own) and the project's own
+    // assemblies, whose sources the index compiles itself. Without the project files nothing is added.
+    internal static IReadOnlyList<MetadataReference> UnityReferences(string root)
+    {
+        var projects = new[] { "Assembly-CSharp.csproj", "Assembly-CSharp-Editor.csproj" }.Select(name => Path.Combine(root, name)).Where(File.Exists).ToArray();
+        if (projects.Length == 0)
+            return System.Array.Empty<MetadataReference>();
+        var own = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var assets = Path.Combine(root, "Assets");
+        if (Directory.Exists(assets))
+            foreach (var definition in Directory.GetFiles(assets, "*.asmdef", SearchOption.AllDirectories))
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(File.ReadAllText(definition), "\"name\"\\s*:\\s*\"([^\"]+)\"");
+                if (match.Success)
+                    own.Add(match.Groups[1].Value);
+            }
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<MetadataReference>();
+        foreach (var project in projects)
+        {
+            XDocument document;
+            try
+            {
+                document = XDocument.Load(project);
+            }
+            catch (System.Xml.XmlException)
+            {
+                continue;
+            }
+            foreach (var hint in document.Descendants().Where(node => node.Name.LocalName == "HintPath").Select(node => node.Value.Trim()))
+            {
+                var name = Path.GetFileNameWithoutExtension(hint);
+                var normalized = hint.Replace('\\', '/');
+                if (name.Length == 0 || !seen.Add(name) || own.Contains(name) || name.StartsWith("Assembly-CSharp", StringComparison.OrdinalIgnoreCase)
+                    || name is "mscorlib" or "netstandard" || name.StartsWith("System", StringComparison.Ordinal) || name.StartsWith("Microsoft.", StringComparison.Ordinal)
+                    || normalized.Contains("/UnityReferenceAssemblies/", StringComparison.OrdinalIgnoreCase)
+                    || normalized.Contains("/NetStandard/", StringComparison.OrdinalIgnoreCase)
+                    || !File.Exists(hint))
+                    continue;
+                try
+                {
+                    result.Add(MetadataReference.CreateFromFile(hint));
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or BadImageFormatException)
+                {
+                }
+            }
+        }
+        return result;
     }
 
     private static string[] Defines(string root)
@@ -292,26 +424,94 @@ public sealed class CodeIndex
             }
         }
 
+        private static readonly HashSet<string> LifecycleMethods = new(StringComparer.Ordinal)
+        {
+            "Awake", "Start", "Update", "FixedUpdate", "LateUpdate", "OnEnable", "OnDisable", "OnDestroy"
+        };
+
+        // What a type reads, writes, subscribes to, assigns in other types and which Unity callbacks it has, each with
+        // file:line, so an agent opens the lines that decide what the type owns instead of the whole file.
+        public void Behaviour(SyntaxNode declaration, INamedTypeSymbol owner, IndexType type, SemanticModel semantic, string file)
+        {
+            string At(SyntaxNode node) => $"{file}:{node.GetLocation().GetLineSpan().StartLinePosition.Line + 1}";
+            foreach (var generic in declaration.DescendantNodes().OfType<GenericNameSyntax>())
+            {
+                if (generic.Parent is not (InvocationExpressionSyntax or MemberAccessExpressionSyntax))
+                    continue;
+                var name = generic.Identifier.ValueText;
+                if (!extractors.GenericCalls.Contains(name))
+                    continue;
+                var section = extractors.Access(name) switch { "read" => "reads", "write" => "writes", _ => "uses" };
+                type.AddBehaviour(section, $"{name}<{string.Join(", ", generic.TypeArgumentList.Arguments)}>", At(generic));
+            }
+            foreach (var assignment in declaration.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+            {
+                var target = semantic.GetSymbolInfo(assignment.Left).Symbol;
+                if (assignment.IsKind(SyntaxKind.AddAssignmentExpression) || assignment.IsKind(SyntaxKind.SubtractAssignmentExpression))
+                {
+                    var handlerType = target switch
+                    {
+                        IEventSymbol => null,
+                        IFieldSymbol field => field.Type,
+                        IPropertySymbol property => property.Type,
+                        ILocalSymbol local => local.Type,
+                        IParameterSymbol parameter => parameter.Type,
+                        _ => null
+                    };
+                    if (target is IEventSymbol || handlerType?.TypeKind == TypeKind.Delegate)
+                        type.AddBehaviour(assignment.IsKind(SyntaxKind.AddAssignmentExpression) ? "subscribes" : "unsubscribes", MemberName(target!), At(assignment));
+                    continue;
+                }
+                if (!assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                    || assignment.Left is not MemberAccessExpressionSyntax access
+                    || access.Expression is ThisExpressionSyntax or BaseExpressionSyntax
+                    || target is not (IFieldSymbol or IPropertySymbol)
+                    || target.ContainingType == null
+                    || SymbolEqualityComparer.Default.Equals(target.ContainingType.OriginalDefinition, owner.OriginalDefinition))
+                    continue;
+                type.AddBehaviour("assigns", MemberName(target), At(assignment));
+            }
+            foreach (var method in declaration.DescendantNodes().OfType<MethodDeclarationSyntax>()
+                         .Where(method => method.Parent == declaration && method.ParameterList.Parameters.Count == 0)
+                         .Where(method => LifecycleMethods.Contains(method.Identifier.ValueText)))
+                type.AddBehaviour("lifecycle", method.Identifier.ValueText, At(method.Identifier.Parent!));
+        }
+
+        private static string MemberName(ISymbol symbol) =>
+            symbol.ContainingType == null ? symbol.Name : $"{symbol.ContainingType.Name}.{symbol.Name}";
+
         public IEnumerable<FactsRuleSuggestion> Suggest(IEnumerable<IndexType> types)
         {
             var ownNames = types.Select(type => type.Name).ToHashSet(StringComparer.Ordinal);
             var callSuggestions = calls
+                .Where(call => !extractors.ExcludedFromSuggestions(call.At))
                 .Where(call => !CommonGenericCalls.Contains(call.Name) && call.TypeArguments.Any(ownNames.Contains))
                 .GroupBy(call => call.Name)
                 .Where(group => group.Count() >= SuggestionMinimumUses)
                 .OrderByDescending(group => group.Count())
                 .ThenBy(group => group.Key, StringComparer.Ordinal)
                 .Take(5)
-                .Select(group => new FactsRuleSuggestion("genericCalls", group.Key, group.Count(), group.First().At));
+                .Select(group => new FactsRuleSuggestion("genericCalls", group.Key, group.Count(), group.First().At, Folders(group.Select(call => call.At))));
             var attributeSuggestions = attributes
+                .Where(attribute => !extractors.ExcludedFromSuggestions(attribute.At))
                 .GroupBy(attribute => attribute.Name)
                 .Where(group => group.Count() >= SuggestionMinimumUses)
                 .OrderByDescending(group => group.Count())
                 .ThenBy(group => group.Key, StringComparer.Ordinal)
                 .Take(5)
-                .Select(group => new FactsRuleSuggestion("injectionAttributes", group.Key, group.Count(), group.First().At));
+                .Select(group => new FactsRuleSuggestion("injectionAttributes", group.Key, group.Count(), group.First().At, Folders(group.Select(attribute => attribute.At))));
             return callSuggestions.Concat(attributeSuggestions).ToArray();
         }
+
+        private static IReadOnlyList<string> Folders(IEnumerable<string> places) => places
+            .Select(place => place[..Math.Max(0, place.LastIndexOf(':'))])
+            .Select(file => string.Join("/", file.Split('/').SkipLast(1).Take(3)))
+            .GroupBy(folder => folder)
+            .OrderByDescending(group => group.Count())
+            .ThenBy(group => group.Key, StringComparer.Ordinal)
+            .Take(5)
+            .Select(group => group.Key)
+            .ToArray();
 
         private const int SuggestionMinimumUses = 10;
 
@@ -393,6 +593,11 @@ public sealed class CodeIndex
                     writer.Write(S(member.Kind));
                     writer.Write(S(member.Display));
                     writer.Write(S(member.At));
+                    writer.Write(S(member.Name));
+                    writer.Write(member.HasParameters);
+                    writer.Write(member.Parameters.Count);
+                    foreach (var parameter in member.Parameters)
+                        writer.Write(S(parameter));
                 }
                 writer.Write(type.Extras.Count);
                 foreach (var (kind, values) in type.Extras)
@@ -400,6 +605,17 @@ public sealed class CodeIndex
                     writer.Write(S(kind));
                     writer.Write(values.Count);
                     foreach (var (value, at) in values)
+                    {
+                        writer.Write(S(value));
+                        writer.Write(S(at));
+                    }
+                }
+                writer.Write(type.Behaviour.Count);
+                foreach (var (section, entries) in type.Behaviour)
+                {
+                    writer.Write(S(section));
+                    writer.Write(entries.Count);
+                    foreach (var (value, at) in entries)
                     {
                         writer.Write(S(value));
                         writer.Write(S(at));
@@ -423,7 +639,12 @@ public sealed class CodeIndex
                 writer.Write(S(suggestion.Name));
                 writer.Write(suggestion.Uses);
                 writer.Write(S(suggestion.Example));
+                writer.Write(suggestion.Folders.Count);
+                foreach (var folder in suggestion.Folders)
+                    writer.Write(S(folder));
             }
+            writer.Write(UnityReferenceCount);
+            writer.Write(UnresolvedBaseTypes);
         }
 
         var temporary = path + "." + Environment.ProcessId + ".tmp";
@@ -502,19 +723,39 @@ public sealed class CodeIndex
                 type.DerivedBy.UnionWith(List());
                 type.NamedIn.UnionWith(List());
                 for (var members = reader.ReadInt32(); members > 0; members--)
-                    type.Members.Add(new IndexMember(S(), S(), S()));
+                {
+                    var (kind, display, at, name, hasParameters) = (S(), S(), S(), S(), reader.ReadBoolean());
+                    var parameters = new string[reader.ReadInt32()];
+                    for (var slot = 0; slot < parameters.Length; slot++)
+                        parameters[slot] = S();
+                    type.Members.Add(new IndexMember(kind, display, at, name, parameters, hasParameters));
+                }
                 for (var kinds = reader.ReadInt32(); kinds > 0; kinds--)
                 {
                     var kind = S();
                     for (var values = reader.ReadInt32(); values > 0; values--)
                         type.AddExtra(kind, S(), S());
                 }
+                for (var sections = reader.ReadInt32(); sections > 0; sections--)
+                {
+                    var section = S();
+                    for (var entries = reader.ReadInt32(); entries > 0; entries--)
+                        type.AddBehaviour(section, S(), S());
+                }
                 index.Types.Add(type);
             }
             for (var count = reader.ReadInt32(); count > 0; count--)
                 index.References.Add(new IndexReference(S(), S(), S(), S(), S(), reader.ReadInt32()));
             for (var count = reader.ReadInt32(); count > 0; count--)
-                index.Suggestions.Add(new FactsRuleSuggestion(S(), S(), reader.ReadInt32(), S()));
+            {
+                var (rule, name, uses, example) = (S(), S(), reader.ReadInt32(), S());
+                var folders = new string[reader.ReadInt32()];
+                for (var folder = 0; folder < folders.Length; folder++)
+                    folders[folder] = S();
+                index.Suggestions.Add(new FactsRuleSuggestion(rule, name, uses, example, folders));
+            }
+            index.UnityReferenceCount = reader.ReadInt32();
+            index.UnresolvedBaseTypes = reader.ReadInt32();
             index.BuildMilliseconds = watch.ElapsedMilliseconds;
             return index;
         }
@@ -550,6 +791,15 @@ public sealed class IndexType
     public SortedSet<string> NamedIn { get; } = new(StringComparer.Ordinal);
     public List<IndexMember> Members { get; } = new();
     public SortedDictionary<string, SortedDictionary<string, string>> Extras { get; } = new(StringComparer.Ordinal);
+    // Behaviour facts by section (reads, writes, uses, subscribes, unsubscribes, assigns, lifecycle), every occurrence.
+    public SortedDictionary<string, List<(string Value, string At)>> Behaviour { get; } = new(StringComparer.Ordinal);
+
+    public void AddBehaviour(string section, string value, string at)
+    {
+        if (!Behaviour.TryGetValue(section, out var entries))
+            Behaviour[section] = entries = new List<(string Value, string At)>();
+        entries.Add((value, at));
+    }
 
     public void AddExtra(string kind, string value, string at)
     {
@@ -559,6 +809,9 @@ public sealed class IndexType
     }
 }
 
-public sealed record IndexMember(string Kind, string Display, string At);
+// Kind, Name and Parameters form the member reference plans accept ({kind, name, parameters}): the kinds and names
+// Architector's type index uses (".ctor" for constructors, "op_…" for operators, "Item" for indexers) and the short
+// metadata names of the parameter types ("Single", "List", "ref:Clock", "Int32[]", "!0").
+public sealed record IndexMember(string Kind, string Display, string At, string Name, IReadOnlyList<string> Parameters, bool HasParameters);
 
 public sealed record IndexReference(string SourceName, string TargetName, string SourceKey, string TargetKey, string File, int Line);

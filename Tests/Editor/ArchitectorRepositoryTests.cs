@@ -81,6 +81,19 @@ namespace Architector.Editor.Tests
         }
 
         [Test]
+        public void RevisionKeepsCountingAfterAnEditorRestart()
+        {
+            repository.CreateLayer(string.Empty, "Counted");
+            var before = repository.Revision;
+            UnityEditor.SessionState.EraseInt("Architector.Revision:" + repository.Paths.RepositoryRoot);
+
+            var restarted = new ArchitectorRepository(new ArchitectorPaths(temporaryRoot));
+
+            Assert.That(restarted.Revision, Is.GreaterThan(before), "An Editor restart or a package update must not restart the revision at 1.");
+            Assert.That(File.Exists(Path.Combine(temporaryRoot, "Library", "Architector", "revision.txt")), Is.True);
+        }
+
+        [Test]
         public void RenamingALayerRetitlesThePortalsThatLeadToIt()
         {
             var sourceLayerId = repository.CreateLayer(string.Empty, "Source");
@@ -260,6 +273,112 @@ namespace Architector.Editor.Tests
             Assert.That(exception.Message, Does.Contain("has no relationship"));
             repository.CreateEdge(layerId, targetId, linkedId, ArchitectorEdgeKinds.Dependency, "auto");
             Assert.DoesNotThrow(() => repository.ApproveLayers(new[] { layerId }));
+        }
+
+        [Test]
+        public void StandaloneMarkLetsALinkedNodeWithoutRelationshipsBeApproved()
+        {
+            var layerId = repository.CreateLayer(string.Empty, "Runtime");
+            var linkedId = repository.CreateLinkedNode(layerId, 0f, 0f, CreateIndexedType());
+            var layerFile = Directory.GetFiles(Path.Combine(temporaryRoot, "Architector", "Layers"), layerId + ".*").Single();
+            var before = File.ReadAllText(layerFile);
+            Assert.Throws<ArchitectorDataException>(() => repository.ApproveLayers(new[] { layerId }));
+
+            repository.SetStandaloneNode(layerId, linkedId, "Wired only in the scene.");
+
+            Assert.That(File.ReadAllText(layerFile), Is.EqualTo(before), "The mark lives in the settings, not in the layer.");
+            using var index = new ArchitectorTypeIndex(repository);
+            var diagnostics = ArchitectorConformance.Evaluate(repository, index, new[] { layerId }).Diagnostics;
+            Assert.That(diagnostics.Select(item => item.Code), Does.Not.Contain(ArchitectorConformanceCodes.UnanchoredNode));
+            var warning = diagnostics.Single(item => item.Code == ArchitectorConformanceCodes.StandaloneNode);
+            Assert.That(warning.Severity, Is.EqualTo(ArchitectorConformanceSeverities.Warning));
+            Assert.That(warning.Message, Does.Contain("Wired only in the scene."));
+            Assert.DoesNotThrow(() => repository.ApproveLayers(new[] { layerId }));
+            Assert.That(new ArchitectorRepository(new ArchitectorPaths(temporaryRoot)).StandaloneReason(layerId, linkedId), Is.EqualTo("Wired only in the scene."));
+
+            repository.SetStandaloneNode(layerId, linkedId, string.Empty);
+            Assert.That(repository.StandaloneReason(layerId, linkedId), Is.Empty);
+            var manualId = repository.CreateManualNode(layerId, 400f, 0f);
+            Assert.Throws<ArchitectorDataException>(() => repository.SetStandaloneNode(layerId, manualId, "Not linked."));
+        }
+
+        [Test]
+        public void LinkedNodeOutsideTheScopeOfItsTypeIsAWarning()
+        {
+            var ownerId = repository.CreateLayer(string.Empty, "Gameplay");
+            var otherId = repository.CreateLayer(string.Empty, "Other");
+            repository.UpdateLayerScope(ownerId, new[] { "Assets/Scripts" }, null);
+            var linkedId = repository.CreateLinkedNode(otherId, 0f, 0f, CreateIndexedType());
+            var userId = repository.CreateManualNode(otherId, 400f, 0f);
+            repository.CreateEdge(otherId, userId, linkedId, ArchitectorEdgeKinds.Dependency, "auto");
+            using var index = new ArchitectorTypeIndex(repository);
+
+            var warning = ArchitectorConformance.Evaluate(repository, index, new[] { otherId }).Diagnostics
+                .Single(item => item.Code == ArchitectorConformanceCodes.LinkedNodeOutsideScope);
+
+            Assert.That(warning.Severity, Is.EqualTo(ArchitectorConformanceSeverities.Warning));
+            Assert.That(warning.Message, Does.Contain("Gameplay"));
+            Assert.That(ArchitectorConformance.Evaluate(repository, index, new[] { ownerId }).Diagnostics
+                .Select(item => item.Code), Does.Not.Contain(ArchitectorConformanceCodes.LinkedNodeOutsideScope));
+        }
+
+        [Test]
+        public void DryRunNamesTheLayerPairsAPlanLeavesWithoutADependency()
+        {
+            var group = repository.CreateGroup(string.Empty, "Game");
+            var firstLayer = repository.CreateLayer(group, "First");
+            var secondLayer = repository.CreateLayer(group, "Second");
+            var firstNode = repository.CreateEmptyNode(firstLayer, 0f, 0f);
+            var secondNode = repository.CreateEmptyNode(secondLayer, 0f, 0f);
+            var edgeId = repository.CreateCrossLayerEdge(firstLayer, firstNode, secondLayer, secondNode, ArchitectorEdgeKinds.Dependency);
+            repository.CreateCrossLayerEdge(firstLayer, firstNode, secondLayer, secondNode, ArchitectorEdgeKinds.Event);
+
+            var byId = repository.DryRunSemanticPlan(new ArchitectorSemanticPlan
+            {
+                deletions = { new ArchitectorPlanDeletion { kind = "edge", target = edgeId } }
+            });
+            var lost = byId.PermissionsLost.Single();
+            Assert.That((lost.SourcePath, lost.TargetPath, lost.RelationshipsRemoved), Is.EqualTo(("Game/First", "Game/Second", 1)));
+
+            var byName = repository.DryRunSemanticPlan(new ArchitectorSemanticPlan
+            {
+                deletions = { new ArchitectorPlanDeletion { kind = "edge", target = "First::New Node -> Second::New Node", relationship = "dependency" } }
+            });
+            Assert.That(byName.PermissionsLost.Single().TargetLayerId, Is.EqualTo(secondLayer));
+            var ambiguous = Assert.Throws<ArchitectorDataException>(() => repository.DryRunSemanticPlan(new ArchitectorSemanticPlan
+            {
+                deletions = { new ArchitectorPlanDeletion { kind = "edge", target = "First::New Node -> Second::New Node" } }
+            }));
+            Assert.That(ambiguous.Message, Does.Contain("matches 2 relationships"));
+            var keptDependency = repository.DryRunSemanticPlan(new ArchitectorSemanticPlan
+            {
+                deletions = { new ArchitectorPlanDeletion { kind = "edge", target = "First::New Node -> Second::New Node", relationship = "event" } }
+            });
+            Assert.That(keptDependency.PermissionsLost, Is.Empty);
+
+            repository.ApplySemanticPlan(new ArchitectorSemanticPlan
+            {
+                deletions = { new ArchitectorPlanDeletion { kind = "node", target = "Second::New Node" } }
+            });
+            Assert.That(repository.LoadLayer(secondLayer).semantic.nodes.Where(node => node.kind == ArchitectorNodeKinds.Standard), Is.Empty);
+        }
+
+        [Test]
+        public void LayerReferencesAcceptAUniqueTrailingPathAndNameAmbiguousOnes()
+        {
+            var root = repository.CreateGroup(string.Empty, "Root");
+            var first = repository.CreateGroup(root, "Audio");
+            var second = repository.CreateGroup(root, "Video");
+            var audioCore = repository.CreateLayer(first, "Core");
+            var videoCore = repository.CreateLayer(second, "Core");
+            var mixer = repository.CreateLayer(first, "Mixer");
+
+            Assert.That(ArchitectorEntryPaths.ResolveLayer(repository.Project, "Audio/Core"), Is.EqualTo(audioCore));
+            Assert.That(ArchitectorEntryPaths.ResolveLayer(repository.Project, "root/video/core"), Is.EqualTo(videoCore));
+            Assert.That(ArchitectorEntryPaths.ResolveLayer(repository.Project, "Mixer"), Is.EqualTo(mixer));
+            Assert.That(ArchitectorEntryPaths.ResolveLayer(repository.Project, "Core"), Is.Empty);
+            Assert.That(ArchitectorEntryPaths.MatchLayers(repository.Project, "Core"), Is.EquivalentTo(new[] { audioCore, videoCore }));
+            Assert.That(ArchitectorEntryPaths.MatchLayers(repository.Project, "udio/Core"), Is.Empty, "Only whole path parts match.");
         }
 
         [Test]
@@ -1047,10 +1166,11 @@ namespace Architector.Editor.Tests
             repository.UpdateSettings("Report Cycles", settings =>
                 settings.rules.dependencyCycles = ArchitectorDependencyCyclePolicy.Report);
             var layerId = repository.CreateLayer(string.Empty, "Local");
+            var otherId = repository.CreateLayer(string.Empty, "Other");
             var first = repository.CreateEmptyNode(layerId, 0f, 0f);
-            var second = repository.CreateEmptyNode(layerId, 600f, 0f);
-            repository.CreateEdge(layerId, first, second, ArchitectorEdgeKinds.Dependency, "left");
-            var back = repository.CreateEdge(layerId, second, first, ArchitectorEdgeKinds.Dependency, "right");
+            var second = repository.CreateEmptyNode(otherId, 0f, 0f);
+            repository.CreateCrossLayerEdge(layerId, first, otherId, second, ArchitectorEdgeKinds.Dependency);
+            var back = repository.CreateCrossLayerEdge(otherId, second, layerId, first, ArchitectorEdgeKinds.Dependency);
 
             Assert.Throws<ArchitectorDataException>(() => repository.UpdateSettings("Reject Cycles", settings =>
                 settings.rules.dependencyCycles = ArchitectorDependencyCyclePolicy.Reject));
@@ -1064,12 +1184,32 @@ namespace Architector.Editor.Tests
             Assert.Throws<ArchitectorDataException>(() => repository.ValidateExternalChanges());
             File.WriteAllText(settingsPath, reported);
 
-            repository.DeleteEdge(layerId, back);
+            repository.DeleteEdge(otherId, back);
             repository.UpdateSettings("Reject Cycles", settings =>
                 settings.rules.dependencyCycles = ArchitectorDependencyCyclePolicy.Reject);
             Assert.That(repository.Settings.rules.dependencyCycles, Is.EqualTo(ArchitectorDependencyCyclePolicy.Reject));
-            Assert.Throws<ArchitectorDataException>(() => repository.CreateEdge(
-                layerId, second, first, ArchitectorEdgeKinds.Dependency, "right"));
+            Assert.Throws<ArchitectorDataException>(() => repository.CreateCrossLayerEdge(
+                otherId, second, layerId, first, ArchitectorEdgeKinds.Dependency));
+        }
+
+        [Test]
+        public void RejectRuleAllowsACycleInsideOneLayerAndReportsIt()
+        {
+            var layerId = repository.CreateLayer(string.Empty, "Graph");
+            var graph = repository.CreateEmptyNode(layerId, 0f, 0f);
+            var node = repository.CreateEmptyNode(layerId, 600f, 0f);
+            repository.CreateEdge(layerId, graph, node, ArchitectorEdgeKinds.Dependency, "left");
+
+            Assert.DoesNotThrow(() => repository.CreateEdge(layerId, node, graph, ArchitectorEdgeKinds.Dependency, "right"));
+            var cycle = repository.FindDependencyCycles().Single();
+            Assert.That(cycle.CrossesLayers, Is.False);
+            using var index = new ArchitectorTypeIndex(repository);
+            var warning = ArchitectorConformance.Evaluate(repository, index, new[] { layerId }).Diagnostics
+                .Single(diagnostic => diagnostic.Code == ArchitectorConformanceCodes.DependencyCycle);
+            Assert.That(warning.Severity, Is.EqualTo(ArchitectorConformanceSeverities.Warning));
+            Assert.That(warning.Message, Does.Contain("inside one layer"));
+            Assert.DoesNotThrow(() => repository.UpdateSettings("Reject Cycles", settings =>
+                settings.rules.dependencyCycles = ArchitectorDependencyCyclePolicy.Reject));
         }
 
         [Test]
@@ -2388,7 +2528,8 @@ namespace Architector.Editor.Tests
             Assert.That(documents.semantic.edges, Has.Count.EqualTo(2));
             Assert.That(documents.layout.edges.Single(edge => edge.edgeId == firstEdgeId).preferredTargetSide, Is.EqualTo("left"));
             Assert.Throws<ArchitectorDataException>(() => repository.CreateEdge(layerId, firstId, secondId, "left"));
-            Assert.Throws<ArchitectorDataException>(() => repository.CreateEdge(layerId, thirdId, firstId, "right"));
+            Assert.DoesNotThrow(() => repository.CreateEdge(layerId, thirdId, firstId, "right"), "A cycle inside one layer is reported, not rejected.");
+            repository.Undo();
 
             repository.DeleteEdge(layerId, firstEdgeId);
             Assert.That(repository.LoadLayer(layerId).semantic.edges.Any(edge => edge.id == firstEdgeId), Is.False);
@@ -2424,12 +2565,13 @@ namespace Architector.Editor.Tests
                 secondId,
                 ArchitectorEdgeKinds.DataFlow,
                 "left"));
-            Assert.Throws<ArchitectorDataException>(() => repository.CreateEdge(
+            Assert.DoesNotThrow(() => repository.CreateEdge(
                 layerId,
                 secondId,
                 firstId,
                 ArchitectorEdgeKinds.Dependency,
-                "right"));
+                "right"), "A dependency cycle inside one layer is reported, not rejected.");
+            repository.Undo();
             Assert.Throws<ArchitectorDataException>(() => repository.CreateEdge(
                 layerId,
                 firstId,
@@ -2736,13 +2878,14 @@ namespace Architector.Editor.Tests
         {
             var groupId = repository.CreateGroup(string.Empty, "Sketches");
             var layerId = repository.CreateLayer(groupId, "Loop");
+            var otherId = repository.CreateLayer(groupId, "Back");
             var first = repository.CreateEmptyNode(layerId, 0f, 0f);
-            var second = repository.CreateEmptyNode(layerId, 600f, 0f);
-            repository.CreateEdge(layerId, first, second, ArchitectorEdgeKinds.Dependency, "left");
-            Assert.Throws<ArchitectorDataException>(() => repository.CreateEdge(layerId, second, first, ArchitectorEdgeKinds.Dependency, "right"));
+            var second = repository.CreateEmptyNode(otherId, 0f, 0f);
+            repository.CreateCrossLayerEdge(layerId, first, otherId, second, ArchitectorEdgeKinds.Dependency);
+            Assert.Throws<ArchitectorDataException>(() => repository.CreateCrossLayerEdge(otherId, second, layerId, first, ArchitectorEdgeKinds.Dependency));
 
             repository.SetGroupChecks(groupId, false);
-            Assert.DoesNotThrow(() => repository.CreateEdge(layerId, second, first, ArchitectorEdgeKinds.Dependency, "right"));
+            Assert.DoesNotThrow(() => repository.CreateCrossLayerEdge(otherId, second, layerId, first, ArchitectorEdgeKinds.Dependency));
 
             Assert.That(() => repository.SetGroupChecks(groupId, true), Throws.TypeOf<ArchitectorDataException>().With.Message.Contains("cycle"));
             Assert.That(repository.IsUnchecked(layerId), Is.True);

@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.3.2
+
+**Behaviour changes:**
+
+- **Evidence binds through Unity's project files.** When `Assembly-CSharp.csproj` exists, the code index adds the engine and package assemblies it references, so members inherited from engine and package base classes bind to them and never to a project type with the same name. A type name where C# needs a value is no longer counted. Totals can change in both directions: false references drop out, and true references that needed engine types to bind are now counted. `code_evidence` and `DependencyEvidence` stay equal. `code_evidence` reports `binding` (`unity_references`, `unseen_base_types`, a `hint` when the project files are missing).
+- **The Reject cycle rule applies between layers.** A dependency cycle inside one layer is allowed and reported as a `dependency_cycle` warning ("inside one layer"). Switching to Reject is refused only while a cycle across layers remains.
+- **`architector_route` answers by scope owner.** A file belongs to the layer whose code scope owns it, by the rule of the code facts. A node linked to the type in another layer is named next to it, and conformance reports it as the new warning `linked_node_outside_scope`.
+- **Isolated linked nodes.** The error now says what relationship is expected. **`set_standalone`** (or the Node Inspector's **Standalone** field) marks a linked node that has no relationship on purpose, with a reason. The error then becomes a `standalone_node` warning and no longer blocks approval. The mark is kept in `architector.settings.json`, so no layer file or approval changes.
+
+**Code facts:**
+
+- **Wiring facts.** `layer_facts` reads prefabs, scenes and assets as YAML, without Unity. For each script it reports:
+  - where it is used, by its `.meta` GUID;
+  - its `m_Enabled` state;
+  - which lists of other components point to it (`listed_by`);
+  - its `[SerializeReference]` uses.
+
+  Each type gets a status: `wired`, `unwired` or `test_only`. Test and sample folders are set in `code-facts.json` with `wiring.testFolders`; the default is `**/Tests/**`, `**/Test/**`, `**/Samples/**`, `**/Examples/**`. The layer summary counts the statuses. Every file's result is cached in `Library/Architector/wiring-index.json`.
+- **Behaviour facts.** `layer_facts` with `type` lists, each with file:line:
+  - `reads`, `writes` and `uses`, from the generic-call rules. `genericCalls` entries may be `{"name", "access": "read"|"write"}`; otherwise the method name decides.
+  - `subscribes` and `unsubscribes`: `+=` and `-=` on events and delegates.
+  - `assigns`: fields and properties of other types it sets.
+  - `lifecycle`: its Unity callbacks, with `loops` and an `unpaired` `OnEnable`/`OnDisable`.
+
+  `section` with `offset`/`limit` pages one of them.
+- **Member references for plans.** Every member in `layer_facts` with `type` carries `member_ref` (`{kind, name, parameters}`). Plans accept it wherever they take a member, so a plan can be written without asking the Editor for symbol keys.
+- **Layer paths.** Every action, in the server, the command line and the Editor gateway, takes a layer id, its full path or a unique trailing part of it (`Group/Layer`). Errors have one shape: `layer_not_found` or `layer_ambiguous`, with `target` and `candidates`.
+- `include: "references"` rows end with the source and target layer, and `include: "intra"` rows with the layer.
+- `status: "unevidenced"` lists only the unevidenced pairs, also without `layer`.
+- Rule suggestions name the `folders` their uses come from. `code-facts.json` `suggestions.exclude` (globs) leaves vendor folders out.
+
+**Plans and work sessions:**
+
+- `deletions` accept node names (`Layer::Node`, no separate `layer` needed), and relationships by their nodes (`Layer::Source -> Layer::Target`) with an optional `relationship` kind and `label`.
+- `dry_run_plan` returns `permissions_lost`: layer pairs the plan leaves without any dependency. Through the server and the command line, each pair also has `code_references`, the references in code that would become undeclared.
+- The graph revision is also kept in `Library/Architector/revision.txt`, so it keeps counting after an Editor restart and a package update, not only after a script reload.
+
+**Command line and skill:**
+
+- Options may come before the command (`architector-mcp --project <path> status`). A mistyped command answers `unknown_command`; before, the binary started the MCP server and printed nothing. Every failure prints JSON.
+- `skill install` and `skill sync` install `Workflow.md` next to the skill and point its links there.
+- `help edit`, the Workflow and the skill now cover:
+  - `approve_layers --approve_changes true`;
+  - `implements` and `extends` as labels on a dependency;
+  - `permissions_lost`, `set_standalone`, `member_ref`, wiring and behaviour facts.
+
 ## 0.3.1
 
 **Windows open at once.** No Architector window hangs white while it loads any more:

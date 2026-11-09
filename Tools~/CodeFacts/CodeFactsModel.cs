@@ -188,7 +188,8 @@ public sealed class FactsModel
     }
 }
 
-public sealed record FactsRuleSuggestion(string Rule, string Name, int Uses, string Example);
+// Folders: the folders (up to three levels) the uses come from, most uses first, so vendor code is easy to spot.
+public sealed record FactsRuleSuggestion(string Rule, string Name, int Uses, string Example, IReadOnlyList<string> Folders);
 
 // One use of a first-party type inside another top-level type. CountsAsEvidence is DependencyEvidence's rule.
 public sealed record FactsReference(
@@ -217,6 +218,8 @@ public sealed class FactsType
     public IndexType Data { get; }
     public string FullName => Data.FullName;
     public string Name => Data.Name;
+    public string FirstFile => Data.FirstFile;
+    public bool UnityEntry => Data.UnityEntry;
     public string? OwnerLayerId { get; }
     public List<string> Files => Data.Parts;
     public string At => Data.Parts.Count > 0 ? Data.Parts[0] : Data.FirstFile;
@@ -225,6 +228,7 @@ public sealed class FactsType
     public IEnumerable<string> Interfaces => Data.Interfaces;
     public IReadOnlyList<IndexMember> Members => Data.Members;
     public SortedDictionary<string, SortedDictionary<string, string>> Extras => Data.Extras;
+    public SortedDictionary<string, List<(string Value, string At)>> Behaviour => Data.Behaviour;
     public HashSet<string> Rules => Data.UnityEntry ? new HashSet<string>(StringComparer.Ordinal) { "unity_entry" } : new HashSet<string>(StringComparer.Ordinal);
     public HashSet<string> DerivedOwnerLayers { get; } = new(StringComparer.Ordinal);
     public List<string> Nodes { get; } = new();

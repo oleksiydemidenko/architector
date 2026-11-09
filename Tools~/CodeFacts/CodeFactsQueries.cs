@@ -23,7 +23,7 @@ public static class FactsQueries
         var result = action switch
         {
             "code_evidence" => CodeEvidence(model, arguments),
-            "layer_facts" => LayerFacts(model, arguments),
+            "layer_facts" => LayerFacts(model, arguments, root),
             "scope_what_if" => ScopeWhatIf(model, arguments),
             "layer_dump" => LayerDump(model.Architecture, arguments),
             "lookup" => Lookup(model.Architecture, arguments),
@@ -57,6 +57,7 @@ public static class FactsQueries
             {
                 "undeclared" => !architecture.AllowedDependencies.Contains(pair.Key),
                 "cycle" => cycles.Contains(pair.Key),
+                "unevidenced" => false,
                 _ => true
             })
             .OrderBy(pair => architecture.Path(pair.Key.Source), StringComparer.Ordinal)
@@ -73,11 +74,23 @@ public static class FactsQueries
         if (model.EvidenceWarnings.Count > 0)
             result["warnings"] = Array(model.EvidenceWarnings.Take(10).Select(value => (JsonNode?)value));
         result["rules"] = RulesEntry(model);
+        if (model.Index != null)
+        {
+            var binding = new JsonObject
+            {
+                ["unity_references"] = model.Index.UnityReferenceCount,
+                ["unseen_base_types"] = model.Index.UnresolvedBaseTypes
+            };
+            if (model.Index.UnityReferenceCount == 0 && model.Index.UnresolvedBaseTypes > 0)
+                binding["hint"] = "No Unity project files (Assembly-CSharp.csproj) were found, so engine and package base classes are unseen and names inherited from them are not counted. Open the project in Unity with an IDE set in External Tools to generate them.";
+            result["binding"] = binding;
+        }
 
         var include = Text(arguments, "include");
         if (include == "references")
         {
-            var rows = selected.SelectMany(pair => pair.Value.Select(reference => (JsonNode?)new JsonArray(reference.SourceType, reference.TargetType, reference.At)));
+            var rows = selected.SelectMany(pair => pair.Value.Select(reference => (JsonNode?)new JsonArray(
+                reference.SourceType, reference.TargetType, reference.At, architecture.Path(pair.Key.Source), architecture.Path(pair.Key.Target))));
             Page(result, "items", rows, arguments, 200);
         }
         else if (include == "owners")
@@ -92,7 +105,7 @@ public static class FactsQueries
             var rows = model.References
                 .Where(reference => reference.SourceLayerId != null && reference.SourceLayerId == reference.TargetLayerId)
                 .Where(reference => filterLayer == null || reference.SourceLayerId == filterLayer.Id)
-                .Select(reference => (JsonNode?)new JsonArray(reference.SourceType, reference.TargetType, reference.At));
+                .Select(reference => (JsonNode?)new JsonArray(reference.SourceType, reference.TargetType, reference.At, architecture.Path(reference.SourceLayerId!)));
             Page(result, "items", rows, arguments, 200);
         }
         else
@@ -108,7 +121,7 @@ public static class FactsQueries
         return result;
     }
 
-    public static JsonObject LayerFacts(FactsModel model, JsonNode? arguments)
+    public static JsonObject LayerFacts(FactsModel model, JsonNode? arguments, string root = "")
     {
         var architecture = model.Architecture;
         var layer = architecture.FindLayer(Text(arguments, "target"));
@@ -131,7 +144,9 @@ public static class FactsQueries
             Page(detail, "members", type.Members.Select(member => (JsonNode?)new JsonArray(
                 member.Kind,
                 member.Display,
-                member.At.Length == 0 ? null : member.At)), arguments, 100);
+                member.At.Length == 0 ? null : member.At,
+                MemberReference(member))), arguments, 100);
+            detail["member_ref_hint"] = "The fourth value of each member is its member_ref: put it into a plan's members ({kind, name, parameters}) instead of a symbolKey.";
             if (type.Extras.Count > 0)
             {
                 var extra = new JsonObject();
@@ -139,6 +154,10 @@ public static class FactsQueries
                     extra[kind] = Array(values.Select(pair => (JsonNode?)new JsonArray(pair.Key, pair.Value)));
                 detail["extra"] = extra;
             }
+            detail["behaviour"] = BehaviourEntry(type, arguments);
+            var typeWiring = WiringOf(model, root, type);
+            if (typeWiring != null)
+                detail["wiring"] = WiringEntry(typeWiring, arguments);
             return detail;
         }
 
@@ -175,7 +194,26 @@ public static class FactsQueries
             result["rule_suggestions"] = $"{model.RuleSuggestions.Count}; code_evidence lists them";
         result["node_candidates_total"] = candidates.Length;
         result["node_candidates"] = Array(candidates.Take(IntOr(arguments, "candidates", 40)));
-        Page(result, "type_list", owned.OrderBy(type => type.At, StringComparer.Ordinal).Select(type => (JsonNode?)TypeEntry(architecture, type)), arguments, 50);
+        var assets = root.Length > 0 ? AssetWiring.Load(root) : null;
+        var wiringByType = new Dictionary<string, TypeWiring>(StringComparer.Ordinal);
+        if (assets != null)
+            foreach (var type in owned)
+                if (WiringOf(model, assets, type) is { } typeWiring)
+                    wiringByType[type.FullName] = typeWiring;
+        if (wiringByType.Count > 0)
+            result["wiring"] = new JsonObject
+            {
+                ["wired"] = wiringByType.Values.Count(item => item.Status == "wired"),
+                ["unwired"] = wiringByType.Values.Count(item => item.Status == "unwired"),
+                ["test_only"] = wiringByType.Values.Count(item => item.Status == "test_only")
+            };
+        Page(result, "type_list", owned.OrderBy(type => type.At, StringComparer.Ordinal).Select(type =>
+        {
+            var entry = TypeEntry(architecture, type);
+            if (wiringByType.TryGetValue(type.FullName, out var typeWiring))
+                entry["wiring"] = typeWiring.Status;
+            return (JsonNode?)entry;
+        }), arguments, 50);
         return result;
     }
 
@@ -385,10 +423,13 @@ public static class FactsQueries
                 ["rule"] = suggestion.Rule,
                 ["name"] = suggestion.Name,
                 ["uses"] = suggestion.Uses,
-                ["example"] = suggestion.Example
+                ["example"] = suggestion.Example,
+                ["folders"] = Array(suggestion.Folders.Select(folder => (JsonNode?)folder))
             }));
             rules["hint"] = "The code repeats these but Architector/code-facts.json does not cover them. Read a few examples; when they wire types together (dependency access, injection), propose adding them to the user.";
         }
+        if (model.Extractors.SuggestionExclude.Count > 0)
+            rules["suggestions_exclude"] = Array(model.Extractors.SuggestionExclude.Select(value => (JsonNode?)value));
         return rules;
     }
 
@@ -578,13 +619,151 @@ public static class FactsQueries
 
     private static JsonObject LayerFailure(FactsArchitecture architecture, string reference)
     {
-        var failure = Failure("layer_not_found", $"No layer '{reference}'. Use a layer id, its path (Group/Layer) or a unique name.");
-        failure["layers"] = Array(architecture.Layers.Values
-            .Where(layer => reference.Length > 0 && layer.Path.Contains(reference, StringComparison.OrdinalIgnoreCase))
-            .Take(8)
-            .Select(layer => (JsonNode?)layer.Path));
+        var matches = architecture.MatchLayers(reference);
+        var failure = matches.Length > 1
+            ? Failure("layer_ambiguous", $"Layer '{reference}' matches {matches.Length} layers. Use a longer part of its path.")
+            : Failure("layer_not_found", $"No layer '{reference}'. Use a layer id, its full path or a unique trailing part of it (Group/Layer).");
+        var candidates = matches.Length > 1
+            ? matches.Select(layer => layer.Path)
+            : architecture.Layers.Values
+                .Where(layer => reference.Length > 0 && layer.Path.Contains(reference.Trim(), StringComparison.OrdinalIgnoreCase))
+                .Select(layer => layer.Path)
+                .OrderBy(path => path, StringComparer.Ordinal);
+        failure["target"] = reference;
+        failure["candidates"] = Array(candidates.Take(8).Select(path => (JsonNode?)path));
+        failure["layers"] = failure["candidates"]!.DeepClone();
         return failure;
     }
+
+    // Where a type is used in prefabs, scenes and assets: by its script GUID when it is a script whose file is named after
+    // it (the rule Unity applies to MonoBehaviour and ScriptableObject), and by [SerializeReference] type names.
+    private sealed class TypeWiring
+    {
+        public bool Script;
+        public List<(string File, string Object, bool Enabled, List<string> ListedBy)> Places = new();
+        public List<string> SerializedIn = new();
+        public bool TestOnly;
+        public bool Unused;
+        public string Status => Unused ? "unwired" : TestOnly ? "test_only" : "wired";
+    }
+
+    private static TypeWiring? WiringOf(FactsModel model, string root, FactsType type) => WiringOf(model, AssetWiring.Load(root), type);
+
+    private static TypeWiring? WiringOf(FactsModel model, AssetWiring assets, FactsType type)
+    {
+        var file = type.FirstFile;
+        var guid = string.Equals(Path.GetFileNameWithoutExtension(file), type.Name, StringComparison.Ordinal)
+                   && assets.GuidByScript.TryGetValue(file, out var scriptGuid)
+            ? scriptGuid
+            : null;
+        var wiring = new TypeWiring { Script = guid != null && type.UnityEntry };
+        if (guid != null && assets.ComponentsByGuid.TryGetValue(guid, out var components))
+            foreach (var (path, component) in components)
+                wiring.Places.Add((path, component.Object, component.Enabled, component.ListedBy.Select(value =>
+                {
+                    var parts = value.Split('|');
+                    var lister = assets.ScriptByGuid.TryGetValue(parts[0], out var script) ? Path.GetFileNameWithoutExtension(script) : parts[0];
+                    return $"{lister}.{parts[1]}";
+                }).ToList()));
+        if (assets.FilesBySerializedType.TryGetValue(type.FullName, out var serializedIn))
+            wiring.SerializedIn.AddRange(serializedIn);
+        if (!wiring.Script && wiring.Places.Count == 0 && wiring.SerializedIn.Count == 0)
+            return null;
+        var used = wiring.Places.Select(place => place.File).Concat(wiring.SerializedIn).ToArray();
+        wiring.Unused = used.Length == 0;
+        wiring.TestOnly = used.Length > 0 && used.All(model.Extractors.InTestFolder);
+        return wiring;
+    }
+
+    private static JsonObject WiringEntry(TypeWiring wiring, JsonNode? arguments)
+    {
+        var files = wiring.Places.Select(place => place.File).Concat(wiring.SerializedIn).Distinct(StringComparer.Ordinal).ToArray();
+        var entry = new JsonObject
+        {
+            ["status"] = wiring.Status,
+            ["prefabs"] = files.Count(path => path.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase)),
+            ["scenes"] = files.Count(path => path.EndsWith(".unity", StringComparison.OrdinalIgnoreCase)),
+            ["assets"] = files.Count(path => path.EndsWith(".asset", StringComparison.OrdinalIgnoreCase)),
+            ["test_only"] = wiring.TestOnly,
+            ["unused"] = wiring.Unused,
+            ["disabled_in"] = wiring.Places.Count(place => !place.Enabled),
+            ["listed_by"] = wiring.Places.Sum(place => place.ListedBy.Count)
+        };
+        if (wiring.SerializedIn.Count > 0)
+            entry["serialized_references"] = Array(wiring.SerializedIn.Distinct(StringComparer.Ordinal).Take(BehaviourPerSection).Select(path => (JsonNode?)path));
+        var places = new JsonObject();
+        Page(places, "items", wiring.Places.Select(place =>
+        {
+            var row = new JsonObject { ["file"] = place.File, ["object"] = place.Object, ["enabled"] = place.Enabled };
+            if (place.ListedBy.Count > 0)
+                row["listed_by"] = Array(place.ListedBy.Select(value => (JsonNode?)value));
+            return (JsonNode?)row;
+        }), Text(arguments, "section") == "wiring" ? arguments : null, BehaviourPerSection);
+        entry["places"] = places;
+        return entry;
+    }
+
+    private static readonly string[] BehaviourSections = { "reads", "writes", "uses", "subscribes", "unsubscribes", "assigns", "lifecycle" };
+    private const int BehaviourPerSection = 40;
+
+    // Counts per section, then each section's entries with file:line, at most 40 each; "section" with offset and limit
+    // pages one section in full.
+    private static JsonObject BehaviourEntry(FactsType type, JsonNode? arguments)
+    {
+        var entry = new JsonObject();
+        var only = Text(arguments, "section");
+        var counts = new JsonObject();
+        foreach (var section in BehaviourSections)
+            counts[section] = type.Behaviour.TryGetValue(section, out var values) ? values.Count : 0;
+        entry["counts"] = counts;
+        foreach (var section in BehaviourSections)
+        {
+            if (!type.Behaviour.TryGetValue(section, out var values) || only.Length > 0 && only != section)
+                continue;
+            var rows = values.Select(value => (JsonNode?)new JsonArray(value.Value, value.At));
+            if (only == section)
+            {
+                var page = new JsonObject();
+                Page(page, "items", rows, arguments, 200);
+                entry[section] = page;
+            }
+            else
+            {
+                entry[section] = Array(rows.Take(BehaviourPerSection));
+                if (values.Count > BehaviourPerSection)
+                    entry[section + "_more"] = values.Count - BehaviourPerSection;
+            }
+        }
+        if (type.Behaviour.TryGetValue("lifecycle", out var lifecycle))
+        {
+            var names = lifecycle.Select(value => value.Value).ToHashSet(StringComparer.Ordinal);
+            var unpaired = new[] { ("OnEnable", "OnDisable"), ("OnDisable", "OnEnable") }
+                .Where(pair => names.Contains(pair.Item1) && !names.Contains(pair.Item2))
+                .Select(pair => (JsonNode?)$"{pair.Item1} without {pair.Item2}")
+                .ToArray();
+            if (unpaired.Length > 0)
+                entry["unpaired"] = Array(unpaired);
+            var loops = new[] { "Update", "FixedUpdate", "LateUpdate" }.Where(names.Contains).Select(name => (JsonNode?)name).ToArray();
+            if (loops.Length > 0)
+                entry["loops"] = Array(loops);
+        }
+        return entry;
+    }
+
+    private static JsonObject MemberReference(IndexMember member)
+    {
+        var reference = new JsonObject { ["kind"] = member.Name.Length == 0 ? member.Kind : ReferenceKind(member), ["name"] = member.Name };
+        if (member.HasParameters)
+            reference["parameters"] = Array(member.Parameters.Select(parameter => (JsonNode?)parameter));
+        return reference;
+    }
+
+    private static string ReferenceKind(IndexMember member) => member.Kind switch
+    {
+        "method" when member.Name == ".ctor" => "constructor",
+        "method" when member.Name.StartsWith("op_", StringComparison.Ordinal) => "operator",
+        _ => member.Kind
+    };
 
     private static JsonObject Success() => new() { ["success"] = true };
 

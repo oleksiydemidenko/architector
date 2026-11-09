@@ -37,6 +37,28 @@ namespace Architector.Editor
             return string.Empty;
         }
 
+        // Marks a linked node as having no relationship on purpose, or with an empty reason removes the mark.
+        public void SetStandaloneNode(string layerId, string nodeId, string reason)
+        {
+            var layer = FindLayer(layerId) ?? throw new ArchitectorDataException($"Layer '{layerId}' does not exist.");
+            var node = LoadLayer(layer.id).semantic.nodes.FirstOrDefault(candidate => candidate.id == nodeId)
+                       ?? throw new ArchitectorDataException($"Node '{nodeId}' does not exist in layer '{layer.name}'.");
+            var text = ArchitectorNodeResponsibility.Normalize(reason);
+            if (text.Length > ArchitectorNodeResponsibility.MaxLength)
+                throw new ArchitectorDataException($"A standalone reason may have at most {ArchitectorNodeResponsibility.MaxLength} characters.");
+            if (text.Length > 0 && !string.Equals(node.type?.mode, "linked", StringComparison.Ordinal))
+                throw new ArchitectorDataException($"Only a linked node can be standalone; '{node.title}' is not linked to a type.");
+            UpdateSettings(text.Length > 0 ? "Mark Node Standalone" : "Clear Standalone Mark", settings =>
+            {
+                settings.rules.standaloneNodes ??= new List<ArchitectorStandaloneNodeRecord>();
+                settings.rules.standaloneNodes.RemoveAll(item => item.layerId == layer.id && item.nodeId == nodeId);
+                if (text.Length > 0)
+                    settings.rules.standaloneNodes.Add(new ArchitectorStandaloneNodeRecord { layerId = layer.id, nodeId = nodeId, reason = text });
+            });
+        }
+
+        public string StandaloneReason(string layerId, string nodeId) => ArchitectorStandaloneNodes.Reason(Settings, layerId, nodeId);
+
         public void SetGroupChecks(string groupId, bool enabled)
         {
             var group = FindGroup(groupId) ?? throw new ArchitectorDataException($"Group '{groupId}' does not exist.");
@@ -61,7 +83,7 @@ namespace Architector.Editor
                 var next = ArchitectorJson.Clone(Settings);
                 next.rules.uncheckedGroupIds.Remove(groupId);
                 var stillUnchecked = ArchitectorUncheckedGroups.LayerIds(Project, next);
-                var cycle = FindDependencyCycles().FirstOrDefault(candidate => candidate.LayerIds.Any(layerId => !stillUnchecked.Contains(layerId)));
+                var cycle = FindDependencyCycles().FirstOrDefault(candidate => candidate.CrossesLayers && candidate.LayerIds.Any(layerId => !stillUnchecked.Contains(layerId)));
                 if (cycle != null)
                     throw new ArchitectorDataException(
                         $"Turning checks on would bring a dependency cycle under the Reject rule: {DescribeDependencyCycle(cycle)}. Remove the cycle first.");

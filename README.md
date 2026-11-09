@@ -28,7 +28,7 @@ Requires Unity 6000.3 or later.
 In Unity open **Window > Package Manager > + > Add package from git URL** and enter a pinned version:
 
 ```
-https://github.com/oleksiydemidenko/architector.git#v0.3.1
+https://github.com/oleksiydemidenko/architector.git#v0.3.2
 ```
 
 The MCP server is installed from inside Unity. The .NET SDK is needed only for the `DependencyEvidence` and `ContextRoute` command-line tools.
@@ -52,7 +52,7 @@ Reading works from files; writing needs the Editor, because validation, the type
 | `architector_status`, `architector_route`, `architector_digest` (MCP) | no | Project state, routing and the approved architecture |
 | `context_route` | no | From a file or type to its layer, digest lines and documents |
 | `DependencyEvidence` | no | Code dependencies between layers that the graph does not declare |
-| `architector_query` code facts: `code_evidence`, `layer_facts`, `scope_what_if`, `layer_dump`, `lookup` | no | Who owns which types, every reference between layers with file:line, node candidates, what a scope move would change, layer ids by name. Answered by the server itself, the same totals as `DependencyEvidence` |
+| `architector_query` code facts: `code_evidence`, `layer_facts`, `scope_what_if`, `layer_dump`, `lookup` | no | Who owns which types, every reference between layers with file:line, node candidates, what a type reads, writes and subscribes to, where its scripts are wired in prefabs, scenes and assets, what a scope move would change, layer ids by name. Answered by the server itself, the same totals as `DependencyEvidence` |
 | `architector_query` | yes | Layers, approval, conformance and type queries |
 | `architector_edit` | yes | Work sessions, plans, arrangement and approvals |
 
