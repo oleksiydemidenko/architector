@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
 namespace Architector.CodeFacts;
@@ -52,13 +53,6 @@ public sealed class AssetWiring
         public string Guid { get; set; } = string.Empty;
     }
 
-    private sealed class Stored
-    {
-        public int Format { get; set; }
-        public Dictionary<string, FileEntry> Files { get; set; } = new();
-        public Dictionary<string, MetaEntry> Metas { get; set; } = new();
-    }
-
     // The script's repository path for every script GUID, and where each script and serialized type is used.
     public Dictionary<string, string> ScriptByGuid { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, string> GuidByScript { get; } = new(StringComparer.Ordinal);
@@ -90,14 +84,36 @@ public sealed class AssetWiring
             var path = StorePath(root);
             if (!File.Exists(path))
                 return;
-            var stored = JsonSerializer.Deserialize<Stored>(File.ReadAllText(path));
-            if (stored == null || stored.Format != FormatVersion)
+            // Written and read by hand: the self-contained server is trimmed, which leaves no reflection-based JSON.
+            var stored = JsonNode.Parse(File.ReadAllText(path)) as JsonObject;
+            if (stored == null || (int?)stored["format"] != FormatVersion)
                 return;
-            files = new Dictionary<string, FileEntry>(stored.Files, StringComparer.Ordinal);
-            metas = new Dictionary<string, MetaEntry>(stored.Metas, StringComparer.Ordinal);
+            foreach (var (key, value) in stored["metas"] as JsonObject ?? new JsonObject())
+                if (value is JsonObject meta)
+                    metas[key] = new MetaEntry { Length = (long?)meta["length"] ?? 0, Ticks = (long?)meta["ticks"] ?? 0, Guid = (string?)meta["guid"] ?? string.Empty };
+            foreach (var (key, value) in stored["files"] as JsonObject ?? new JsonObject())
+            {
+                if (value is not JsonObject file)
+                    continue;
+                var entry = new FileEntry { Length = (long?)file["length"] ?? 0, Ticks = (long?)file["ticks"] ?? 0 };
+                foreach (var item in file["components"] as JsonArray ?? new JsonArray())
+                    if (item is JsonObject component)
+                        entry.Components.Add(new Component
+                        {
+                            Guid = (string?)component["guid"] ?? string.Empty,
+                            FileId = (string?)component["fileId"] ?? string.Empty,
+                            Object = (string?)component["object"] ?? string.Empty,
+                            Enabled = (bool?)component["enabled"] ?? true,
+                            ListedBy = (component["listedBy"] as JsonArray ?? new JsonArray()).Select(listed => (string?)listed ?? string.Empty).ToList()
+                        });
+                entry.SerializedTypes.AddRange((file["serializedTypes"] as JsonArray ?? new JsonArray()).Select(type => (string?)type ?? string.Empty));
+                files[key] = entry;
+            }
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException or FormatException)
         {
+            files.Clear();
+            metas.Clear();
         }
     }
 
@@ -177,7 +193,26 @@ public sealed class AssetWiring
         {
             var path = StorePath(root);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, JsonSerializer.Serialize(new Stored { Format = FormatVersion, Files = files, Metas = metas }));
+            var storedMetas = new JsonObject();
+            foreach (var (key, meta) in metas)
+                storedMetas[key] = new JsonObject { ["length"] = meta.Length, ["ticks"] = meta.Ticks, ["guid"] = meta.Guid };
+            var storedFiles = new JsonObject();
+            foreach (var (key, file) in files)
+                storedFiles[key] = new JsonObject
+                {
+                    ["length"] = file.Length,
+                    ["ticks"] = file.Ticks,
+                    ["components"] = new JsonArray(file.Components.Select(component => (JsonNode?)new JsonObject
+                    {
+                        ["guid"] = component.Guid,
+                        ["fileId"] = component.FileId,
+                        ["object"] = component.Object,
+                        ["enabled"] = component.Enabled,
+                        ["listedBy"] = new JsonArray(component.ListedBy.Select(listed => (JsonNode?)listed).ToArray())
+                    }).ToArray()),
+                    ["serializedTypes"] = new JsonArray(file.SerializedTypes.Select(type => (JsonNode?)type).ToArray())
+                };
+            File.WriteAllText(path, new JsonObject { ["format"] = FormatVersion, ["metas"] = storedMetas, ["files"] = storedFiles }.ToJsonString());
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
