@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.3
+
+0.3.2 was tagged but never released: its server build failed, because the trimmed server could not save the wiring cache. 0.3.3 is 0.3.2 with that fixed. The wiring cache is now written and read without reflection. Everything listed under 0.3.2 below ships in 0.3.3.
+
 ## 0.3.2
 
 **Behaviour changes:**

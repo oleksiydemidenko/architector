@@ -1,6 +1,6 @@
 {
   "name": "com.oleksiydemidenko.architector",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "displayName": "Architector",
   "description": "Machine-readable architecture for Unity projects: a layered design graph with contracts, approvals and conformance checks against the code, built to be read and edited by coding agents. In development.",
   "unity": "6000.3",
