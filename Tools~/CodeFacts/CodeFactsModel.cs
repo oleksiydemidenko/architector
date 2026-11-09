@@ -220,6 +220,11 @@ public sealed class FactsType
     public string Name => Data.Name;
     public string FirstFile => Data.FirstFile;
     public bool UnityEntry => Data.UnityEntry;
+    public bool IsAbstract => Data.IsAbstract;
+    public bool IsGeneric => Data.IsGeneric;
+    public bool Placeable => Data.Placeable;
+    public string Key => Data.Key;
+    public IEnumerable<string> DerivedByKeys => Data.DerivedBy;
     public string? OwnerLayerId { get; }
     public List<string> Files => Data.Parts;
     public string At => Data.Parts.Count > 0 ? Data.Parts[0] : Data.FirstFile;

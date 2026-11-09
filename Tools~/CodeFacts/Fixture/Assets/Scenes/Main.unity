@@ -8,3 +8,15 @@ MonoBehaviour:
   m_GameObject: {fileID: 10}
   m_Enabled: 1
   m_Script: {fileID: 11500000, guid: a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1, type: 3}
+--- !u!114 &30
+MonoBehaviour:
+  m_GameObject: {fileID: 10}
+  m_Enabled: 1
+  m_Script: {fileID: 11500000, guid: a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1, type: 3}
+  references:
+    version: 2
+    RefIds:
+    - rid: 1
+      type: {class: PlayerLoadoutInitializerWithAVeryLongNameThatWraps, ns: Sample.Player,
+        asm: Assembly-CSharp}
+      data:

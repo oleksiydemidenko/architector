@@ -15,8 +15,20 @@ The graph describes structure, contracts, ownership and dependency direction. Ra
 - **Ask for code facts before reading code.** The `architector-mcp` server answers these `architector_query` actions itself, without Unity:
   - `layer_facts` with `target`: the layer's files and types, references to and from other layers with type pairs, declared or not, and node candidates with file:line (types used or inherited by other layers, Unity entry points, extension points). Read only the lines it points to. A layer is its id, its full path or a unique trailing part of it (`Group/Layer`).
   - `layer_facts` with `type` returns one type's public members, each with its `member_ref` (`{kind, name, parameters}`) for plans, its **behaviour facts** and its **wiring**. **Before reading a large type, read its behaviour facts** (`reads`, `writes`, `subscribes`, `unsubscribes`, `assigns`, `lifecycle`, `unpaired`, `loops`) and open only the lines they point to; `section` with `offset`/`limit` pages one section.
-  - **Before deciding that a type is dead, unused or test-only, read its `wiring`**: the prefabs, scenes and assets that use the script, `disabled_in`, `listed_by` (lists of other components that point to it), `[SerializeReference]` uses and `status` (`wired`, `unwired`, `test_only`). The layer summary counts them. Wiring comes from the assets' YAML; references from code (`AddComponent`, reflection, strings) are in the other facts or not visible at all.
-  - `code_evidence`: every layer pair with its references; `status=undeclared|cycle|unevidenced`, `pair`, `layer`; `include=references|owners|intra` pages full lists (reference rows end with the source and target layer). `binding` says how many engine and package assemblies came from Unity's project files; without them names inherited from engine base classes are not counted, and `binding.hint` says how to fix it.
+  - **Before deciding that a type is dead, unused or test-only, read its `wiring`**: the prefabs, scenes and assets that use the script, `disabled_in`, `listed_by` (lists of other components that point to it), `[SerializeReference]` uses and `status`. Every type has a status, and the layer summary counts them:
+    - `wired`: placed in a scene, prefab or asset, or managed-referenced there.
+    - `test_only`: only in test or sample folders.
+    - `base_only`: never placed itself, but placed types inherit from it. `base_of` names them.
+    - `created_in_code`: a component or asset type that `AddComponent<T>` or `CreateInstance<T>` creates; `reason` gives the line.
+    - `unwired`: a script type that nothing places, creates or inherits from. `reason` says why for abstract and generic types. This is the dead-code candidate; check reflection and strings before you call it dead.
+    - `not_tracked`: assets cannot show it, because it is serialized by value or not serialized at all. Its absence is never evidence of dead code.
+  - `code_evidence`: every layer pair with its references; `status=undeclared|cycle|unevidenced`, `pair`, `layer`; `include=references|owners|intra` pages full lists (reference rows end with the source and target layer). `binding` says which assemblies the analysis could see:
+    - `unity_references`: the engine and package assemblies named by Unity's project files.
+    - `project_references`: packages and plugins referenced as projects, either `compiled` (read from `Library/ScriptAssemblies`) or `from_sources` (compiled here).
+    - `missing_assemblies`: assemblies that are neither compiled nor available as sources.
+    - `unseen_base_types` and `unseen_base_examples`: which base classes stay unseen and how many types inherit each.
+
+    Names inherited from an unseen base class are not counted. Read `binding.hint` first when anything is missing.
   - `scope_what_if` with `moves` (`type`, `file` or `folder`, and `to`): before changing a scope or moving a type, see the undeclared pairs and cycles it adds or removes and the relationships that would lose their evidence.
   - `layer_dump` (nodes and relationships with ids, paged) and `lookup` (names to layer, node and member ids).
   - Replies are compact; use `offset`, `limit` and `next_offset`, or `output=file` for a full list.

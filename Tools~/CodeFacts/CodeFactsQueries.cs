@@ -76,13 +76,32 @@ public static class FactsQueries
         result["rules"] = RulesEntry(model);
         if (model.Index != null)
         {
+            var index = model.Index;
             var binding = new JsonObject
             {
-                ["unity_references"] = model.Index.UnityReferenceCount,
-                ["unseen_base_types"] = model.Index.UnresolvedBaseTypes
+                ["unity_references"] = index.UnityReferenceCount,
+                ["project_references"] = new JsonObject
+                {
+                    ["compiled"] = index.ProjectReferencesCompiled,
+                    ["from_sources"] = index.ProjectReferencesFromSources,
+                    ["missing"] = index.MissingAssemblies.Count
+                },
+                ["missing_assemblies"] = Array(index.MissingAssemblies.Select(name => (JsonNode?)name)),
+                ["unseen_base_types"] = index.UnresolvedBaseTypes,
+                ["unseen_base_examples"] = Array(index.UnseenBaseExamples.Select(example => (JsonNode?)new JsonObject
+                {
+                    ["type"] = example.Type,
+                    ["base"] = example.Base,
+                    ["file"] = example.At,
+                    ["types_with_this_base"] = example.Count
+                }))
             };
-            if (model.Index.UnityReferenceCount == 0 && model.Index.UnresolvedBaseTypes > 0)
+            if (index.MissingAssemblies.Count > 0)
+                binding["hint"] = $"These referenced assemblies are neither compiled in Library/ScriptAssemblies nor available as sources: {string.Join(", ", index.MissingAssemblies)}. Their base classes stay unseen until Unity compiles the project once.";
+            else if (index.UnityReferenceCount == 0 && index.ProjectReferencesCompiled + index.ProjectReferencesFromSources == 0 && index.UnresolvedBaseTypes > 0)
                 binding["hint"] = "No Unity project files (Assembly-CSharp.csproj) were found, so engine and package base classes are unseen and names inherited from them are not counted. Open the project in Unity with an IDE set in External Tools to generate them.";
+            else if (index.UnresolvedBaseTypes > 0)
+                binding["hint"] = "unseen_base_examples shows which base classes remain unseen and how many types inherit each; names inherited from them are not counted.";
             result["binding"] = binding;
         }
 
@@ -155,9 +174,8 @@ public static class FactsQueries
                 detail["extra"] = extra;
             }
             detail["behaviour"] = BehaviourEntry(type, arguments);
-            var typeWiring = WiringOf(model, root, type);
-            if (typeWiring != null)
-                detail["wiring"] = WiringEntry(typeWiring, arguments);
+            if (root.Length > 0)
+                detail["wiring"] = WiringEntry(WiringStatuses(model, AssetWiring.Load(root))[type.Key], arguments);
             return detail;
         }
 
@@ -194,24 +212,19 @@ public static class FactsQueries
             result["rule_suggestions"] = $"{model.RuleSuggestions.Count}; code_evidence lists them";
         result["node_candidates_total"] = candidates.Length;
         result["node_candidates"] = Array(candidates.Take(IntOr(arguments, "candidates", 40)));
-        var assets = root.Length > 0 ? AssetWiring.Load(root) : null;
-        var wiringByType = new Dictionary<string, TypeWiring>(StringComparer.Ordinal);
-        if (assets != null)
-            foreach (var type in owned)
-                if (WiringOf(model, assets, type) is { } typeWiring)
-                    wiringByType[type.FullName] = typeWiring;
-        if (wiringByType.Count > 0)
-            result["wiring"] = new JsonObject
-            {
-                ["wired"] = wiringByType.Values.Count(item => item.Status == "wired"),
-                ["unwired"] = wiringByType.Values.Count(item => item.Status == "unwired"),
-                ["test_only"] = wiringByType.Values.Count(item => item.Status == "test_only")
-            };
+        var statuses = root.Length > 0 ? WiringStatuses(model, AssetWiring.Load(root)) : null;
+        if (statuses != null)
+        {
+            var summary = new JsonObject();
+            foreach (var status in WiringStatusNames)
+                summary[status] = owned.Count(type => statuses[type.Key].Status == status);
+            result["wiring"] = summary;
+        }
         Page(result, "type_list", owned.OrderBy(type => type.At, StringComparer.Ordinal).Select(type =>
         {
             var entry = TypeEntry(architecture, type);
-            if (wiringByType.TryGetValue(type.FullName, out var typeWiring))
-                entry["wiring"] = typeWiring.Status;
+            if (statuses != null)
+                entry["wiring"] = statuses[type.Key].Status;
             return (JsonNode?)entry;
         }), arguments, 50);
         return result;
@@ -643,13 +656,70 @@ public static class FactsQueries
         public List<(string File, string Object, bool Enabled, List<string> ListedBy)> Places = new();
         public List<string> SerializedIn = new();
         public bool TestOnly;
-        public bool Unused;
-        public string Status => Unused ? "unwired" : TestOnly ? "test_only" : "wired";
+        public bool Found;
+        public string Status = "not_tracked";
+        public string Reason = string.Empty;
+        public List<string> BaseOf = new();
     }
 
-    private static TypeWiring? WiringOf(FactsModel model, string root, FactsType type) => WiringOf(model, AssetWiring.Load(root), type);
+    private static readonly string[] WiringStatusNames = { "wired", "test_only", "base_only", "created_in_code", "unwired", "not_tracked" };
+    private static readonly string[] CreatingCalls = { "AddComponent", "CreateInstance" };
 
-    private static TypeWiring? WiringOf(FactsModel model, AssetWiring assets, FactsType type)
+    // Every type gets a status. wired and test_only come from the assets. A type that is never placed itself but that
+    // placed types inherit from (directly or further down) is base_only. A script type (MonoBehaviour, ScriptableObject)
+    // that nothing places and nothing placed inherits from is unwired. Everything else is not_tracked: assets do not
+    // name it (a class serialized by value) or it is not serialized at all, so its absence proves nothing.
+    private static Dictionary<string, TypeWiring> WiringStatuses(FactsModel model, AssetWiring assets)
+    {
+        var byKey = model.Types.ToDictionary(type => type.Key, StringComparer.Ordinal);
+        var wiring = model.Types.ToDictionary(type => type.Key, type => WiringOf(model, assets, type), StringComparer.Ordinal);
+        var createdAt = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var type in model.Types)
+            if (type.Extras.TryGetValue("generic_calls", out var calls))
+                foreach (var (call, at) in calls)
+                    foreach (var name in CreatingCalls.Where(name => call.StartsWith(name + "<", StringComparison.Ordinal)))
+                        createdAt.TryAdd(call[(name.Length + 1)..^1].Split('.').Last().Trim(), at);
+        foreach (var (key, item) in wiring)
+        {
+            if (item.Found)
+            {
+                item.Status = item.TestOnly ? "test_only" : "wired";
+                continue;
+            }
+            var type = byKey[key];
+            var derived = new HashSet<string>(StringComparer.Ordinal);
+            var queue = new Queue<string>(type.DerivedByKeys);
+            while (queue.Count > 0)
+            {
+                var next = queue.Dequeue();
+                if (!derived.Add(next) || !byKey.TryGetValue(next, out var child))
+                    continue;
+                foreach (var grandchild in child.DerivedByKeys)
+                    queue.Enqueue(grandchild);
+            }
+            item.BaseOf = derived.Where(child => wiring.TryGetValue(child, out var childWiring) && childWiring.Found)
+                .Select(child => byKey[child].FullName)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToList();
+            if (item.BaseOf.Count > 0)
+                item.Status = "base_only";
+            else if (type.Placeable && createdAt.TryGetValue(type.Name, out var created))
+            {
+                item.Status = "created_in_code";
+                item.Reason = "created from code at " + created;
+            }
+            else if (type.Placeable)
+            {
+                item.Status = "unwired";
+                item.Reason = type.IsAbstract || type.IsGeneric
+                    ? $"{(type.IsAbstract ? "abstract" : "generic")}, {(derived.Count == 0 ? "no subclasses" : "no subclass is placed")}"
+                    : item.Script ? string.Empty : "no script asset of its own (its file is not named after it)";
+            }
+        }
+        return wiring;
+    }
+
+    private static TypeWiring WiringOf(FactsModel model, AssetWiring assets, FactsType type)
     {
         var file = type.FirstFile;
         var guid = string.Equals(Path.GetFileNameWithoutExtension(file), type.Name, StringComparison.Ordinal)
@@ -667,10 +737,8 @@ public static class FactsQueries
                 }).ToList()));
         if (assets.FilesBySerializedType.TryGetValue(type.FullName, out var serializedIn))
             wiring.SerializedIn.AddRange(serializedIn);
-        if (!wiring.Script && wiring.Places.Count == 0 && wiring.SerializedIn.Count == 0)
-            return null;
         var used = wiring.Places.Select(place => place.File).Concat(wiring.SerializedIn).ToArray();
-        wiring.Unused = used.Length == 0;
+        wiring.Found = used.Length > 0;
         wiring.TestOnly = used.Length > 0 && used.All(model.Extractors.InTestFolder);
         return wiring;
     }
@@ -685,10 +753,19 @@ public static class FactsQueries
             ["scenes"] = files.Count(path => path.EndsWith(".unity", StringComparison.OrdinalIgnoreCase)),
             ["assets"] = files.Count(path => path.EndsWith(".asset", StringComparison.OrdinalIgnoreCase)),
             ["test_only"] = wiring.TestOnly,
-            ["unused"] = wiring.Unused,
+            ["unused"] = wiring.Status == "unwired",
             ["disabled_in"] = wiring.Places.Count(place => !place.Enabled),
             ["listed_by"] = wiring.Places.Sum(place => place.ListedBy.Count)
         };
+        if (wiring.Reason.Length > 0)
+            entry["reason"] = wiring.Reason;
+        if (wiring.BaseOf.Count > 0)
+        {
+            entry["base_of"] = Array(wiring.BaseOf.Take(10).Select(name => (JsonNode?)name));
+            entry["base_of_count"] = wiring.BaseOf.Count;
+        }
+        if (wiring.Status == "not_tracked")
+            entry["note"] = "Assets cannot show this type (serialized by value, or not serialized); its absence proves nothing.";
         if (wiring.SerializedIn.Count > 0)
             entry["serialized_references"] = Array(wiring.SerializedIn.Distinct(StringComparer.Ordinal).Take(BehaviourPerSection).Select(path => (JsonNode?)path));
         var places = new JsonObject();

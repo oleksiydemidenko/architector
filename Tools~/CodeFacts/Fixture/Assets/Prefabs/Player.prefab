@@ -32,3 +32,26 @@ MonoBehaviour:
   m_Enabled: 0
   m_Script: {fileID: 11500000, guid: a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1, type: 3}
   spares: []
+--- !u!1 &500
+GameObject:
+  m_Name: Body
+--- !u!114 &510
+MonoBehaviour:
+  m_GameObject: {fileID: 500}
+  m_Enabled: 1
+  m_Script: {fileID: 11500000, guid: d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4, type: 3}
+--- !u!114 &520
+MonoBehaviour:
+  m_GameObject: {fileID: 500}
+  m_Enabled: 1
+  m_Script: {fileID: 11500000, guid: e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5, type: 3}
+  Value: 2
+  references:
+    version: 2
+    RefIds:
+    - rid: 7
+      type:
+        class: PlayerBlockEntry
+        ns: Sample.Player
+        asm: Assembly-CSharp
+      data:

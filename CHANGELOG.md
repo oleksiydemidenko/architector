@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.3.4
+
+**Behaviour changes:**
+
+- **Packages referenced as projects now bind.** When Unity generates project files for packages and plugins, `Assembly-CSharp.csproj` refers to them as `<ProjectReference>`, and 0.3.3 left their types unseen. Every `ProjectReference` is now followed transitively:
+  - A project whose sources lie under `Assets` is the project's own and is skipped, because the index compiles those sources itself.
+  - Any other project is read from `Library/ScriptAssemblies/<AssemblyName>.dll`, or, when Unity has not compiled it yet, compiled from its sources.
+- **Relative `HintPath` entries are found.** They are now resolved from the project file's folder, not from the folder the server runs in. Before, package assemblies in `Library/ScriptAssemblies` were silently left out.
+- **Totals.** With these two changes, members inherited from package base classes bind to the package. Totals change only where binding becomes correct. `code_evidence` and `DependencyEvidence` stay equal.
+
+**`binding` in `code_evidence`:**
+
+- `project_references` with `compiled`, `from_sources` and `missing`.
+- `missing_assemblies`: assemblies that are neither compiled nor available as sources.
+- `unseen_base_examples`: each base class that stays unseen, with one type that inherits it and how many do.
+- `hint` names the missing assemblies first.
+
+**Wiring facts:**
+
+- Managed references whose `type:` line Unity wrapped onto the next line are read, and so is the block form. The wiring cache is rebuilt once.
+- Every type now has a wiring status, and the layer summary counts each one:
+
+  | Status | Meaning |
+  | --- | --- |
+  | `wired` | Placed, or managed-referenced, in a scene, prefab or asset |
+  | `test_only` | Used only in test or sample folders |
+  | `base_only` | An abstract, generic or other base class that placed types inherit; `base_of` lists them |
+  | `created_in_code` | Created by `AddComponent<T>` or `CreateInstance<T>`; `reason` gives the line |
+  | `unwired` | A script type that nothing places, creates or inherits from; `reason` explains abstract and generic ones |
+  | `not_tracked` | Assets cannot show it (serialized by value, or not serialized); its absence proves nothing |
+
+- Editor-only `ScriptableObject`s (windows, inspectors, drawers, importers, settings providers) are no longer counted as placeable.
+
 ## 0.3.3
 
 0.3.2 was tagged but never released: its server build failed, because the trimmed server could not save the wiring cache. 0.3.3 is 0.3.2 with that fixed. The wiring cache is now written and read without reflection. Everything listed under 0.3.2 below ships in 0.3.3.

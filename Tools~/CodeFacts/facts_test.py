@@ -66,8 +66,24 @@ assert [item[0] for item in listener["lifecycle"]] == ["OnEnable", "Update"], li
 assert listener["unpaired"] == ["OnEnable without OnDisable"] and listener["loops"] == ["Update"], listener
 assert listener["counts"]["unsubscribes"] == 0, listener
 player_layer = answer({"action": "layer_facts", "target": "Player"})
-assert player_layer["wiring"] == {"wired": 2, "unwired": 1, "test_only": 1}, player_layer["wiring"]
-assert {item["type"]: item.get("wiring") for item in player_layer["type_list"]}["Sample.Player.PlayerSpawner"] == "unwired", player_layer
+assert player_layer["wiring"] == {"wired": 6, "test_only": 1, "base_only": 2, "created_in_code": 1, "unwired": 2, "not_tracked": 3}, player_layer["wiring"]
+statuses = {item["type"]: item.get("wiring") for item in player_layer["type_list"]}
+assert all(status is not None for status in statuses.values()), statuses
+assert statuses["Sample.Player.PlayerLoadoutInitializerWithAVeryLongNameThatWraps"] == "wired", statuses
+assert statuses["Sample.Player.PlayerBlockEntry"] == "wired" and statuses["Sample.Player.PlayerStatsValue"] == "not_tracked", statuses
+part = answer({"action": "layer_facts", "target": "Player", "type": "PlayerPart"})["wiring"]
+assert part["status"] == "base_only" and part["base_of"] == ["Sample.Player.PlayerHealth"] and part["base_of_count"] == 1, part
+stat = answer({"action": "layer_facts", "target": "Player", "type": "Sample.Player.PlayerStat`1"})["wiring"]
+assert stat["status"] == "base_only" and stat["base_of"] == ["Sample.Player.PlayerSpeed"], stat
+legacy = answer({"action": "layer_facts", "target": "Player", "type": "PlayerLegacy"})["wiring"]
+assert legacy["status"] == "unwired" and legacy["reason"] == "abstract, no subclasses", legacy
+listener = answer({"action": "layer_facts", "target": "Player", "type": "PlayerListener"})["wiring"]
+assert listener["status"] == "unwired" and "file is not named after it" in listener["reason"], listener
+value = answer({"action": "layer_facts", "target": "Player", "type": "PlayerStatsValue"})["wiring"]
+assert value["status"] == "not_tracked" and "proves nothing" in value["note"], value
+assert {item["type"]: item.get("wiring") for item in player_layer["type_list"]}["Sample.Player.PlayerSpawner"] == "created_in_code", player_layer
+spawner = answer({"action": "layer_facts", "target": "Player", "type": "PlayerSpawner"})["wiring"]
+assert spawner["reason"] == "created from code at Assets/Player/PlayerFactory.cs:7", spawner
 controller_wiring = answer({"action": "layer_facts", "target": "Player", "type": "PlayerController"})["wiring"]
 assert (controller_wiring["status"], controller_wiring["prefabs"], controller_wiring["scenes"], controller_wiring["disabled_in"], controller_wiring["listed_by"]) == ("wired", 1, 1, 1, 1), controller_wiring
 assert {"file": "Assets/Prefabs/Player.prefab", "object": "Spare", "enabled": False, "listed_by": ["PlayerController.spares"]} in controller_wiring["places"]["items"], controller_wiring
@@ -202,6 +218,47 @@ if evidence_tool:
     with_project_files = answer({"action": "code_evidence"})
     assert with_project_files["binding"]["unity_references"] == 1 and with_project_files["references"] == 12, with_project_files
     os.remove(os.path.join(project, "Assembly-CSharp.csproj"))
+
+# A package base class that Unity's project file brings in as a ProjectReference: its inherited property Clock must bind
+# to the package, never to the project's own Sample.Core.Clock. Without the package the name binds to the project type.
+def write(relative, text):
+    path = os.path.join(project, *relative.split("/"))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(text)
+
+net_source = "namespace Sample.Net\n{\n    public class NetClock { public float Tick; }\n    public class NetBehaviour { public NetClock Clock { get; } = new NetClock(); }\n}\n"
+write("Assets/Player/NetPlayer.cs", "using Sample.Core;\n\nnamespace Sample.Player\n{\n    public sealed class NetPlayer : Sample.Net.NetBehaviour\n    {\n        public float Read() => Clock.Tick;\n    }\n}\n")
+unseen = answer({"action": "code_evidence"})
+assert unseen["references"] == 13 and any(item["base"] == "Sample.Net.NetBehaviour" for item in unseen["binding"]["unseen_base_examples"]), unseen
+write("Packages/com.sample.net/Runtime/NetBehaviour.cs", net_source)
+write("Net.csproj", '<Project><PropertyGroup><AssemblyName>Sample.Net</AssemblyName><DefineConstants>UNITY_EDITOR</DefineConstants></PropertyGroup>'
+      '<ItemGroup><Compile Include="Packages\\com.sample.net\\Runtime\\NetBehaviour.cs" /></ItemGroup></Project>')
+write("Assembly-CSharp.csproj", '<Project><PropertyGroup><DefineConstants>UNITY_EDITOR</DefineConstants></PropertyGroup>'
+      '<ItemGroup><ProjectReference Include="Net.csproj" /></ItemGroup></Project>')
+from_sources = answer({"action": "code_evidence"})
+assert from_sources["references"] == 12, from_sources
+assert from_sources["binding"]["project_references"] == {"compiled": 0, "from_sources": 1, "missing": 0}, from_sources["binding"]
+if shutil.which("dotnet"):
+    library = tempfile.mkdtemp()
+    with open(os.path.join(library, "Net.cs"), "w", encoding="utf-8") as handle:
+        handle.write(net_source)
+    with open(os.path.join(library, "Sample.Net.csproj"), "w", encoding="utf-8") as handle:
+        handle.write('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><AssemblyName>Sample.Net</AssemblyName></PropertyGroup></Project>')
+    built = subprocess.run(["dotnet", "build", library, "-c", "Release", "-o", os.path.join(library, "out"), "-nologo", "-v", "q"], capture_output=True, text=True)
+    assert built.returncode == 0, built.stdout + built.stderr
+    os.makedirs(os.path.join(project, "Library", "ScriptAssemblies"), exist_ok=True)
+    shutil.copy(os.path.join(library, "out", "Sample.Net.dll"), os.path.join(project, "Library", "ScriptAssemblies", "Sample.Net.dll"))
+    os.remove(os.path.join(project, "Packages", "com.sample.net", "Runtime", "NetBehaviour.cs"))
+    with open(os.path.join(project, "Net.csproj"), "a", encoding="utf-8") as handle:
+        handle.write("\n")
+    compiled = answer({"action": "code_evidence"})
+    assert compiled["references"] == 12 and compiled["binding"]["project_references"]["compiled"] == 1, compiled["binding"]
+os.remove(os.path.join(project, "Net.csproj"))
+missing = answer({"action": "code_evidence"})
+assert missing["binding"]["missing_assemblies"] == ["Net"] and "Net" in missing["binding"]["hint"], missing["binding"]
+for leftover in ("Assembly-CSharp.csproj", "Assets/Player/NetPlayer.cs"):
+    os.remove(os.path.join(project, *leftover.split("/")))
 
 # suggestions.exclude leaves uses in those folders out of the rule suggestions.
 with open(os.path.join(project, "Architector", "code-facts.json"), "w", encoding="utf-8") as config:

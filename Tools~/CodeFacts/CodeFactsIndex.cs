@@ -14,7 +14,7 @@ namespace Architector.CodeFacts;
 // The index is saved under Library/Architector and reused while no C# file, csproj or code-facts.json changed.
 public sealed class CodeIndex
 {
-    private const int FormatVersion = 2;
+    private const int FormatVersion = 3;
 
     public string Signature { get; private set; } = string.Empty;
     public string ReferenceSet { get; private set; } = string.Empty;
@@ -26,6 +26,10 @@ public sealed class CodeIndex
     // cannot see (their inherited members are unknown, so names inside them may be missed, never misbound).
     public int UnityReferenceCount { get; set; }
     public int UnresolvedBaseTypes { get; set; }
+    public int ProjectReferencesCompiled { get; set; }
+    public int ProjectReferencesFromSources { get; set; }
+    public List<string> MissingAssemblies { get; } = new();
+    public List<(string Type, string Base, string At, int Count)> UnseenBaseExamples { get; } = new();
     public long BuildMilliseconds { get; private set; }
     public bool FromDisk { get; private set; }
 
@@ -66,7 +70,8 @@ public sealed class CodeIndex
         hash.AppendData(Encoding.UTF8.GetBytes($"format {FormatVersion}\n"));
         foreach (var file in FactsModel.SourceFilePaths(root))
             Add(file);
-        foreach (var extra in new[] { Path.Combine(root, "Assembly-CSharp.csproj"), Path.Combine(root, "Assembly-CSharp-Editor.csproj"), Path.Combine(root, "Architector", "code-facts.json") })
+        foreach (var extra in new[] { Path.Combine(root, "Architector", "code-facts.json") }
+                     .Concat(Directory.Exists(root) ? Directory.GetFiles(root, "*.csproj").OrderBy(path => path, StringComparer.Ordinal) : Enumerable.Empty<string>()))
             if (File.Exists(extra))
                 Add(extra);
         return Convert.ToHexString(hash.GetHashAndReset());
@@ -83,12 +88,16 @@ public sealed class CodeIndex
                 new CSharpParseOptions(LanguageVersion.Latest, preprocessorSymbols: defines),
                 Path.GetRelativePath(root, file).Replace('\\', '/')))
             .ToArray();
-        var unityReferences = UnityReferences(root);
-        index.UnityReferenceCount = unityReferences.Count;
+        var platform = references.ToArray();
+        var unityReferences = UnityReferences(root, platform);
+        index.UnityReferenceCount = unityReferences.HintReferences;
+        index.ProjectReferencesCompiled = unityReferences.Compiled;
+        index.ProjectReferencesFromSources = unityReferences.FromSources;
+        index.MissingAssemblies.AddRange(unityReferences.Missing.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(name => name, StringComparer.Ordinal));
         var compilation = CSharpCompilation.Create(
             "Architector.DependencyEvidence",
             trees,
-            references.Concat(unityReferences),
+            platform.Concat(unityReferences.References),
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true));
 
         var byKey = new Dictionary<string, IndexType>(StringComparer.Ordinal);
@@ -174,10 +183,38 @@ public sealed class CodeIndex
         foreach (var type in index.Types)
             Describe(type, symbols[type.Key], byKey, KeyOf);
         index.UnresolvedBaseTypes = symbols.Values.Count(symbol => HasUnseenBase(symbol));
+        index.UnseenBaseExamples.AddRange(symbols.Values
+            .Select(symbol => (Symbol: symbol, Base: UnseenBase(symbol)))
+            .Where(item => item.Base != null)
+            .GroupBy(item => item.Base!, StringComparer.Ordinal)
+            .OrderByDescending(group => group.Count())
+            .ThenBy(group => group.Key, StringComparer.Ordinal)
+            .Take(10)
+            .Select(group =>
+            {
+                var first = group.OrderBy(item => item.Symbol.ToDisplayString(), StringComparer.Ordinal).First();
+                var location = first.Symbol.Locations.FirstOrDefault(item => item.IsInSource);
+                return (first.Symbol.ToDisplayString(), group.Key,
+                    location == null ? string.Empty : $"{location.SourceTree!.FilePath}:{location.GetLineSpan().StartLinePosition.Line + 1}", group.Count());
+            }));
         index.Suggestions.AddRange(extraction.Suggest(index.Types));
         index.BuildMilliseconds = watch.ElapsedMilliseconds;
         return index;
     }
+
+    // Unity serializes a script's own document only for these bases: components and assets placed in scenes, prefabs
+    // and asset files.
+    private static readonly HashSet<string> PlaceableBases = new(StringComparer.Ordinal)
+    {
+        "MonoBehaviour", "ScriptableObject", "StateMachineBehaviour"
+    };
+
+    // ScriptableObjects that Unity creates itself and never stores in a scene, prefab or asset of the project.
+    private static readonly HashSet<string> EditorOnlyBases = new(StringComparer.Ordinal)
+    {
+        "EditorWindow", "Editor", "PropertyDrawer", "ScriptableSingleton", "ScriptableWizard", "PopupWindowContent",
+        "AssetPostprocessor", "ScriptedImporter", "ScriptedImporterEditor", "AssetImporterEditor", "SettingsProvider"
+    };
 
     private static readonly HashSet<string> UnityEntryBases = new(StringComparer.Ordinal)
     {
@@ -206,6 +243,18 @@ public sealed class CodeIndex
         type.Interfaces.AddRange(symbol.Interfaces.Select(contract => contract.ToDisplayString()));
         type.ExtensionCandidate = symbol.DeclaredAccessibility == Accessibility.Public
                                   && (symbol.TypeKind == TypeKind.Interface || symbol.IsAbstract && symbol.TypeKind == TypeKind.Class);
+        type.IsAbstract = symbol.IsAbstract && symbol.TypeKind == TypeKind.Class;
+        type.IsGeneric = symbol.TypeParameters.Length > 0;
+        for (var parent = symbol.BaseType; parent != null; parent = parent.BaseType)
+        {
+            if (EditorOnlyBases.Contains(parent.Name))
+            {
+                type.Placeable = false;
+                break;
+            }
+            if (PlaceableBases.Contains(parent.Name))
+                type.Placeable = true;
+        }
         foreach (var member in symbol.GetMembers()
                      .Where(member => member.DeclaredAccessibility == Accessibility.Public && !member.IsImplicitlyDeclared)
                      .Where(member => member is not IMethodSymbol method
@@ -289,6 +338,14 @@ public sealed class CodeIndex
             or PostfixUnaryExpressionSyntax or ElementAccessExpressionSyntax;
     }
 
+    private static string? UnseenBase(INamedTypeSymbol symbol)
+    {
+        for (var parent = symbol.BaseType; parent != null; parent = parent.BaseType)
+            if (parent.TypeKind == TypeKind.Error)
+                return parent.ToDisplayString();
+        return null;
+    }
+
     private static bool HasUnseenBase(INamedTypeSymbol symbol)
     {
         for (var parent = symbol.BaseType; parent != null; parent = parent.BaseType)
@@ -297,15 +354,27 @@ public sealed class CodeIndex
         return false;
     }
 
-    // The engine and package assemblies Unity's generated project files reference (Assembly-CSharp.csproj and
-    // Assembly-CSharp-Editor.csproj), so members inherited from engine and package base classes bind to them and never
-    // to a project type of the same name. Left out: the .NET assemblies (the host brings its own) and the project's own
-    // assemblies, whose sources the index compiles itself. Without the project files nothing is added.
-    internal static IReadOnlyList<MetadataReference> UnityReferences(string root)
+    // What Unity's project files make the compilation see besides the project's own sources (Assets): the assemblies their
+    // <Reference HintPath> entries name (engine, packages Unity ships compiled), and every <ProjectReference> followed
+    // transitively. A referenced project whose sources lie outside Assets (a package or plugin compiled from source) is
+    // loaded from Library/ScriptAssemblies/<AssemblyName>.dll, or, when Unity has not compiled it, compiled here from its
+    // own sources. Left out: the .NET assemblies (the host brings its own) and the project's own assemblies, whose
+    // sources the index compiles itself. Without the project files nothing is added.
+    internal sealed class UnityProjectReferences
     {
+        public List<MetadataReference> References { get; } = new();
+        public int HintReferences { get; set; }
+        public int Compiled { get; set; }
+        public int FromSources { get; set; }
+        public List<string> Missing { get; } = new();
+    }
+
+    internal static UnityProjectReferences UnityReferences(string root, IReadOnlyList<MetadataReference> platform)
+    {
+        var result = new UnityProjectReferences();
         var projects = new[] { "Assembly-CSharp.csproj", "Assembly-CSharp-Editor.csproj" }.Select(name => Path.Combine(root, name)).Where(File.Exists).ToArray();
         if (projects.Length == 0)
-            return System.Array.Empty<MetadataReference>();
+            return result;
         var own = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var assets = Path.Combine(root, "Assets");
         if (Directory.Exists(assets))
@@ -315,38 +384,134 @@ public sealed class CodeIndex
                 if (match.Success)
                     own.Add(match.Groups[1].Value);
             }
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var result = new List<MetadataReference>();
-        foreach (var project in projects)
+        var hints = new Dictionary<string, MetadataReference>(StringComparer.OrdinalIgnoreCase);
+        var resolved = new Dictionary<string, MetadataReference?>(StringComparer.OrdinalIgnoreCase);
+        var visiting = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        XDocument? Load(string project)
         {
-            XDocument document;
             try
             {
-                document = XDocument.Load(project);
+                return File.Exists(project) ? XDocument.Load(project) : null;
             }
             catch (System.Xml.XmlException)
             {
-                continue;
+                return null;
             }
-            foreach (var hint in document.Descendants().Where(node => node.Name.LocalName == "HintPath").Select(node => node.Value.Trim()))
+        }
+
+        IEnumerable<MetadataReference> HintsOf(string project, XDocument document)
+        {
+            var projectFolder = Path.GetDirectoryName(project) ?? root;
+            foreach (var hint in document.Descendants().Where(node => node.Name.LocalName == "HintPath")
+                         .Select(node => Path.GetFullPath(Path.Combine(projectFolder, node.Value.Trim().Replace('\\', Path.DirectorySeparatorChar)))))
             {
                 var name = Path.GetFileNameWithoutExtension(hint);
                 var normalized = hint.Replace('\\', '/');
-                if (name.Length == 0 || !seen.Add(name) || own.Contains(name) || name.StartsWith("Assembly-CSharp", StringComparison.OrdinalIgnoreCase)
+                if (name.Length == 0 || own.Contains(name) || name.StartsWith("Assembly-CSharp", StringComparison.OrdinalIgnoreCase)
                     || name is "mscorlib" or "netstandard" || name.StartsWith("System", StringComparison.Ordinal) || name.StartsWith("Microsoft.", StringComparison.Ordinal)
                     || normalized.Contains("/UnityReferenceAssemblies/", StringComparison.OrdinalIgnoreCase)
                     || normalized.Contains("/NetStandard/", StringComparison.OrdinalIgnoreCase)
                     || !File.Exists(hint))
                     continue;
-                try
+                if (!hints.TryGetValue(name, out var reference))
                 {
-                    result.Add(MetadataReference.CreateFromFile(hint));
+                    try
+                    {
+                        reference = MetadataReference.CreateFromFile(hint);
+                    }
+                    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or BadImageFormatException)
+                    {
+                        continue;
+                    }
+                    hints[name] = reference;
                 }
-                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or BadImageFormatException)
-                {
-                }
+                yield return reference;
             }
         }
+
+        // The referenced projects of one project file, each resolved to a metadata reference (or nothing for an own one).
+        IEnumerable<MetadataReference> ProjectsOf(string project, XDocument document)
+        {
+            var folder = Path.GetDirectoryName(project) ?? root;
+            foreach (var include in document.Descendants().Where(node => node.Name.LocalName == "ProjectReference")
+                         .Select(node => node.Attribute("Include")?.Value ?? string.Empty).Where(value => value.Length > 0))
+            {
+                var reference = Resolve(Path.GetFullPath(Path.Combine(folder, include.Replace('\\', Path.DirectorySeparatorChar))));
+                if (reference != null)
+                    yield return reference;
+            }
+        }
+
+        MetadataReference? Resolve(string project)
+        {
+            if (resolved.TryGetValue(project, out var known))
+                return known;
+            if (!visiting.Add(project))
+                return null;
+            var document = Load(project);
+            MetadataReference? reference = null;
+            if (document == null)
+                result.Missing.Add(Path.GetFileNameWithoutExtension(project));
+            else
+            {
+                var name = document.Descendants().FirstOrDefault(node => node.Name.LocalName == "AssemblyName")?.Value.Trim();
+                if (string.IsNullOrEmpty(name))
+                    name = Path.GetFileNameWithoutExtension(project);
+                var folder = Path.GetDirectoryName(project) ?? root;
+                var sources = document.Descendants().Where(node => node.Name.LocalName == "Compile")
+                    .Select(node => node.Attribute("Include")?.Value ?? string.Empty)
+                    .Where(value => value.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                    .Select(value => Path.GetFullPath(Path.Combine(folder, value.Replace('\\', Path.DirectorySeparatorChar))))
+                    .ToArray();
+                var dependencies = HintsOf(project, document).Concat(ProjectsOf(project, document)).ToList();
+                var ownSources = sources.Length == 0 || sources.All(file => Path.GetRelativePath(root, file).Replace('\\', '/').StartsWith("Assets/", StringComparison.Ordinal));
+                if (!ownSources && !own.Contains(name))
+                {
+                    var compiled = Path.Combine(root, "Library", "ScriptAssemblies", name + ".dll");
+                    if (File.Exists(compiled))
+                    {
+                        try
+                        {
+                            reference = MetadataReference.CreateFromFile(compiled);
+                            result.Compiled++;
+                        }
+                        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or BadImageFormatException)
+                        {
+                        }
+                    }
+                    if (reference == null)
+                    {
+                        var existing = sources.Where(File.Exists).ToArray();
+                        if (existing.Length > 0)
+                        {
+                            var defines = document.Descendants().FirstOrDefault(node => node.Name.LocalName == "DefineConstants")?.Value.Split(';') ?? System.Array.Empty<string>();
+                            var trees = existing.Select(file => CSharpSyntaxTree.ParseText(File.ReadAllText(file), new CSharpParseOptions(LanguageVersion.Latest, preprocessorSymbols: defines), file));
+                            reference = CSharpCompilation.Create(name, trees, platform.Concat(dependencies),
+                                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true)).ToMetadataReference();
+                            result.FromSources++;
+                        }
+                        else
+                            result.Missing.Add(name);
+                    }
+                }
+            }
+            visiting.Remove(project);
+            resolved[project] = reference;
+            return reference;
+        }
+
+        foreach (var project in projects)
+        {
+            var document = Load(project);
+            if (document == null)
+                continue;
+            HintsOf(project, document).ToList();
+            ProjectsOf(project, document).ToList();
+        }
+        result.HintReferences = hints.Count;
+        result.References.AddRange(hints.Values);
+        result.References.AddRange(resolved.Values.Where(reference => reference != null).Select(reference => reference!));
         return result;
     }
 
@@ -583,6 +748,9 @@ public sealed class CodeIndex
                     writer.Write(S(value));
                 writer.Write(type.ExtensionCandidate);
                 writer.Write(type.UnityEntry);
+                writer.Write(type.IsAbstract);
+                writer.Write(type.IsGeneric);
+                writer.Write(type.Placeable);
                 List(type.Parts);
                 List(type.Interfaces);
                 List(type.DerivedBy.ToArray());
@@ -645,6 +813,19 @@ public sealed class CodeIndex
             }
             writer.Write(UnityReferenceCount);
             writer.Write(UnresolvedBaseTypes);
+            writer.Write(ProjectReferencesCompiled);
+            writer.Write(ProjectReferencesFromSources);
+            writer.Write(MissingAssemblies.Count);
+            foreach (var name in MissingAssemblies)
+                writer.Write(S(name));
+            writer.Write(UnseenBaseExamples.Count);
+            foreach (var example in UnseenBaseExamples)
+            {
+                writer.Write(S(example.Type));
+                writer.Write(S(example.Base));
+                writer.Write(S(example.At));
+                writer.Write(example.Count);
+            }
         }
 
         var temporary = path + "." + Environment.ProcessId + ".tmp";
@@ -716,7 +897,8 @@ public sealed class CodeIndex
                 var type = new IndexType
                 {
                     Key = S(), FullName = S(), Name = S(), Display = S(), Namespace = S(), FirstFile = S(), Kind = S(), Base = S(),
-                    ExtensionCandidate = reader.ReadBoolean(), UnityEntry = reader.ReadBoolean()
+                    ExtensionCandidate = reader.ReadBoolean(), UnityEntry = reader.ReadBoolean(),
+                    IsAbstract = reader.ReadBoolean(), IsGeneric = reader.ReadBoolean(), Placeable = reader.ReadBoolean()
                 };
                 type.Parts.AddRange(List());
                 type.Interfaces.AddRange(List());
@@ -756,6 +938,12 @@ public sealed class CodeIndex
             }
             index.UnityReferenceCount = reader.ReadInt32();
             index.UnresolvedBaseTypes = reader.ReadInt32();
+            index.ProjectReferencesCompiled = reader.ReadInt32();
+            index.ProjectReferencesFromSources = reader.ReadInt32();
+            for (var count = reader.ReadInt32(); count > 0; count--)
+                index.MissingAssemblies.Add(S());
+            for (var count = reader.ReadInt32(); count > 0; count--)
+                index.UnseenBaseExamples.Add((S(), S(), S(), reader.ReadInt32()));
             index.BuildMilliseconds = watch.ElapsedMilliseconds;
             return index;
         }
@@ -783,6 +971,9 @@ public sealed class IndexType
     public string Kind = "class";
     public string Base = string.Empty;
     public bool ExtensionCandidate;
+    public bool IsAbstract;
+    public bool IsGeneric;
+    public bool Placeable;
     public bool UnityEntry;
     public List<string> Parts { get; } = new();
     public List<string> Interfaces { get; } = new();

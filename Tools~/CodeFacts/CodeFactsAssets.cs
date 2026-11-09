@@ -11,7 +11,7 @@ namespace Architector.CodeFacts;
 // result is kept in Library/Architector/wiring-index.json and read again only when its size or time changes.
 public sealed class AssetWiring
 {
-    private const int FormatVersion = 1;
+    private const int FormatVersion = 2;
     private static readonly Regex Header = new(@"^--- !u!(\d+) &(-?\d+)", RegexOptions.Compiled);
     private static readonly Regex ScriptReference = new(@"m_Script: \{fileID: -?\d+, guid: ([0-9a-f]{32})", RegexOptions.Compiled);
     private static readonly Regex GameObjectReference = new(@"^  m_GameObject: \{fileID: (-?\d+)\}", RegexOptions.Compiled);
@@ -19,7 +19,9 @@ public sealed class AssetWiring
     private static readonly Regex ObjectName = new(@"^  m_Name: (.*)$", RegexOptions.Compiled);
     private static readonly Regex Key = new(@"^(\s*)([A-Za-z_][\w]*):\s*$", RegexOptions.Compiled);
     private static readonly Regex ListItem = new(@"^\s*- \{fileID: (-?\d+)\}", RegexOptions.Compiled);
-    private static readonly Regex SerializedType = new(@"type: \{class: ([\w`]+), ns: ([\w.]*), asm: ([\w.\-]+)\}", RegexOptions.Compiled);
+    private static readonly Regex TypeStart = new(@"^(\s*)(?:- )?type:\s*(.*)$", RegexOptions.Compiled);
+    private static readonly Regex TypeClass = new(@"(?:^|[{,\s])class:\s*([\w`]+)", RegexOptions.Compiled);
+    private static readonly Regex TypeSpace = new(@"(?:^|[{,\s])ns:\s*([\w.]*)", RegexOptions.Compiled);
     private static readonly Regex MetaGuid = new(@"^guid: ([0-9a-f]{32})", RegexOptions.Compiled | RegexOptions.Multiline);
     private static readonly string[] AssetPatterns = { "*.prefab", "*.unity", "*.asset" };
     private static readonly object Gate = new();
@@ -236,8 +238,39 @@ public sealed class AssetWiring
         string? fileId = null;
         Component? component = null;
         var key = string.Empty;
+        string? pendingType = null;
+        var pendingIndent = 0;
+        var pendingBlock = false;
+        void AddSerialized(string text)
+        {
+            var name = TypeClass.Match(text);
+            if (!name.Success)
+                return;
+            var space = TypeSpace.Match(text);
+            var spaceName = space.Success ? space.Groups[1].Value : string.Empty;
+            entry.SerializedTypes.Add(spaceName.Length > 0 ? $"{spaceName}.{name.Groups[1].Value}" : name.Groups[1].Value);
+        }
         foreach (var line in File.ReadLines(path))
         {
+            if (pendingType != null)
+            {
+                var indent = line.Length - line.TrimStart().Length;
+                if (pendingBlock && (indent <= pendingIndent || line.Trim().Length == 0))
+                {
+                    AddSerialized(pendingType);
+                    pendingType = null;
+                }
+                else
+                {
+                    pendingType += " " + line.Trim();
+                    if (!pendingBlock && line.Contains('}'))
+                    {
+                        AddSerialized(pendingType);
+                        pendingType = null;
+                    }
+                    continue;
+                }
+            }
             var header = Header.Match(line);
             if (header.Success)
             {
@@ -249,12 +282,22 @@ public sealed class AssetWiring
             }
             if (fileId == null)
                 continue;
-            var serialized = SerializedType.Match(line);
-            if (serialized.Success)
+            var typeStart = TypeStart.Match(line);
+            if (typeStart.Success)
             {
-                var space = serialized.Groups[2].Value;
-                entry.SerializedTypes.Add(space.Length > 0 ? $"{space}.{serialized.Groups[1].Value}" : serialized.Groups[1].Value);
-                continue;
+                var value = typeStart.Groups[2].Value.Trim();
+                if (value.StartsWith('{') && value.Contains('}'))
+                {
+                    AddSerialized(value);
+                    continue;
+                }
+                if (value.StartsWith('{') || value.Length == 0)
+                {
+                    pendingType = value;
+                    pendingIndent = typeStart.Groups[1].Value.Length;
+                    pendingBlock = value.Length == 0;
+                    continue;
+                }
             }
             if (classId == "1")
             {
@@ -304,6 +347,8 @@ public sealed class AssetWiring
             if (field.Success)
                 key = field.Groups[2].Value;
         }
+        if (pendingType != null)
+            AddSerialized(pendingType);
         var byFileId = entry.Components.ToDictionary(item => item.FileId, StringComparer.Ordinal);
         foreach (var item in entry.Components)
             if (componentGameObjects.TryGetValue(item.FileId, out var gameObject) && names.TryGetValue(gameObject, out var name))
