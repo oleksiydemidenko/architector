@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.6
+
+- **The 0.3.5 changes are published.** The 0.3.5 release was not published, because its Windows build failed a test. The test compared the project path as text. On Windows, the temporary folder can come as a short 8.3 path (`RUNNER~1`) while the server reports the long path. The test now checks that both paths point to the same folder. The package code is the same as in 0.3.5.
+
 ## 0.3.5
 
 - **The digest and code facts say what is checked.** The digest header has two lines: what is checked against code (linked types, contract members, base types and interfaces, `dependency` relationships between layers with a code scope) and what is authored and not checked (purposes, responsibilities, event, callback and dataFlow relationships). Code facts answers carry `project`, the root the server reads. The wiring summary of `layer_facts` has `wiring_note`: not tracked means no evidence either way.
