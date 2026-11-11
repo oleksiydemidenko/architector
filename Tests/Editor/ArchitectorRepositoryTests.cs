@@ -1642,6 +1642,8 @@ namespace Architector.Editor.Tests
             repository.ApproveLayers(new[] { layerId });
 
             var digest = File.ReadAllText(digestPath);
+            Assert.That(digest, Does.Contain("- Checked against code: linked types, contract members"));
+            Assert.That(digest, Does.Contain("- Authored and not checked: purposes, responsibilities"));
             Assert.That(digest, Does.Contain("## Core/Units (Planned)"));
             Assert.That(digest, Does.Contain("Unit composition."));
             Assert.That(digest, Does.Contain("- **Unit**: class `Sample.Unit` (manual) — Owns module lifecycle."));

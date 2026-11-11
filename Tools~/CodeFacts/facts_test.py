@@ -67,6 +67,8 @@ assert listener["unpaired"] == ["OnEnable without OnDisable"] and listener["loop
 assert listener["counts"]["unsubscribes"] == 0, listener
 player_layer = answer({"action": "layer_facts", "target": "Player"})
 assert player_layer["wiring"] == {"wired": 6, "test_only": 1, "base_only": 2, "created_in_code": 1, "unwired": 2, "not_tracked": 3}, player_layer["wiring"]
+assert player_layer["project"] == project and "no evidence either way" in player_layer["wiring_note"], player_layer
+assert evidence["project"] == project, evidence
 statuses = {item["type"]: item.get("wiring") for item in player_layer["type_list"]}
 assert all(status is not None for status in statuses.values()), statuses
 assert statuses["Sample.Player.PlayerLoadoutInitializerWithAVeryLongNameThatWraps"] == "wired", statuses

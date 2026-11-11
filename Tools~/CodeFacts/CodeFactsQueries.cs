@@ -29,6 +29,8 @@ public static class FactsQueries
             "lookup" => Lookup(model.Architecture, arguments),
             _ => Failure("unknown_action", $"Unknown code facts action '{action}'. Valid: {string.Join(", ", Actions)}.")
         };
+        if (root.Length > 0)
+            result["project"] = root;
         return Text(arguments, "output") == "file" && result["success"]?.GetValue<bool>() == true
             ? ToFile(result, action, root)
             : result;
@@ -219,6 +221,7 @@ public static class FactsQueries
             foreach (var status in WiringStatusNames)
                 summary[status] = owned.Count(type => statuses[type.Key].Status == status);
             result["wiring"] = summary;
+            result["wiring_note"] = "not tracked: no evidence either way (assets cannot show these types; this is not 'unused'). Only unwired marks a dead-code candidate.";
         }
         Page(result, "type_list", owned.OrderBy(type => type.At, StringComparer.Ordinal).Select(type =>
         {
