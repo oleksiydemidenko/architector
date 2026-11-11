@@ -46,6 +46,60 @@ namespace Architector.Editor.Tests
         }
 
         [Test]
+        public void SteppedRebuildYieldsGrowingProgressAndMatchesTheBlockingIndex()
+        {
+            var progress = new List<float>();
+            using (var steps = index.RebuildSteps())
+            {
+                while (steps.MoveNext())
+                    progress.Add(steps.Current);
+            }
+
+            Assert.That(index.IsBuilt, Is.True);
+            Assert.That(index.IsWaitingForWorkers, Is.False);
+            Assert.That(progress, Is.Not.Empty);
+            Assert.That(progress, Is.Ordered);
+            Assert.That(progress.Last(), Is.EqualTo(1f));
+            var stepped = index.Types.Select(type => type.Key + "@" + string.Join(",", type.SourceDeclarations.Select(source => source.scriptGuid + source.line)))
+                .ToArray();
+            Assert.That(stepped, Has.Some.StartsWith(ArchitectorTypeIdentity.Key(typeof(ArchitectorTypeIndexTests).Assembly.GetName().Name, typeof(ArchitectorTypeIndexTests).FullName)));
+
+            index.Invalidate();
+            var blocking = index.Types.Select(type => type.Key + "@" + string.Join(",", type.SourceDeclarations.Select(source => source.scriptGuid + source.line)))
+                .ToArray();
+            Assert.That(blocking, Is.EqualTo(stepped));
+            Assert.That(index.Find(LinkedTypeRecord(index.Types.First())), Is.SameAs(index.Types.First()));
+        }
+
+        [Test]
+        public void InvalidatingDuringSteppedRebuildBuildsAgainBeforeFinishing()
+        {
+            using var steps = index.RebuildSteps();
+            Assert.That(steps.MoveNext(), Is.True);
+            index.Invalidate();
+            while (steps.MoveNext())
+            {
+            }
+
+            Assert.That(index.IsBuilt, Is.True);
+            Assert.That(index.Types.Any(type => type.MetadataName == typeof(ArchitectorTypeIndexTests).FullName), Is.True);
+        }
+
+        [Test]
+        public void TypesOutsideIndexedAssembliesStillResolveForBaseFacts()
+        {
+            var linked = new ArchitectorTypeRecord
+            {
+                mode = "linked",
+                assemblyName = typeof(ArchitectorMasterWindow).Assembly.GetName().Name,
+                metadataName = typeof(ArchitectorMasterWindow).FullName
+            };
+
+            Assert.That(index.Find(linked), Is.Null);
+            Assert.That(index.GetDirectBase(linked)?.MetadataName, Is.EqualTo(typeof(UnityEditor.EditorWindow).FullName));
+        }
+
+        [Test]
         public void OneSourceFileIndexesEveryCompiledTopLevelEnumAndNestedType()
         {
             var expected = new[]

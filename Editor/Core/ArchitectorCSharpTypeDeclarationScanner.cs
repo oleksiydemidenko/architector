@@ -15,17 +15,23 @@ namespace Architector.Editor
     {
         private static readonly Dictionary<string, FileCacheEntry> FileCache =
             new(StringComparer.OrdinalIgnoreCase);
+        private static readonly object FileCacheLock = new();
 
+        // Safe to call from worker threads: the type index scans files in parallel.
         public static IReadOnlyList<ArchitectorCSharpTypeDeclaration> ScanFile(string path)
         {
             var fullPath = Path.GetFullPath(path);
             var info = new FileInfo(fullPath);
-            if (FileCache.TryGetValue(fullPath, out var cached)
-                && cached.Length == info.Length
-                && cached.LastWriteTimeUtc == info.LastWriteTimeUtc)
-                return cached.Declarations;
+            lock (FileCacheLock)
+            {
+                if (FileCache.TryGetValue(fullPath, out var cached)
+                    && cached.Length == info.Length
+                    && cached.LastWriteTimeUtc == info.LastWriteTimeUtc)
+                    return cached.Declarations;
+            }
             var declarations = Scan(File.ReadAllText(fullPath));
-            FileCache[fullPath] = new FileCacheEntry(info.Length, info.LastWriteTimeUtc, declarations);
+            lock (FileCacheLock)
+                FileCache[fullPath] = new FileCacheEntry(info.Length, info.LastWriteTimeUtc, declarations);
             return declarations;
         }
 

@@ -251,16 +251,27 @@ namespace Architector.Editor
                 yield return 0.1f;
             }
             loading.Label = "Indexing project types";
-            LoadGuarded(() => _ = typeIndex.Types);
-            yield return 0.3f;
+            using (var indexSteps = typeIndex.RebuildSteps())
+            {
+                while (true)
+                {
+                    var more = false;
+                    LoadGuarded(() => more = indexSteps.MoveNext());
+                    if (!more)
+                        break;
+                    if (typeIndex.IsWaitingForWorkers)
+                        loading.EndBatch();
+                    yield return 0.1f + 0.3f * indexSteps.Current;
+                }
+            }
             loading.Label = "Checking approvals";
             LoadGuarded(() => _ = repository.GetLayerApprovalStatuses());
-            yield return 0.4f;
+            yield return 0.45f;
             if (windowMode == WindowMode.Master)
             {
                 using var steps = ExplorerStatusSteps(explorerStatus, true);
                 while (steps.MoveNext())
-                    yield return 0.4f + 0.45f * steps.Current;
+                    yield return 0.45f + 0.45f * steps.Current;
             }
             loading.Label = "Opening the layer";
             LoadGuarded(() =>

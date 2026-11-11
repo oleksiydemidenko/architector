@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Indexing project types no longer freezes the window.** The first loading step used to be one main-thread call: reflection over every compiled assembly and reading and parsing every source in scope. Now only the Unity calls run on the main thread (the assembly list and script GUIDs); reflection, reading and parsing run on worker threads, in parallel, while the loading bar moves with the files done. Reflection covers only the assemblies that hold indexed sources; other types are looked up on first use. Assembly names are read once per assembly instead of once per type. Looking up an indexed type by key no longer scans the list.
+
 ## 0.3.4
 
 **Behaviour changes:**

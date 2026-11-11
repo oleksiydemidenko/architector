@@ -25,6 +25,7 @@ namespace Architector.Editor
         private bool barVisible;
         private bool finished;
         private bool batchedOnce;
+        private bool batchEnded;
         private float target;
         private float shown;
         private double lastTick;
@@ -71,6 +72,10 @@ namespace Architector.Editor
             EditorApplication.update += Tick;
             owner.Repaint();
         }
+
+        // Called by a step that only waits for worker threads: the batch ends after its yield, so the editor keeps
+        // running instead of polling the step for the rest of the batch budget.
+        public void EndBatch() => batchEnded = true;
 
         public void Cancel()
         {
@@ -162,6 +167,7 @@ namespace Architector.Editor
             painted = false;
             var watch = Stopwatch.StartNew();
             var before = target;
+            batchEnded = false;
             try
             {
                 do
@@ -174,7 +180,7 @@ namespace Architector.Editor
                     }
                     target = Mathf.Clamp(Mathf.Max(target, routine.Current), 0f, 1f);
                 }
-                while (watch.Elapsed.TotalMilliseconds < BatchBudgetMs);
+                while (!batchEnded && watch.Elapsed.TotalMilliseconds < BatchBudgetMs);
                 workSeconds += watch.Elapsed.TotalSeconds;
             }
             catch

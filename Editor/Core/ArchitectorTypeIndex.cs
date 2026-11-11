@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 using UnityEditor;
 using UnityEditor.Compilation;
+using Assembly = System.Reflection.Assembly;
 
 namespace Architector.Editor
 {
@@ -85,13 +87,23 @@ namespace Architector.Editor
     {
         private readonly ArchitectorRepository repository;
         private IReadOnlyList<ArchitectorIndexedType> types = Array.Empty<ArchitectorIndexedType>();
-        private IReadOnlyDictionary<string, Type> compiledTypes = new Dictionary<string, Type>(StringComparer.Ordinal);
+        private IReadOnlyDictionary<string, ArchitectorIndexedType> typesByKey = new Dictionary<string, ArchitectorIndexedType>(StringComparer.Ordinal);
+        private HashSet<string> projectTypeKeys = new(StringComparer.Ordinal);
+        // Types of the assemblies that hold indexed sources; types of other assemblies are looked up on first use and
+        // kept here, misses as null.
+        private Dictionary<string, Type> compiledTypes = new(StringComparer.Ordinal);
+        private IReadOnlyDictionary<string, Assembly> compiledAssemblies = new Dictionary<string, Assembly>(StringComparer.Ordinal);
         private readonly Dictionary<string, IReadOnlyList<ArchitectorIndexedMember>> membersByTypeKey = new(StringComparer.Ordinal);
+        private readonly List<ArchitectorTypeIndexBuild> runningBuilds = new();
         private string sourceSettingsIdentity;
         private string memberSettingsIdentity;
         private bool dirty = true;
+        private int dirtyStamp;
 
         public int Generation { get; private set; }
+        public bool IsBuilt => !dirty;
+        // True while a stepped rebuild waits for its worker threads; the step that yields then has nothing to do.
+        public bool IsWaitingForWorkers { get; private set; }
 
         public ArchitectorTypeIndex(ArchitectorRepository repository)
         {
@@ -100,6 +112,7 @@ namespace Architector.Editor
             memberSettingsIdentity = MemberSettingsIdentity();
             repository.Changed += OnRepositoryChanged;
             CompilationPipeline.compilationFinished += OnCompilationFinished;
+            AssemblyReloadEvents.beforeAssemblyReload += CancelRunningBuilds;
         }
 
         public IReadOnlyList<ArchitectorIndexedType> Types
@@ -111,6 +124,10 @@ namespace Architector.Editor
                 return types;
             }
         }
+
+        // Rebuilds the index in steps for a loading bar, yielding progress 0..1. Only the Unity calls run on the main
+        // thread; reflection and reading and parsing the sources run on worker threads while the steps yield.
+        public IEnumerator<float> RebuildSteps() => BuildSteps(false);
 
         public ArchitectorTypeResolution Resolve(ArchitectorTypeRecord linkedType)
         {
@@ -134,7 +151,8 @@ namespace Architector.Editor
             if (linkedType == null || !string.Equals(linkedType.mode, "linked", StringComparison.Ordinal))
                 return null;
             var key = ArchitectorTypeIdentity.Key(linkedType.assemblyName, linkedType.metadataName);
-            return Types.FirstOrDefault(type => string.Equals(type.Key, key, StringComparison.Ordinal));
+            _ = Types;
+            return typesByKey.TryGetValue(key, out var type) ? type : null;
         }
 
         public ArchitectorIndexedTypeReference GetDirectBase(ArchitectorTypeRecord linkedType)
@@ -173,9 +191,8 @@ namespace Architector.Editor
             var key = ArchitectorTypeIdentity.Key(linkedType.assemblyName, linkedType.metadataName);
             if (membersByTypeKey.TryGetValue(key, out var cached))
                 return cached;
-            if (!compiledTypes.TryGetValue(key, out var type))
+            if (!TryGetLoadedType(key, out var type))
                 return Array.Empty<ArchitectorIndexedMember>();
-            var projectTypeKeys = new HashSet<string>(types.Select(candidate => candidate.Key), StringComparer.Ordinal);
             var indexed = BuildMembers(type, projectTypeKeys, repository.Settings.optimization);
             membersByTypeKey[key] = indexed;
             return indexed;
@@ -210,13 +227,15 @@ namespace Architector.Editor
         {
             repository.Changed -= OnRepositoryChanged;
             CompilationPipeline.compilationFinished -= OnCompilationFinished;
+            AssemblyReloadEvents.beforeAssemblyReload -= CancelRunningBuilds;
+            CancelRunningBuilds();
         }
 
         public void Invalidate()
         {
             sourceSettingsIdentity = SourceSettingsIdentity();
             memberSettingsIdentity = MemberSettingsIdentity();
-            dirty = true;
+            MarkDirty();
             membersByTypeKey.Clear();
             Generation++;
         }
@@ -229,7 +248,7 @@ namespace Architector.Editor
             {
                 sourceSettingsIdentity = nextSourceIdentity;
                 memberSettingsIdentity = nextMemberIdentity;
-                dirty = true;
+                MarkDirty();
                 membersByTypeKey.Clear();
                 Generation++;
                 return;
@@ -248,9 +267,36 @@ namespace Architector.Editor
 
         private bool TryGetCompiledType(ArchitectorTypeRecord linkedType, out Type type)
         {
+            return TryGetLoadedType(ArchitectorTypeIdentity.Key(linkedType?.assemblyName, linkedType?.metadataName), out type);
+        }
+
+        private bool TryGetLoadedType(string key, out Type type)
+        {
             _ = Types;
-            var key = ArchitectorTypeIdentity.Key(linkedType?.assemblyName, linkedType?.metadataName);
-            return compiledTypes.TryGetValue(key, out type);
+            if (compiledTypes.TryGetValue(key, out type))
+                return type != null;
+            var separator = key.IndexOf(':');
+            if (separator > 0 && compiledAssemblies.TryGetValue(key.Substring(0, separator), out var assembly))
+            {
+                type = assembly.GetType(key.Substring(separator + 1), false);
+                if (type != null && (type.IsGenericParameter || IsCompilerGenerated(type)))
+                    type = null;
+            }
+            compiledTypes[key] = type;
+            return type != null;
+        }
+
+        private void MarkDirty()
+        {
+            dirty = true;
+            dirtyStamp++;
+        }
+
+        private void CancelRunningBuilds()
+        {
+            foreach (var build in runningBuilds.ToArray())
+                build.Cancel();
+            runningBuilds.Clear();
         }
 
         private static bool Matches(ArchitectorIndexedTypeReference actual, ArchitectorTypeReferenceRecord expected)
@@ -278,64 +324,154 @@ namespace Architector.Editor
 
         private void Rebuild()
         {
-            var settings = repository.Settings.sourceIndex;
-            var includedRoots = NormalizeRoots(settings.includedRoots);
-            var excludedRoots = NormalizeRoots(settings.excludedRoots);
-            var compilationAssemblies = CompilationPipeline.GetAssemblies();
-            var compiledAssemblies = new HashSet<string>(compilationAssemblies.Select(assembly => assembly.name), StringComparer.Ordinal);
-            var sourceFilesByAssembly = compilationAssemblies.ToDictionary(
-                assembly => assembly.name,
-                assembly => new HashSet<string>(assembly.sourceFiles.Select(ProjectRelativePath), StringComparer.OrdinalIgnoreCase),
-                StringComparer.Ordinal);
-            var loadedTypes = AppDomain.CurrentDomain.GetAssemblies()
-                .Where(assembly => compiledAssemblies.Contains(assembly.GetName().Name))
-                .SelectMany(GetLoadableTypes)
-                .Where(type => type != null && !type.IsGenericParameter && !IsCompilerGenerated(type))
-                .ToDictionary(
-                    type => ArchitectorTypeIdentity.Key(type.Assembly.GetName().Name, type.FullName),
-                    type => type,
-                    StringComparer.Ordinal);
-            compiledTypes = loadedTypes;
-
-            var declarationsByKey = new Dictionary<string, List<ArchitectorSourceDeclarationRecord>>(StringComparer.Ordinal);
-            foreach (var compilationAssembly in compilationAssemblies)
+            using var steps = BuildSteps(true);
+            while (steps.MoveNext())
             {
-                if (!sourceFilesByAssembly.TryGetValue(compilationAssembly.name, out var assemblySources))
-                    continue;
-                foreach (var path in assemblySources.Where(candidate => IsInScope(candidate, includedRoots, excludedRoots)))
+            }
+        }
+
+        private IEnumerator<float> BuildSteps(bool blocking)
+        {
+            while (dirty)
+            {
+                var stamp = dirtyStamp;
+                var settings = repository.Settings.sourceIndex;
+                var includedRoots = NormalizeRoots(settings.includedRoots);
+                var excludedRoots = NormalizeRoots(settings.excludedRoots);
+                var compilationAssemblies = CompilationPipeline.GetAssemblies();
+                yield return 0.15f;
+
+                var compiledNames = new HashSet<string>(compilationAssemblies.Select(assembly => assembly.name), StringComparer.Ordinal);
+                var assemblies = new Dictionary<string, Assembly>(StringComparer.Ordinal);
+                foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
                 {
-                    if (!System.IO.File.Exists(path))
-                        continue;
-                    var guid = AssetDatabase.AssetPathToGUID(path);
-                    var declarations = ArchitectorCSharpTypeDeclarationScanner.ScanFile(path);
-                    foreach (var declaration in declarations)
+                    var name = assembly.GetName().Name;
+                    if (compiledNames.Contains(name) && !assemblies.ContainsKey(name))
+                        assemblies[name] = assembly;
+                }
+                var sources = new List<ArchitectorTypeIndexSource>();
+                foreach (var compilationAssembly in compilationAssemblies)
+                {
+                    var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var file in compilationAssembly.sourceFiles)
                     {
-                        var key = ArchitectorTypeIdentity.Key(compilationAssembly.name, declaration.MetadataName);
-                        if (!loadedTypes.ContainsKey(key))
-                            continue;
-                        if (!declarationsByKey.TryGetValue(key, out var sources))
-                        {
-                            sources = new List<ArchitectorSourceDeclarationRecord>();
-                            declarationsByKey[key] = sources;
-                        }
-                        if (sources.Any(source => string.Equals(source.repositoryPath, path, StringComparison.OrdinalIgnoreCase)))
-                            continue;
-                        sources.Add(new ArchitectorSourceDeclarationRecord
-                        {
-                            scriptGuid = guid,
-                            repositoryPath = path,
-                            line = declaration.Line,
-                            column = declaration.Column
-                        });
+                        var path = ProjectRelativePath(file);
+                        if (IsInScope(path, includedRoots, excludedRoots) && seen.Add(path))
+                            sources.Add(new ArchitectorTypeIndexSource(compilationAssembly.name, path, AssetDatabase.AssetPathToGUID(path)));
                     }
                 }
+                yield return 0.2f;
+
+                var sourceAssemblies = sources.Select(source => source.AssemblyName)
+                    .Distinct(StringComparer.Ordinal)
+                    .Where(assemblies.ContainsKey)
+                    .Select(name => assemblies[name])
+                    .ToArray();
+                var build = new ArchitectorTypeIndexBuild(
+                    sourceAssemblies.Length + sources.Count,
+                    current => BuildOnWorkers(sources, sourceAssemblies, current));
+                runningBuilds.Add(build);
+                try
+                {
+                    if (blocking)
+                        build.Wait();
+                    while (!build.IsCompleted)
+                    {
+                        IsWaitingForWorkers = true;
+                        yield return 0.2f + 0.75f * build.Progress;
+                    }
+                    IsWaitingForWorkers = false;
+                    var result = build.Result;
+                    if (!dirty)
+                        yield break;
+                    if (stamp != dirtyStamp)
+                        continue;
+                    types = result.Types;
+                    typesByKey = result.Types.ToDictionary(type => type.Key, StringComparer.Ordinal);
+                    projectTypeKeys = new HashSet<string>(result.Types.Select(type => type.Key), StringComparer.Ordinal);
+                    compiledTypes = result.LoadedTypes;
+                    compiledAssemblies = assemblies;
+                    dirty = false;
+                }
+                finally
+                {
+                    IsWaitingForWorkers = false;
+                    runningBuilds.Remove(build);
+                    build.Cancel();
+                }
+                yield return 1f;
+            }
+        }
+
+        // Runs on worker threads: reflection over the assemblies that hold indexed sources, then the sources read and
+        // parsed in parallel. Touches no Unity API.
+        private static ArchitectorTypeIndexBuildResult BuildOnWorkers(
+            IReadOnlyList<ArchitectorTypeIndexSource> sources,
+            IReadOnlyList<Assembly> sourceAssemblies,
+            ArchitectorTypeIndexBuild build)
+        {
+            var loadedTypes = new Dictionary<string, Type>(StringComparer.Ordinal);
+            var assemblyNames = new Dictionary<Assembly, string>();
+            foreach (var assembly in sourceAssemblies)
+            {
+                build.Token.ThrowIfCancellationRequested();
+                var assemblyName = assembly.GetName().Name;
+                assemblyNames[assembly] = assemblyName;
+                foreach (var type in GetLoadableTypes(assembly))
+                {
+                    if (type != null && !type.IsGenericParameter && !IsCompilerGenerated(type))
+                        loadedTypes[ArchitectorTypeIdentity.Key(assemblyName, type.FullName)] = type;
+                }
+                build.Advance();
             }
 
-            types = declarationsByKey.Select(pair =>
+            var scanned = new IReadOnlyList<ArchitectorCSharpTypeDeclaration>[sources.Count];
+            var options = new ParallelOptions
+            {
+                CancellationToken = build.Token,
+                MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1)
+            };
+            Parallel.For(0, sources.Count, options, index =>
+            {
+                var path = sources[index].Path;
+                scanned[index] = System.IO.File.Exists(path)
+                    ? ArchitectorCSharpTypeDeclarationScanner.ScanFile(path)
+                    : Array.Empty<ArchitectorCSharpTypeDeclaration>();
+                build.Advance();
+            });
+
+            var declarationsByKey = new Dictionary<string, List<ArchitectorSourceDeclarationRecord>>(StringComparer.Ordinal);
+            for (var index = 0; index < sources.Count; index++)
+            {
+                var source = sources[index];
+                foreach (var declaration in scanned[index])
+                {
+                    var key = ArchitectorTypeIdentity.Key(source.AssemblyName, declaration.MetadataName);
+                    if (!loadedTypes.ContainsKey(key))
+                        continue;
+                    if (!declarationsByKey.TryGetValue(key, out var records))
+                    {
+                        records = new List<ArchitectorSourceDeclarationRecord>();
+                        declarationsByKey[key] = records;
+                    }
+                    if (records.Any(record => string.Equals(record.repositoryPath, source.Path, StringComparison.OrdinalIgnoreCase)))
+                        continue;
+                    records.Add(new ArchitectorSourceDeclarationRecord
+                    {
+                        scriptGuid = source.Guid,
+                        repositoryPath = source.Path,
+                        line = declaration.Line,
+                        column = declaration.Column
+                    });
+                }
+            }
+            build.Token.ThrowIfCancellationRequested();
+
+            var types = declarationsByKey.Select(pair =>
                 {
                     var type = loadedTypes[pair.Key];
                     return TryGetKind(type, out var kind)
-                        ? CreateRecord(type, kind, pair.Value)
+                        ? CreateRecord(type, assemblyNames[type.Assembly], kind, pair.Value)
                         : null;
                 })
                 .Where(type => type != null)
@@ -343,7 +479,7 @@ namespace Architector.Editor
                 .ThenBy(type => type.Namespace, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(type => type.AssemblyName, StringComparer.Ordinal)
                 .ToArray();
-            dirty = false;
+            return new ArchitectorTypeIndexBuildResult(types, loadedTypes);
         }
 
         private static IReadOnlyList<ArchitectorIndexedMember> BuildMembers(
@@ -403,7 +539,7 @@ namespace Architector.Editor
             if (keyParts.Length < 3)
                 return Array.Empty<ArchitectorIndexedMember>();
             var rootKey = ArchitectorTypeIdentity.Key(linkedType.assemblyName, linkedType.metadataName);
-            if (!compiledTypes.TryGetValue(rootKey, out var rootType))
+            if (!TryGetLoadedType(rootKey, out var rootType))
                 return Array.Empty<ArchitectorIndexedMember>();
             var declaringIdentity = keyParts[1];
             var origin = MemberOrigins(rootType).FirstOrDefault(candidate => string.Equals(
@@ -722,6 +858,7 @@ namespace Architector.Editor
 
         private static ArchitectorIndexedType CreateRecord(
             Type type,
+            string assemblyName,
             string kind,
             IReadOnlyList<ArchitectorSourceDeclarationRecord> sourceDeclarations)
         {
@@ -730,7 +867,7 @@ namespace Architector.Editor
                 : Array.Empty<string>();
             return new ArchitectorIndexedType
             {
-                AssemblyName = type.Assembly.GetName().Name,
+                AssemblyName = assemblyName,
                 MetadataName = type.FullName,
                 DisplayName = RemoveGenericArity(type.Name),
                 Namespace = type.Namespace ?? string.Empty,
