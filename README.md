@@ -28,7 +28,7 @@ Requires Unity 6000.3 or later.
 In Unity open **Window > Package Manager > + > Add package from git URL** and enter a pinned version:
 
 ```
-https://github.com/oleksiydemidenko/architector.git#v0.3.4
+https://github.com/oleksiydemidenko/architector.git#v0.3.5
 ```
 
 The MCP server is installed from inside Unity. The .NET SDK is needed only for the `DependencyEvidence` and `ContextRoute` command-line tools.
