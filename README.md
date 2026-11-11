@@ -64,7 +64,7 @@ Keep **Project Settings > Player > Run In Background** on when agents talk to th
 
 These are known gaps, each tracked for a future version.
 
-- A node without relationships cannot be approved, even when it is a real standalone entry point.
+- A linked node without relationships blocks approval unless it is marked standalone with a reason (`set_standalone`, or the Standalone field in the Node Inspector); see [Workflow](Documentation~/Workflow.md#approval).
 - Only your own source roots are indexed: Unity and other external types cannot be linked as verified contracts.
 - Relationships wired in the Inspector (UnityEvent, Timeline, prefab overrides) are not visible to Architector.
 - `DependencyEvidence` and the code facts check dependencies between layers rather than individual types and read only `Assets/`; the command-line tool needs the .NET SDK, the server does not. The server analyses the code when it starts (seconds; longer on thousands of files) and again on the next code facts call after any C# or Architector file changed.
