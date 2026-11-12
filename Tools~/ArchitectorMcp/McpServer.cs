@@ -113,8 +113,8 @@ public static partial class McpServer
                 }, "queries")),
             Tool("architector_digest", "Read the approved architecture. Without layer it lists the approved layers; with layer it returns that layer's section. Works without Unity.",
                 Schema(new JsonObject { ["layer"] = new JsonObject { ["type"] = "string", ["description"] = "Layer path, for example Core/Player/Movement." } })),
-            Tool("architector_query", "Read Architector data. code_evidence, layer_facts, scope_what_if, layer_dump and lookup answer without Unity from the code and the Architector files; the other actions need the open Unity Editor. Prefer the narrow actions node, relationships and dependency_path, or layer_graph with detail=summary, over a full layer_graph.", ActionSchema(
-                new[] { "capabilities", "work_status", "project_summary", "group_contents", "layer_graph", "node", "relationships", "dependency_path", "setup_check", "approval_status", "baseline_diff", "conformance", "find", "type_search", "type_contract", "validate", "code_evidence", "layer_facts", "scope_what_if", "layer_dump", "lookup" },
+            Tool("architector_query", "Read Architector data. code_evidence, layer_facts, scope_what_if, layer_dump, lookup, facts_audit (graph against facts), facts_snapshot and facts_diff answer without Unity from the code and the Architector files; the other actions need the open Unity Editor. Prefer the narrow actions node, relationships and dependency_path, or layer_graph with detail=summary, over a full layer_graph.", ActionSchema(
+                new[] { "capabilities", "work_status", "project_summary", "group_contents", "layer_graph", "node", "relationships", "dependency_path", "setup_check", "approval_status", "baseline_diff", "conformance", "find", "type_search", "type_contract", "validate", "code_evidence", "layer_facts", "scope_what_if", "layer_dump", "lookup", "facts_audit", "facts_snapshot", "facts_diff" },
                 new JsonObject
                 {
                     ["target"] = TextParameter("Layer or group ID or path; a type for type_contract."),
@@ -133,7 +133,12 @@ public static partial class McpServer
                     ["type"] = TextParameter("layer_facts: one type of the layer with its public members."),
                     ["moves"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "object" }, ["description"] = "scope_what_if: [{\"type\" | \"file\" | \"folder\": \"...\", \"to\": \"Layer/Path\"}]." },
                     ["names"] = new JsonObject { ["type"] = "array", ["items"] = TextParameter("Layer/Path, Layer/Path::Node Title or Layer/Path::Node Title::Member."), ["description"] = "lookup: names to ids." },
-                    ["output"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("reply", "file"), ["description"] = "file writes the full answer under Library/Architector/facts and returns its path." }
+                    ["output"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("reply", "file"), ["description"] = "file writes the full answer under Library/Architector/facts and returns its path." },
+                    ["section"] = TextParameter("layer_facts with type: page one section (reads, writes, uses, subscribes, unsubscribes, assigns, lifecycle, recurring, wiring, base_of)."),
+                    ["min_uses"] = new JsonObject { ["type"] = "integer", ["description"] = "facts_audit: uses by other layers that make a type central (default 20)." },
+                    ["name"] = TextParameter("facts_snapshot: snapshot name (default: the time)."),
+                    ["snapshot"] = TextParameter("facts_diff: a snapshot name or file."),
+                    ["against"] = TextParameter("facts_diff: another snapshot; default the current code.")
                 })),
             Tool("architector_edit", "Change the architecture in the open Unity Editor. Call architector_query with action capabilities for the plan format and rules.", ActionSchema(
                 new[] { "begin_work", "resume_work", "end_work", "approve_layers", "revoke_approvals", "revert_to_approved", "dry_run", "apply", "dry_run_plan", "apply_plan", "arrange_layer", "arrange_changed_layers", "relink_node", "set_standalone", "validate_external", "reload_external" },

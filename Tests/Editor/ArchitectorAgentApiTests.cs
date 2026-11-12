@@ -90,6 +90,59 @@ namespace Architector.Editor.Tests
         }
 
         [Test]
+        public void LayerListAcceptsOneStringOrACommaList()
+        {
+            var single = JObject.Parse("{ 'layers': 'layer_a' }");
+            var list = JObject.Parse("{ 'layers': 'layer_a, layer_b,' }");
+            var array = JObject.Parse("{ 'layers': ['layer_a'] }");
+
+            ArchitectorAgentEdit.NormalizeLayerList(single);
+            ArchitectorAgentEdit.NormalizeLayerList(list);
+            ArchitectorAgentEdit.NormalizeLayerList(array);
+
+            Assert.That(single["layers"]?.Values<string>(), Is.EqualTo(new[] { "layer_a" }));
+            Assert.That(list["layers"]?.Values<string>(), Is.EqualTo(new[] { "layer_a", "layer_b" }));
+            Assert.That(array["layers"]?.Values<string>(), Is.EqualTo(new[] { "layer_a" }));
+            var result = JObject.Parse(ArchitectorAgentEdit.Handle(repository, new ArchitectorAiWorkCoordinator(),
+                JObject.Parse($"{{ 'action': 'revoke_approvals', 'expected_revision': {repository.Revision}, 'layers': 'layer_a' }}")).ToJson());
+            Assert.That(result.ToString(), Does.Not.Contain("String[]"));
+        }
+
+        [Test]
+        public void InLayerCycleIsInformationAndCrossLayerCycleIsAWarning()
+        {
+            repository.UpdateSettings("Report Cycles", settings =>
+                settings.rules.dependencyCycles = ArchitectorDependencyCyclePolicy.Report);
+            var local = repository.CreateLayer(string.Empty, "Local");
+            var first = repository.CreateEmptyNode(local, 0f, 0f);
+            var second = repository.CreateEmptyNode(local, 600f, 0f);
+            repository.CreateEdge(local, first, second, ArchitectorEdgeKinds.Dependency, "left");
+            repository.CreateEdge(local, second, first, ArchitectorEdgeKinds.Dependency, "right");
+            var left = repository.CreateLayer(string.Empty, "Left");
+            var right = repository.CreateLayer(string.Empty, "Right");
+            var leftNode = repository.CreateEmptyNode(left, 0f, 0f);
+            var rightNode = repository.CreateEmptyNode(right, 0f, 0f);
+            repository.CreateCrossLayerEdge(left, leftNode, right, rightNode, ArchitectorEdgeKinds.Dependency);
+            repository.CreateCrossLayerEdge(right, rightNode, left, leftNode, ArchitectorEdgeKinds.Dependency);
+            repository.ApproveLayers(new[] { local, left, right });
+            using var typeIndex = new ArchitectorTypeIndex(repository);
+
+            var localReport = ArchitectorConformance.Evaluate(repository, typeIndex, new[] { local });
+            var crossReport = ArchitectorConformance.Evaluate(repository, typeIndex, new[] { left });
+
+            var localCycle = localReport.Diagnostics.Single(item => item.Code == ArchitectorConformanceCodes.DependencyCycle);
+            Assert.That(localCycle.Severity, Is.EqualTo(ArchitectorConformanceSeverities.Info));
+            Assert.That(localReport.InfoCount, Is.EqualTo(1));
+            Assert.That(localReport.WarningKinds.ContainsKey(ArchitectorConformanceCodes.DependencyCycle), Is.False);
+            Assert.That(crossReport.WarningKinds[ArchitectorConformanceCodes.DependencyCycle], Is.EqualTo(1));
+            Assert.That(crossReport.InfoCount, Is.Zero);
+            var answer = JObject.Parse(ArchitectorAgentQuery.Handle(repository, new ArchitectorAiWorkCoordinator(),
+                JObject.Parse("{ 'action': 'conformance', 'target': 'Local' }"), typeIndex).ToJson());
+            Assert.That(answer["data"]?["counts"]?["info"]?.Value<int>(), Is.EqualTo(1), answer.ToString());
+            Assert.That(answer["data"]?["warning_kinds"]?[ArchitectorConformanceCodes.DependencyCycle], Is.Null, answer.ToString());
+        }
+
+        [Test]
         public void QueriesReportAndTraverseDependencyCycles()
         {
             repository.UpdateSettings("Report Cycles", settings =>

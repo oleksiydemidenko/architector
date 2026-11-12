@@ -66,7 +66,7 @@ assert [item[0] for item in listener["lifecycle"]] == ["OnEnable", "Update"], li
 assert listener["unpaired"] == ["OnEnable without OnDisable"] and listener["loops"] == ["Update"], listener
 assert listener["counts"]["unsubscribes"] == 0, listener
 player_layer = answer({"action": "layer_facts", "target": "Player"})
-assert player_layer["wiring"] == {"wired": 6, "test_only": 1, "base_only": 2, "created_in_code": 1, "unwired": 2, "not_tracked": 3}, player_layer["wiring"]
+assert player_layer["wiring"] == {"wired": 6, "test_only": 1, "base_only": 2, "created_in_code": 1, "created_by_reflection": 0, "unwired": 2, "not_tracked": 3}, player_layer["wiring"]
 # The runner's temp folder may come as a short 8.3 path (RUNNER~1) while the server reports the long one.
 assert os.path.samefile(player_layer["project"], project) and "no evidence either way" in player_layer["wiring_note"], player_layer
 assert os.path.samefile(evidence["project"], project), evidence

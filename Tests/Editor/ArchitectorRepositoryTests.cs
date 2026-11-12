@@ -1206,7 +1206,7 @@ namespace Architector.Editor.Tests
             using var index = new ArchitectorTypeIndex(repository);
             var warning = ArchitectorConformance.Evaluate(repository, index, new[] { layerId }).Diagnostics
                 .Single(diagnostic => diagnostic.Code == ArchitectorConformanceCodes.DependencyCycle);
-            Assert.That(warning.Severity, Is.EqualTo(ArchitectorConformanceSeverities.Warning));
+            Assert.That(warning.Severity, Is.EqualTo(ArchitectorConformanceSeverities.Info));
             Assert.That(warning.Message, Does.Contain("inside one layer"));
             Assert.DoesNotThrow(() => repository.UpdateSettings("Reject Cycles", settings =>
                 settings.rules.dependencyCycles = ArchitectorDependencyCyclePolicy.Reject));

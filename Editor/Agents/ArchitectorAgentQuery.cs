@@ -171,7 +171,8 @@ namespace Architector.Editor.Agents
                         "dry_run_plan returns permissions_lost: layer pairs the plan leaves without any dependency relationship; the server adds code_references, the references in code that would become undeclared.",
                         "Layer references accept an id, the full Explorer path or a unique trailing part of it (Group/Layer); an ambiguous one fails with layer_ambiguous and candidates.",
                         "A linked node without relationships blocks approval. When its type really stands alone (for example wired only in scenes), set_standalone with target, node and a reason from the evidence turns that into a standalone_node warning; an empty reason clears it. The mark is stored in the settings and changes no layer file. Never add a relationship only to satisfy the rule.",
-                        "The Reject cycle rule applies to dependency cycles across layers; a cycle inside one layer is allowed and reported as a dependency_cycle warning.",
+                        "The Reject cycle rule applies to dependency cycles across layers; a cycle inside one layer is allowed and reported as a dependency_cycle diagnostic with severity info, which does not lower the conformance state.",
+                        "A linked node names its type by typeKey, or by typeNamespace and typeName when they name one indexed type.",
                         "implements and extends are labels on a dependency relationship, not relationship kinds.",
                         "linked_node_outside_scope warns when a linked node sits outside the layer whose code scope owns its type; architector_route and the code facts place the type by the scope owner.",
                         "Group and layer names are unique among siblings; the path identifies an entry.",
@@ -652,9 +653,11 @@ namespace Architector.Editor.Agents
                     passed = report.PassedCount,
                     warnings = report.WarningCount,
                     errors = report.ErrorCount,
+                    info = report.InfoCount,
                     unverified_members = report.UnverifiedMemberCount,
                     unverified_type_facts = report.UnverifiedTypeFactCount
                 },
+                warning_kinds = report.WarningKinds,
                 diagnostics = report.Diagnostics.Select(item => new
                 {
                     severity = item.Severity,

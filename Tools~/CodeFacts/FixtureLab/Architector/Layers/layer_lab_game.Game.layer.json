@@ -1,0 +1,111 @@
+{
+    "schemaVersion": 1,
+    "layerId": "layer_lab_game",
+    "name": "Game",
+    "purpose": "Game of the lab.",
+    "parentGroupId": "group_lab",
+    "orderKey": "b",
+    "scope": {
+        "folders": [
+            "Assets/Lab/Game"
+        ],
+        "namespaces": []
+    },
+    "nodes": [
+        {
+            "id": "node_unused",
+            "title": "Unused Installer",
+            "responsibility": "",
+            "kind": "standard",
+            "type": {
+                "mode": "linked",
+                "kind": "class",
+                "typeNamespace": "Lab.Game",
+                "name": "UnusedInstaller",
+                "assemblyName": "Assembly-CSharp",
+                "metadataName": "Lab.Game.UnusedInstaller"
+            },
+            "members": []
+        },
+        {
+            "id": "node_old",
+            "title": "Old Only",
+            "responsibility": "",
+            "kind": "standard",
+            "type": {
+                "mode": "linked",
+                "kind": "class",
+                "typeNamespace": "Lab.Game",
+                "name": "OldOnly",
+                "assemblyName": "Assembly-CSharp",
+                "metadataName": "Lab.Game.OldOnly"
+            },
+            "members": []
+        },
+        {
+            "id": "node_spawned",
+            "title": "Spawned",
+            "responsibility": "",
+            "kind": "standard",
+            "type": {
+                "mode": "linked",
+                "kind": "class",
+                "typeNamespace": "Lab.Game",
+                "name": "Spawned",
+                "assemblyName": "Assembly-CSharp",
+                "metadataName": "Lab.Game.Spawned"
+            },
+            "members": []
+        },
+        {
+            "id": "node_ticker",
+            "title": "Ticker",
+            "responsibility": "",
+            "kind": "standard",
+            "type": {
+                "mode": "linked",
+                "kind": "class",
+                "typeNamespace": "Lab.Game",
+                "name": "Ticker",
+                "assemblyName": "Assembly-CSharp",
+                "metadataName": "Lab.Game.Ticker"
+            },
+            "members": []
+        },
+        {
+            "id": "node_mover",
+            "title": "Mover",
+            "responsibility": "",
+            "kind": "standard",
+            "type": {
+                "mode": "linked",
+                "kind": "class",
+                "typeNamespace": "Lab.Game",
+                "name": "RigidbodyMover",
+                "assemblyName": "Assembly-CSharp",
+                "metadataName": "Lab.Game.RigidbodyMover"
+            },
+            "members": []
+        }
+    ],
+    "edges": [
+        {
+            "id": "edge_unused_old",
+            "sourceLayerId": "layer_lab_game",
+            "sourceNodeId": "node_unused",
+            "targetLayerId": "layer_lab_game",
+            "targetNodeId": "node_old",
+            "kind": "dependency",
+            "label": ""
+        },
+        {
+            "id": "edge_spawned_old",
+            "sourceLayerId": "layer_lab_game",
+            "sourceNodeId": "node_spawned",
+            "targetLayerId": "layer_lab_game",
+            "targetNodeId": "node_old",
+            "kind": "dependency",
+            "label": ""
+        }
+    ]
+}

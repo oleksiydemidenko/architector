@@ -47,6 +47,7 @@ jobs:
         run: |
           dotnet build "Tools~/DependencyEvidence" -c Release -o evidence
           python3 "Tools~/CodeFacts/facts_test.py" "dist/architector-mcp-${{ matrix.rid }}${{ matrix.ext }}" "evidence/DependencyEvidence.dll"
+          python3 "Tools~/CodeFacts/facts_lab_test.py" "dist/architector-mcp-${{ matrix.rid }}${{ matrix.ext }}"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.rid }}

@@ -1,0 +1,13 @@
+{
+    "rules": {
+        "dependencyCycles": 1,
+        "uncheckedGroupIds": [],
+        "standaloneNodes": [
+            {
+                "layerId": "layer_lab_game",
+                "nodeId": "node_mover",
+                "reason": "Wired only in prefabs."
+            }
+        ]
+    }
+}

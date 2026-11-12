@@ -1,0 +1,57 @@
+{
+    "schemaVersion": 1,
+    "layerId": "layer_lab_core",
+    "name": "Core",
+    "purpose": "Core of the lab.",
+    "parentGroupId": "group_lab",
+    "orderKey": "a",
+    "scope": {
+        "folders": [
+            "Assets/Lab/Core"
+        ],
+        "namespaces": []
+    },
+    "nodes": [
+        {
+            "id": "node_loader",
+            "title": "Module Loader",
+            "responsibility": "",
+            "kind": "standard",
+            "type": {
+                "mode": "linked",
+                "kind": "class",
+                "typeNamespace": "Lab.Core",
+                "name": "ModuleLoader",
+                "assemblyName": "Assembly-CSharp",
+                "metadataName": "Lab.Core.ModuleLoader"
+            },
+            "members": []
+        },
+        {
+            "id": "node_point",
+            "title": "Point",
+            "responsibility": "",
+            "kind": "standard",
+            "type": {
+                "mode": "linked",
+                "kind": "struct",
+                "typeNamespace": "Lab.Core",
+                "name": "Point",
+                "assemblyName": "Assembly-CSharp",
+                "metadataName": "Lab.Core.Point"
+            },
+            "members": []
+        }
+    ],
+    "edges": [
+        {
+            "id": "edge_loader_point",
+            "sourceLayerId": "layer_lab_core",
+            "sourceNodeId": "node_loader",
+            "targetLayerId": "layer_lab_core",
+            "targetNodeId": "node_point",
+            "kind": "dependency",
+            "label": ""
+        }
+    ]
+}

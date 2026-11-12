@@ -1,0 +1,16 @@
+{
+    "schemaVersion": 2,
+    "pairId": "pair_core_ui",
+    "endpoints": [],
+    "relationships": [
+        {
+            "id": "rel_hud_loader",
+            "sourceLayerId": "layer_lab_ui",
+            "sourceNodeId": "node_hud",
+            "targetLayerId": "layer_lab_core",
+            "targetNodeId": "node_loader",
+            "kind": "dependency",
+            "label": ""
+        }
+    ]
+}

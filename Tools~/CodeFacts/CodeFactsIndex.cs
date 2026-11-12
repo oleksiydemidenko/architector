@@ -14,7 +14,7 @@ namespace Architector.CodeFacts;
 // The index is saved under Library/Architector and reused while no C# file, csproj or code-facts.json changed.
 public sealed class CodeIndex
 {
-    private const int FormatVersion = 3;
+    private const int FormatVersion = 4;
 
     public string Signature { get; private set; } = string.Empty;
     public string ReferenceSet { get; private set; } = string.Empty;
@@ -30,6 +30,8 @@ public sealed class CodeIndex
     public int ProjectReferencesFromSources { get; set; }
     public List<string> MissingAssemblies { get; } = new();
     public List<(string Type, string Base, string At, int Count)> UnseenBaseExamples { get; } = new();
+    // Methods that list types with GetTypes, keep subclasses of a project base and create them with Activator.
+    public List<(string BaseKey, string At)> ReflectionSites { get; } = new();
     public long BuildMilliseconds { get; private set; }
     public bool FromDisk { get; private set; }
 
@@ -147,6 +149,7 @@ public sealed class CodeIndex
                 type.Parts.Add($"{tree.FilePath}:{declaration.GetLocation().GetLineSpan().StartLinePosition.Line + 1}");
                 extraction.Extract(declaration, type, tree.FilePath);
                 extraction.Behaviour(declaration, symbol, type, semantic, tree.FilePath);
+                Storage(declaration, type, semantic, tree.FilePath, TypeOf, index);
             }
             foreach (var name in rootNode.DescendantNodes().OfType<SimpleNameSyntax>())
             {
@@ -245,6 +248,11 @@ public sealed class CodeIndex
                                   && (symbol.TypeKind == TypeKind.Interface || symbol.IsAbstract && symbol.TypeKind == TypeKind.Class);
         type.IsAbstract = symbol.IsAbstract && symbol.TypeKind == TypeKind.Class;
         type.IsGeneric = symbol.TypeParameters.Length > 0;
+        type.IsSerializable = symbol.TypeKind == TypeKind.Class
+                              && symbol.GetAttributes().Any(attribute => attribute.AttributeClass?.Name is "SerializableAttribute" or "Serializable");
+        for (var parent = symbol.BaseType; parent != null; parent = parent.BaseType)
+            if (parent.Name == "Object" && parent.ContainingNamespace?.ToDisplayString() == "UnityEngine")
+                type.IsUnityObject = true;
         for (var parent = symbol.BaseType; parent != null; parent = parent.BaseType)
         {
             if (EditorOnlyBases.Contains(parent.Name))
@@ -337,6 +345,77 @@ public sealed class CodeIndex
             or ParenthesizedExpressionSyntax or InterpolationSyntax or ExpressionStatementSyntax or PrefixUnaryExpressionSyntax
             or PostfixUnaryExpressionSyntax or ElementAccessExpressionSyntax;
     }
+
+    // How values of project types are stored and created, for the wiring of types assets cannot name: [SerializeReference]
+    // fields and their element types, fields Unity serializes by value, objects created with new, and reflection sites
+    // (GetTypes + a base-type filter + Activator.CreateInstance in one method).
+    private static readonly string[] ReflectionFilters = { "IsSubclassOf", "IsAssignableFrom", "IsAssignableTo", "GetInterface" };
+
+    private static void Storage(SyntaxNode declaration, IndexType type, SemanticModel semantic, string file, Func<INamedTypeSymbol, IndexType> typeOf, CodeIndex index)
+    {
+        string At(SyntaxNode node) => $"{file}:{node.GetLocation().GetLineSpan().StartLinePosition.Line + 1}";
+        IndexType? Project(ITypeSymbol? candidate) =>
+            candidate is INamedTypeSymbol named && named.Locations.Any(location => location.IsInSource) ? typeOf(Outermost(named.OriginalDefinition)) : null;
+        foreach (var field in declaration.DescendantNodes().OfType<FieldDeclarationSyntax>())
+        {
+            var attributes = field.AttributeLists.SelectMany(list => list.Attributes)
+                .Select(attribute => FactsExtractors.AttributeName(attribute.Name.ToString().Split('.').Last()))
+                .ToHashSet(StringComparer.Ordinal);
+            foreach (var variable in field.Declaration.Variables)
+            {
+                if (semantic.GetDeclaredSymbol(variable) is not IFieldSymbol symbol || symbol.IsStatic || symbol.IsConst || symbol.IsReadOnly)
+                    continue;
+                var element = Element(symbol.Type);
+                if (attributes.Contains("SerializeReference"))
+                {
+                    var target = Project(element);
+                    type.ReferenceFields.Add(($"{symbol.ContainingType.Name}.{symbol.Name}", target?.Key ?? string.Empty, At(variable)));
+                    continue;
+                }
+                var serialized = !attributes.Contains("NonSerialized")
+                                 && (symbol.DeclaredAccessibility == Accessibility.Public || attributes.Contains("SerializeField"));
+                if (serialized && Project(element) is { } byValue && byValue.ByValueAt.Length == 0 && !ReferenceEquals(byValue, type))
+                    byValue.ByValueAt = At(variable);
+            }
+        }
+        foreach (var creation in declaration.DescendantNodes().Where(node => node is BaseObjectCreationExpressionSyntax))
+            if (Project(semantic.GetTypeInfo(creation).Type) is { } created && created.CreatedAt.Length == 0)
+                created.CreatedAt = At(creation);
+        foreach (var body in declaration.DescendantNodes().Where(node => node is BaseMethodDeclarationSyntax or LocalFunctionStatementSyntax or AccessorDeclarationSyntax))
+        {
+            var calls = body.DescendantNodes().OfType<InvocationExpressionSyntax>().ToArray();
+            if (!calls.Any(call => CallName(call) is "GetTypes" or "GetExportedTypes"))
+                continue;
+            var create = calls.FirstOrDefault(call => CallName(call) == "CreateInstance"
+                                                      && call.Expression is MemberAccessExpressionSyntax access
+                                                      && access.Expression.ToString().EndsWith("Activator", StringComparison.Ordinal));
+            if (create == null)
+                continue;
+            var bases = calls.Where(call => ReflectionFilters.Contains(CallName(call)))
+                .SelectMany(call => call.DescendantNodesAndSelf().OfType<TypeOfExpressionSyntax>())
+                .Select(typeOfExpression => Project(semantic.GetTypeInfo(typeOfExpression.Type).Type))
+                .Where(found => found != null)
+                .Distinct();
+            foreach (var found in bases)
+                index.ReflectionSites.Add((found!.Key, At(create)));
+        }
+    }
+
+    internal static string CallName(InvocationExpressionSyntax call) => call.Expression switch
+    {
+        MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText,
+        SimpleNameSyntax name => name.Identifier.ValueText,
+        MemberBindingExpressionSyntax binding => binding.Name.Identifier.ValueText,
+        _ => string.Empty
+    };
+
+    // The element type of T, T[] and List<T>.
+    private static ITypeSymbol Element(ITypeSymbol type) => type switch
+    {
+        IArrayTypeSymbol array => array.ElementType,
+        INamedTypeSymbol { IsGenericType: true, TypeArguments.Length: 1 } generic when generic.Name is "List" or "IList" or "IReadOnlyList" => generic.TypeArguments[0],
+        _ => type
+    };
 
     private static string? UnseenBase(INamedTypeSymbol symbol)
     {
@@ -594,11 +673,25 @@ public sealed class CodeIndex
             "Awake", "Start", "Update", "FixedUpdate", "LateUpdate", "OnEnable", "OnDisable", "OnDestroy"
         };
 
+        // Frame waits that make a loop run every frame, and calls that poll every frame wherever they stand.
+        private static readonly HashSet<string> FrameWaits = new(StringComparer.Ordinal)
+        {
+            "Yield", "NextFrame", "DelayFrame", "WaitForEndOfFrame", "WaitForFixedUpdate"
+        };
+
+        private static readonly HashSet<string> PollingCalls = new(StringComparer.Ordinal)
+        {
+            "WaitUntil", "WaitWhile", "WaitUntilValueChanged", "EveryUpdate", "EveryValueChanged"
+        };
+
+        private static readonly string[] FrameWaitOwners = { "UniTask", "Task", "UniTaskAsyncEnumerable", "Observable" };
+
         // What a type reads, writes, subscribes to, assigns in other types and which Unity callbacks it has, each with
         // file:line, so an agent opens the lines that decide what the type owns instead of the whole file.
         public void Behaviour(SyntaxNode declaration, INamedTypeSymbol owner, IndexType type, SemanticModel semantic, string file)
         {
             string At(SyntaxNode node) => $"{file}:{node.GetLocation().GetLineSpan().StartLinePosition.Line + 1}";
+            string Section(string name) => extractors.Access(name) switch { "read" => "reads", "write" => "writes", _ => "uses" };
             foreach (var generic in declaration.DescendantNodes().OfType<GenericNameSyntax>())
             {
                 if (generic.Parent is not (InvocationExpressionSyntax or MemberAccessExpressionSyntax))
@@ -606,8 +699,65 @@ public sealed class CodeIndex
                 var name = generic.Identifier.ValueText;
                 if (!extractors.GenericCalls.Contains(name))
                     continue;
-                var section = extractors.Access(name) switch { "read" => "reads", "write" => "writes", _ => "uses" };
-                type.AddBehaviour(section, $"{name}<{string.Join(", ", generic.TypeArgumentList.Arguments)}>", At(generic));
+                type.AddBehaviour(Section(name), $"{name}<{string.Join(", ", generic.TypeArgumentList.Arguments)}>", At(generic));
+            }
+            foreach (var call in declaration.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                var name = CallName(call);
+                if (name.Length == 0)
+                    continue;
+                var nameNode = call.Expression switch
+                {
+                    MemberAccessExpressionSyntax access => access.Name,
+                    MemberBindingExpressionSyntax binding => binding.Name,
+                    SimpleNameSyntax simple => simple,
+                    _ => null
+                };
+                if (nameNode is GenericNameSyntax)
+                    continue;
+                // A non-generic overload of a configured generic call (Add(instance) next to Add<T>()) counts the same.
+                if (extractors.GenericCalls.Contains(name)
+                    && semantic.GetSymbolInfo(call).Symbol is IMethodSymbol { IsGenericMethod: false } method
+                    && method.ContainingType.GetMembers(name).OfType<IMethodSymbol>().Any(sibling => sibling.IsGenericMethod))
+                {
+                    var argument = call.ArgumentList.Arguments.FirstOrDefault();
+                    var argumentType = argument == null ? string.Empty : semantic.GetTypeInfo(argument.Expression).Type?.Name ?? string.Empty;
+                    type.AddBehaviour(Section(name), $"{name}({argumentType})", At(call));
+                    continue;
+                }
+                // memberCalls: a call on a receiver of a configured base type.
+                if (extractors.MemberCalls.TryGetValue(name, out var rules) && call.Expression is MemberAccessExpressionSyntax receiverAccess)
+                {
+                    var receiver = semantic.GetTypeInfo(receiverAccess.Expression).Type;
+                    var rule = rules.FirstOrDefault(candidate => DerivesFrom(receiver, candidate.On));
+                    if (receiver != null && rule.On != null)
+                    {
+                        type.AddBehaviour(rule.Access switch { "read" => "reads", "write" => "writes", _ => "uses" }, $"{receiver.Name}.{name}", At(call));
+                        continue;
+                    }
+                }
+                var receiverText = (call.Expression as MemberAccessExpressionSyntax)?.Expression.ToString() ?? string.Empty;
+                var onFrameOwner = FrameWaitOwners.Any(owner => receiverText == owner || receiverText.EndsWith("." + owner, StringComparison.Ordinal));
+                if (onFrameOwner && PollingCalls.Contains(name))
+                    type.AddBehaviour("recurring", $"{ShortReceiver(receiverText)}.{name}", At(call));
+                else if (onFrameOwner && FrameWaits.Contains(name) && InLoop(call))
+                    type.AddBehaviour("recurring", $"{ShortReceiver(receiverText)}.{name} in a loop", At(call));
+                else if (extractors.RecurringCalls.Contains(name))
+                    type.AddBehaviour("recurring", receiverText.Length > 0 ? $"{ShortReceiver(receiverText)}.{name}" : name, At(call));
+            }
+            foreach (var yield in declaration.DescendantNodes().OfType<YieldStatementSyntax>())
+            {
+                if (!yield.IsKind(SyntaxKind.YieldReturnStatement) || !InLoop(yield))
+                    continue;
+                var value = yield.Expression switch
+                {
+                    LiteralExpressionSyntax literal when literal.IsKind(SyntaxKind.NullLiteralExpression) => "yield return null",
+                    ObjectCreationExpressionSyntax creation when creation.Type.ToString().Split('.').Last() is "WaitForEndOfFrame" or "WaitForFixedUpdate"
+                        => $"yield return new {creation.Type.ToString().Split('.').Last()}()",
+                    _ => null
+                };
+                if (value != null)
+                    type.AddBehaviour("recurring", value + " in a loop", At(yield));
             }
             foreach (var assignment in declaration.DescendantNodes().OfType<AssignmentExpressionSyntax>())
             {
@@ -632,15 +782,61 @@ public sealed class CodeIndex
                     || access.Expression is ThisExpressionSyntax or BaseExpressionSyntax
                     || target is not (IFieldSymbol or IPropertySymbol)
                     || target.ContainingType == null
-                    || SymbolEqualityComparer.Default.Equals(target.ContainingType.OriginalDefinition, owner.OriginalDefinition))
+                    || SymbolEqualityComparer.Default.Equals(target.ContainingType.OriginalDefinition, owner.OriginalDefinition)
+                    || LocalValueCopy(access.Expression, semantic))
                     continue;
                 type.AddBehaviour("assigns", MemberName(target), At(assignment));
             }
+            if (owner.TypeKind != TypeKind.Class || !DerivesFrom(owner, "MonoBehaviour") && !DerivesFrom(owner, "ScriptableObject"))
+                return;
             foreach (var method in declaration.DescendantNodes().OfType<MethodDeclarationSyntax>()
                          .Where(method => method.Parent == declaration && method.ParameterList.Parameters.Count == 0)
                          .Where(method => LifecycleMethods.Contains(method.Identifier.ValueText)))
                 type.AddBehaviour("lifecycle", method.Identifier.ValueText, At(method.Identifier.Parent!));
         }
+
+        // An assignment whose receiver chain starts at a local or a by-value parameter of a value type changes a copy,
+        // not another object's state (position.x = 1; var copy = map[key]; copy.a = 1).
+        private static bool LocalValueCopy(ExpressionSyntax receiver, SemanticModel semantic)
+        {
+            var current = receiver;
+            while (true)
+            {
+                if (semantic.GetTypeInfo(current).Type is not { IsValueType: true })
+                    return false;
+                switch (current)
+                {
+                    case MemberAccessExpressionSyntax member:
+                        current = member.Expression;
+                        continue;
+                    case ElementAccessExpressionSyntax:
+                        return false;
+                    case ParenthesizedExpressionSyntax parenthesized:
+                        current = parenthesized.Expression;
+                        continue;
+                }
+                return semantic.GetSymbolInfo(current).Symbol switch
+                {
+                    ILocalSymbol local => local.RefKind == RefKind.None,
+                    IParameterSymbol parameter => parameter.RefKind == RefKind.None,
+                    _ => false
+                };
+            }
+        }
+
+        private static bool DerivesFrom(ITypeSymbol? type, string baseName)
+        {
+            for (var current = type; current != null; current = current.BaseType)
+                if (current.Name == baseName)
+                    return true;
+            return type?.AllInterfaces.Any(contract => contract.Name == baseName) == true;
+        }
+
+        private static bool InLoop(SyntaxNode node) => node.Ancestors()
+            .TakeWhile(ancestor => ancestor is not (BaseMethodDeclarationSyntax or LocalFunctionStatementSyntax or AnonymousFunctionExpressionSyntax))
+            .Any(ancestor => ancestor is WhileStatementSyntax or DoStatementSyntax or ForStatementSyntax or ForEachStatementSyntax);
+
+        private static string ShortReceiver(string receiver) => receiver.Split('.').Last();
 
         private static string MemberName(ISymbol symbol) =>
             symbol.ContainingType == null ? symbol.Name : $"{symbol.ContainingType.Name}.{symbol.Name}";
@@ -751,6 +947,17 @@ public sealed class CodeIndex
                 writer.Write(type.IsAbstract);
                 writer.Write(type.IsGeneric);
                 writer.Write(type.Placeable);
+                writer.Write(type.IsSerializable);
+                writer.Write(type.IsUnityObject);
+                writer.Write(S(type.ByValueAt));
+                writer.Write(S(type.CreatedAt));
+                writer.Write(type.ReferenceFields.Count);
+                foreach (var (field, element, at) in type.ReferenceFields)
+                {
+                    writer.Write(S(field));
+                    writer.Write(S(element));
+                    writer.Write(S(at));
+                }
                 List(type.Parts);
                 List(type.Interfaces);
                 List(type.DerivedBy.ToArray());
@@ -826,6 +1033,12 @@ public sealed class CodeIndex
                 writer.Write(S(example.At));
                 writer.Write(example.Count);
             }
+            writer.Write(ReflectionSites.Count);
+            foreach (var (baseKey, at) in ReflectionSites)
+            {
+                writer.Write(S(baseKey));
+                writer.Write(S(at));
+            }
         }
 
         var temporary = path + "." + Environment.ProcessId + ".tmp";
@@ -898,8 +1111,13 @@ public sealed class CodeIndex
                 {
                     Key = S(), FullName = S(), Name = S(), Display = S(), Namespace = S(), FirstFile = S(), Kind = S(), Base = S(),
                     ExtensionCandidate = reader.ReadBoolean(), UnityEntry = reader.ReadBoolean(),
-                    IsAbstract = reader.ReadBoolean(), IsGeneric = reader.ReadBoolean(), Placeable = reader.ReadBoolean()
+                    IsAbstract = reader.ReadBoolean(), IsGeneric = reader.ReadBoolean(), Placeable = reader.ReadBoolean(),
+                    IsSerializable = reader.ReadBoolean(), IsUnityObject = reader.ReadBoolean()
                 };
+                type.ByValueAt = S();
+                type.CreatedAt = S();
+                for (var fields = reader.ReadInt32(); fields > 0; fields--)
+                    type.ReferenceFields.Add((S(), S(), S()));
                 type.Parts.AddRange(List());
                 type.Interfaces.AddRange(List());
                 type.DerivedBy.UnionWith(List());
@@ -944,6 +1162,8 @@ public sealed class CodeIndex
                 index.MissingAssemblies.Add(S());
             for (var count = reader.ReadInt32(); count > 0; count--)
                 index.UnseenBaseExamples.Add((S(), S(), S(), reader.ReadInt32()));
+            for (var count = reader.ReadInt32(); count > 0; count--)
+                index.ReflectionSites.Add((S(), S()));
             index.BuildMilliseconds = watch.ElapsedMilliseconds;
             return index;
         }
@@ -975,6 +1195,13 @@ public sealed class IndexType
     public bool IsGeneric;
     public bool Placeable;
     public bool UnityEntry;
+    public bool IsSerializable;
+    public bool IsUnityObject;
+    // First place where Unity stores this type by value (a serialized field), and the first "new" of it; empty when none.
+    public string ByValueAt = string.Empty;
+    public string CreatedAt = string.Empty;
+    // [SerializeReference] fields declared here: "Owner.field", the element type's key (empty when not a project type), file:line.
+    public List<(string Field, string ElementKey, string At)> ReferenceFields { get; } = new();
     public List<string> Parts { get; } = new();
     public List<string> Interfaces { get; } = new();
     public HashSet<string> DerivedBy { get; } = new(StringComparer.Ordinal);

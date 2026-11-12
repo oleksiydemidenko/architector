@@ -416,6 +416,51 @@ namespace Architector.Editor.Tests
         }
 
         [Test]
+        public void LinkedPlanNodeResolvesTypeNamespaceAndTypeName()
+        {
+            var type = index.Types.Single(candidate => candidate.MetadataName == typeof(ArchitectorTypeIndexTests).FullName);
+            var created = repository.ApplySemanticPlan(new ArchitectorSemanticPlan
+            {
+                layers = { new ArchitectorPlanLayer { reference = "tests", name = "Tests" } },
+                nodes = { new ArchitectorPlanNode
+                {
+                    reference = "suite", layer = "tests", title = "Suite", mode = "linked",
+                    typeNamespace = typeof(ArchitectorTypeIndexTests).Namespace, typeName = nameof(ArchitectorTypeIndexTests)
+                } }
+            }, typeIndex: index);
+
+            var node = repository.LoadLayer(created.References["tests"]).semantic.nodes.Single();
+            Assert.That(ArchitectorTypeIdentity.Key(node.type.assemblyName, node.type.metadataName), Is.EqualTo(type.Key));
+            var missing = Assert.Throws<ArchitectorDataException>(() => repository.DryRunSemanticPlan(new ArchitectorSemanticPlan
+            {
+                nodes = { new ArchitectorPlanNode { reference = "other", layer = "Tests", title = "Other", mode = "linked", typeNamespace = "Nowhere", typeName = "Missing" } }
+            }, typeIndex: index));
+            Assert.That(missing.Message, Does.Contain("typeNamespace + typeName").And.Not.Contain("Indexed type ''"));
+            Assert.That(missing.Data[ArchitectorRepository.PlanOperationKey], Is.EqualTo("nodes[0]"));
+            var none = Assert.Throws<ArchitectorDataException>(() => repository.DryRunSemanticPlan(new ArchitectorSemanticPlan
+            {
+                nodes = { new ArchitectorPlanNode { reference = "bare", layer = "Tests", title = "Bare", mode = "linked" } }
+            }, typeIndex: index));
+            Assert.That(none.Message, Does.Contain("needs typeKey"));
+        }
+
+        [Test]
+        public void TooLongResponsibilityNamesItsPlanItem()
+        {
+            var failure = Assert.Throws<ArchitectorDataException>(() => repository.DryRunSemanticPlan(new ArchitectorSemanticPlan
+            {
+                layers = { new ArchitectorPlanLayer { reference = "tests", name = "Tests" } },
+                nodes =
+                {
+                    new ArchitectorPlanNode { reference = "short", layer = "tests", title = "Short", responsibility = "Fits." },
+                    new ArchitectorPlanNode { reference = "long", layer = "tests", title = "Long", responsibility = new string('x', ArchitectorNodeResponsibility.MaxLength + 1), x = 480f }
+                }
+            }));
+            Assert.That(failure.Message, Does.Contain("241").And.Contain("240"));
+            Assert.That(failure.Data[ArchitectorRepository.PlanOperationKey], Is.EqualTo("nodes[1]"));
+        }
+
+        [Test]
         public void NodeContractsKeepOmittedMembersWarnAboutRemovalsAndAcceptNodeNames()
         {
             var type = index.Types.Single(candidate => candidate.MetadataName == typeof(DeclarationContract).FullName);

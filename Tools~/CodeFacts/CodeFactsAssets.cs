@@ -7,11 +7,12 @@ namespace Architector.CodeFacts;
 // Where scripts are used in the project's serialized assets, read from the YAML text of prefabs, scenes and assets
 // without the Unity Editor: MonoBehaviour and ScriptableObject documents by their m_Script GUID (matched to the
 // script's .meta), their m_Enabled state, the lists of other components that point to them ({fileID: N} entries,
-// the activation and handler lists), and [SerializeReference] values by their serialized type names. Every file's
-// result is kept in Library/Architector/wiring-index.json and read again only when its size or time changes.
+// the activation and handler lists), and [SerializeReference] values by their serialized type names, also those a
+// prefab variant adds by override (managedReferences[...] modifications). Every file's result is kept in
+// Library/Architector/wiring-index.json and read again only when its size or time changes.
 public sealed class AssetWiring
 {
-    private const int FormatVersion = 2;
+    private const int FormatVersion = 3;
     private static readonly Regex Header = new(@"^--- !u!(\d+) &(-?\d+)", RegexOptions.Compiled);
     private static readonly Regex ScriptReference = new(@"m_Script: \{fileID: -?\d+, guid: ([0-9a-f]{32})", RegexOptions.Compiled);
     private static readonly Regex GameObjectReference = new(@"^  m_GameObject: \{fileID: (-?\d+)\}", RegexOptions.Compiled);
@@ -23,6 +24,9 @@ public sealed class AssetWiring
     private static readonly Regex TypeClass = new(@"(?:^|[{,\s])class:\s*([\w`]+)", RegexOptions.Compiled);
     private static readonly Regex TypeSpace = new(@"(?:^|[{,\s])ns:\s*([\w.]*)", RegexOptions.Compiled);
     private static readonly Regex MetaGuid = new(@"^guid: ([0-9a-f]{32})", RegexOptions.Compiled | RegexOptions.Multiline);
+    private static readonly Regex ModificationTarget = new(@"^\s*- target: \{fileID: (-?\d+)", RegexOptions.Compiled);
+    private static readonly Regex PropertyPath = new(@"^\s*propertyPath: (.*)$", RegexOptions.Compiled);
+    private static readonly Regex ModificationValue = new(@"^\s*value: (.*)$", RegexOptions.Compiled);
     private static readonly string[] AssetPatterns = { "*.prefab", "*.unity", "*.asset" };
     private static readonly object Gate = new();
     private static readonly Dictionary<string, AssetWiring> Loaded = new(StringComparer.OrdinalIgnoreCase);
@@ -46,6 +50,15 @@ public sealed class AssetWiring
         public long Ticks { get; set; }
         public List<Component> Components { get; set; } = new();
         public List<string> SerializedTypes { get; set; } = new();
+        public List<SerializedUse> SerializedUses { get; set; } = new();
+    }
+
+    // One [SerializeReference] value: its type, the object that holds it and how it got there.
+    public sealed class SerializedUse
+    {
+        public string Type { get; set; } = string.Empty;
+        public string Object { get; set; } = string.Empty;
+        public string Via { get; set; } = "managed_reference";
     }
 
     public sealed class MetaEntry
@@ -60,6 +73,7 @@ public sealed class AssetWiring
     public Dictionary<string, string> GuidByScript { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, List<(string File, Component Component)>> ComponentsByGuid { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, List<string>> FilesBySerializedType { get; } = new(StringComparer.Ordinal);
+    public Dictionary<string, List<(string File, SerializedUse Use)>> UsesBySerializedType { get; } = new(StringComparer.Ordinal);
     public IReadOnlyDictionary<string, FileEntry> Files => files;
 
     public static AssetWiring Load(string root)
@@ -109,6 +123,14 @@ public sealed class AssetWiring
                             ListedBy = (component["listedBy"] as JsonArray ?? new JsonArray()).Select(listed => (string?)listed ?? string.Empty).ToList()
                         });
                 entry.SerializedTypes.AddRange((file["serializedTypes"] as JsonArray ?? new JsonArray()).Select(type => (string?)type ?? string.Empty));
+                foreach (var item in file["serializedUses"] as JsonArray ?? new JsonArray())
+                    if (item is JsonObject use)
+                        entry.SerializedUses.Add(new SerializedUse
+                        {
+                            Type = (string?)use["type"] ?? string.Empty,
+                            Object = (string?)use["object"] ?? string.Empty,
+                            Via = (string?)use["via"] ?? "managed_reference"
+                        });
                 files[key] = entry;
             }
         }
@@ -170,6 +192,7 @@ public sealed class AssetWiring
             }
         ComponentsByGuid.Clear();
         FilesBySerializedType.Clear();
+        UsesBySerializedType.Clear();
         foreach (var (path, entry) in files.OrderBy(pair => pair.Key, StringComparer.Ordinal))
         {
             foreach (var component in entry.Components)
@@ -183,6 +206,12 @@ public sealed class AssetWiring
                 if (!FilesBySerializedType.TryGetValue(type, out var list))
                     FilesBySerializedType[type] = list = new List<string>();
                 list.Add(path);
+            }
+            foreach (var use in entry.SerializedUses)
+            {
+                if (!UsesBySerializedType.TryGetValue(use.Type, out var uses))
+                    UsesBySerializedType[use.Type] = uses = new List<(string File, SerializedUse Use)>();
+                uses.Add((path, use));
             }
         }
         if (changed)
@@ -212,7 +241,13 @@ public sealed class AssetWiring
                         ["enabled"] = component.Enabled,
                         ["listedBy"] = new JsonArray(component.ListedBy.Select(listed => (JsonNode?)listed).ToArray())
                     }).ToArray()),
-                    ["serializedTypes"] = new JsonArray(file.SerializedTypes.Select(type => (JsonNode?)type).ToArray())
+                    ["serializedTypes"] = new JsonArray(file.SerializedTypes.Select(type => (JsonNode?)type).ToArray()),
+                    ["serializedUses"] = new JsonArray(file.SerializedUses.Select(use => (JsonNode?)new JsonObject
+                    {
+                        ["type"] = use.Type,
+                        ["object"] = use.Object,
+                        ["via"] = use.Via
+                    }).ToArray())
                 };
             File.WriteAllText(path, new JsonObject { ["format"] = FormatVersion, ["metas"] = storedMetas, ["files"] = storedFiles }.ToJsonString());
         }
@@ -241,14 +276,22 @@ public sealed class AssetWiring
         string? pendingType = null;
         var pendingIndent = 0;
         var pendingBlock = false;
-        void AddSerialized(string text)
+        string? pendingOwner = null;
+        // Uses with the fileID of the document that holds them; object names are resolved at the end.
+        var uses = new List<(string Type, string OwnerFileId, string Via)>();
+        var modificationNames = new Dictionary<string, string>(StringComparer.Ordinal);
+        string? modificationTarget = null;
+        var modificationPath = string.Empty;
+        void AddSerialized(string text, string? owner)
         {
             var name = TypeClass.Match(text);
             if (!name.Success)
                 return;
             var space = TypeSpace.Match(text);
             var spaceName = space.Success ? space.Groups[1].Value : string.Empty;
-            entry.SerializedTypes.Add(spaceName.Length > 0 ? $"{spaceName}.{name.Groups[1].Value}" : name.Groups[1].Value);
+            var type = spaceName.Length > 0 ? $"{spaceName}.{name.Groups[1].Value}" : name.Groups[1].Value;
+            entry.SerializedTypes.Add(type);
+            uses.Add((type, owner ?? string.Empty, "managed_reference"));
         }
         foreach (var line in File.ReadLines(path))
         {
@@ -257,7 +300,7 @@ public sealed class AssetWiring
                 var indent = line.Length - line.TrimStart().Length;
                 if (pendingBlock && (indent <= pendingIndent || line.Trim().Length == 0))
                 {
-                    AddSerialized(pendingType);
+                    AddSerialized(pendingType, pendingOwner);
                     pendingType = null;
                 }
                 else
@@ -265,7 +308,7 @@ public sealed class AssetWiring
                     pendingType += " " + line.Trim();
                     if (!pendingBlock && line.Contains('}'))
                     {
-                        AddSerialized(pendingType);
+                        AddSerialized(pendingType, pendingOwner);
                         pendingType = null;
                     }
                     continue;
@@ -282,18 +325,55 @@ public sealed class AssetWiring
             }
             if (fileId == null)
                 continue;
+            if (classId == "1001")
+            {
+                // A prefab instance or variant: its modifications may add [SerializeReference] values by override
+                // (propertyPath managedReferences[<rid>], value "<Assembly> <Namespace.Type>") and rename objects.
+                var target = ModificationTarget.Match(line);
+                if (target.Success)
+                {
+                    modificationTarget = target.Groups[1].Value;
+                    modificationPath = string.Empty;
+                    continue;
+                }
+                var propertyPath = PropertyPath.Match(line);
+                if (propertyPath.Success)
+                {
+                    modificationPath = propertyPath.Groups[1].Value.Trim();
+                    continue;
+                }
+                var modification = ModificationValue.Match(line);
+                if (modification.Success && modificationTarget != null)
+                {
+                    var value = modification.Groups[1].Value.Trim();
+                    if (modificationPath == "m_Name")
+                        modificationNames[modificationTarget] = value;
+                    else if (modificationPath.StartsWith("managedReferences[", StringComparison.Ordinal))
+                    {
+                        var separator = value.IndexOf(' ');
+                        if (separator > 0 && separator < value.Length - 1)
+                        {
+                            var type = value[(separator + 1)..].Trim().Replace('/', '.');
+                            entry.SerializedTypes.Add(type);
+                            uses.Add((type, "override:" + modificationTarget, "variant_override"));
+                        }
+                    }
+                }
+                continue;
+            }
             var typeStart = TypeStart.Match(line);
             if (typeStart.Success)
             {
                 var value = typeStart.Groups[2].Value.Trim();
                 if (value.StartsWith('{') && value.Contains('}'))
                 {
-                    AddSerialized(value);
+                    AddSerialized(value, fileId);
                     continue;
                 }
                 if (value.StartsWith('{') || value.Length == 0)
                 {
                     pendingType = value;
+                    pendingOwner = fileId;
                     pendingIndent = typeStart.Groups[1].Value.Length;
                     pendingBlock = value.Length == 0;
                     continue;
@@ -348,13 +428,24 @@ public sealed class AssetWiring
                 key = field.Groups[2].Value;
         }
         if (pendingType != null)
-            AddSerialized(pendingType);
+            AddSerialized(pendingType, pendingOwner);
         var byFileId = entry.Components.ToDictionary(item => item.FileId, StringComparer.Ordinal);
+        string ObjectOf(string documentFileId) =>
+            componentGameObjects.TryGetValue(documentFileId, out var gameObject) && names.TryGetValue(gameObject, out var name) ? name
+            : names.TryGetValue("doc:" + documentFileId, out var documentObject) ? documentObject
+            : string.Empty;
         foreach (var item in entry.Components)
-            if (componentGameObjects.TryGetValue(item.FileId, out var gameObject) && names.TryGetValue(gameObject, out var name))
-                item.Object = name;
-            else if (names.TryGetValue("doc:" + item.FileId, out var documentObject))
-                item.Object = documentObject;
+            item.Object = ObjectOf(item.FileId);
+        foreach (var (type, owner, via) in uses)
+            entry.SerializedUses.Add(new SerializedUse
+            {
+                Type = type,
+                Via = via,
+                // An override names its target object only when the variant renamed it; otherwise the variant's root name.
+                Object = owner.StartsWith("override:", StringComparison.Ordinal)
+                    ? modificationNames.TryGetValue(owner["override:".Length..], out var renamed) ? renamed : modificationNames.Values.FirstOrDefault() ?? string.Empty
+                    : ObjectOf(owner)
+            });
         foreach (var (lister, field, target) in lists)
             if (lister != target && byFileId.TryGetValue(target, out var listed) && scriptsByFileId.TryGetValue(lister, out var listerGuid))
             {

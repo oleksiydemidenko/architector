@@ -43,6 +43,7 @@ namespace Architector.Editor.Agents
 
             try
             {
+                NormalizeLayerList(@params);
                 var parameters = @params.ToObject<Parameters>() ?? new Parameters();
                 var action = parameters.action?.Trim().ToLowerInvariant();
                 if (parameters.approve_changes && action != "approve_layers")
@@ -427,6 +428,18 @@ namespace Architector.Editor.Agents
                 var y = neighbors.Average(node => node.y + node.height * 0.5f) - own.height * 0.5f;
                 repository.MoveNode(layerId, nodeId, x, y);
             }
+        }
+
+        // A command line passes one layer, or a comma list, as a string; the actions take an array.
+        public static void NormalizeLayerList(JObject @params)
+        {
+            if (@params?["layers"] is JValue { Type: JTokenType.String } single)
+                @params["layers"] = new JArray(single.Value<string>()
+                    .Split(',')
+                    .Select(value => value.Trim())
+                    .Where(value => value.Length > 0)
+                    .Cast<object>()
+                    .ToArray());
         }
 
         private static ArchitectorAgentResult CheckRevision(ArchitectorRepository repository, int? expectedRevision, bool required)

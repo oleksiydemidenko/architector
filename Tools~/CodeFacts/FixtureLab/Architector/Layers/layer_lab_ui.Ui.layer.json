@@ -1,0 +1,42 @@
+{
+    "schemaVersion": 1,
+    "layerId": "layer_lab_ui",
+    "name": "Ui",
+    "purpose": "Ui of the lab.",
+    "parentGroupId": "group_lab",
+    "orderKey": "c",
+    "scope": {
+        "folders": [
+            "Assets/Lab/Ui"
+        ],
+        "namespaces": []
+    },
+    "nodes": [
+        {
+            "id": "node_hud",
+            "title": "Hud",
+            "responsibility": "",
+            "kind": "standard",
+            "type": {
+                "mode": "linked",
+                "kind": "class",
+                "typeNamespace": "Lab.Ui",
+                "name": "Hud",
+                "assemblyName": "Assembly-CSharp",
+                "metadataName": "Lab.Ui.Hud"
+            },
+            "members": []
+        },
+        {
+            "id": "node_note",
+            "title": "Design Note",
+            "responsibility": "",
+            "kind": "standard",
+            "type": {
+                "mode": "none"
+            },
+            "members": []
+        }
+    ],
+    "edges": []
+}

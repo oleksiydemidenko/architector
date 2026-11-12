@@ -21,9 +21,18 @@ public static partial class McpServer
         new("facts evidence", "facts evidence [--layer L] [--pair \"A -> B\"] [--status undeclared|cycle|unevidenced] [--include references|owners|intra]",
             "Every reference between layers, grouped by pair with declared, undeclared, cycle and unevidenced status; the same totals as DependencyEvidence. Also the active rules and rule suggestions.",
             false, new[] { "layer", "pair", "status", "include", "offset", "limit", "output" }),
-        new("facts layer", "facts layer <layer> [--type T [--section reads|writes|uses|subscribes|unsubscribes|assigns|lifecycle|wiring]]",
-            "A layer's files and types, references to and from other layers with type pairs, node candidates with file:line, and the wiring status of every type (wired, test_only, base_only, created_in_code, unwired, not_tracked). --type gives one type's public members with their member_ref for plans, project-rule facts, behaviour facts (what it reads, writes, subscribes to, assigns elsewhere, its Unity callbacks) and wiring places; --section pages one of them. A layer is its id, full path or a unique trailing part of the path.",
+        new("facts layer", "facts layer <layer> [--type T [--section reads|writes|uses|subscribes|unsubscribes|assigns|lifecycle|recurring|wiring|base_of]]",
+            "A layer's files and types, references to and from other layers with type pairs, node candidates with file:line, and the wiring status of every type (wired, test_only, base_only, created_in_code, created_by_reflection, unwired, not_tracked). --type gives one type's public members with their member_ref for plans, project-rule facts, behaviour facts (what it reads, writes, subscribes to, assigns elsewhere, its Unity callbacks, per-frame work outside Update) and wiring places; --section pages one of them. A layer is its id, full path or a unique trailing part of the path.",
             false, new[] { "type", "section", "offset", "limit", "candidates", "output" }),
+        new("facts audit", "facts audit [<layer>] [--min-uses N]",
+            "Contradictions between the graph and the code facts, each with node, type and evidence: nodes on unwired, test-only or created-in-code types, often used or extension types without a node (--min-uses, default 20), dependency relationships without evidence or drawn on types that hold none of the references, nodes without relationships and without a standalone mark.",
+            false, new[] { "min-uses", "offset", "limit", "output" }),
+        new("facts snapshot", "facts snapshot [--name N]",
+            "Saves the code facts (owner, wiring status, behaviour and members per type; evidence per layer pair) to Library/Architector/snapshots/<N or time>.json.",
+            false, new[] { "name" }),
+        new("facts diff", "facts diff <snapshot> [<other snapshot>]",
+            "What changed between two snapshots, or between a snapshot and the current code: types added and removed, owner, wiring, behaviour and member changes, evidence per layer pair.",
+            false, new[] { "offset", "limit", "output" }),
         new("facts what-if", "facts what-if --move <Type|Assets/file.cs|Assets/folder>=<Layer> [--move ...]",
             "What moving types, files or folders to other layers would change: undeclared pairs and cycles added and removed, relationships that would lose their evidence. Changes nothing.",
             false, new[] { "move", "output" }),
@@ -35,7 +44,8 @@ public static partial class McpServer
         new("edit", "edit <action> [--plan plan.json] [--<parameter> <value>]...",
             "Any architector_edit action through the open Unity Editor, for example: edit dry_run_plan --plan plan.json. --plan takes a file or JSON text. "
             + "approve_layers needs --approve_changes true for layers changed since their last approval. implements and extends are labels on a dependency relationship (kind dependency, label implements), not relationship kinds. "
-            + "dry_run_plan lists permissions_lost: layer pairs the plan leaves without any dependency, with their code_references. set_standalone --target <layer> --node <node> --reason <why> marks a linked node that has no relationship on purpose.",
+            + "dry_run_plan lists permissions_lost: layer pairs the plan leaves without any dependency, with their code_references. set_standalone --target <layer> --node <node> --reason <why> marks a linked node that has no relationship on purpose. "
+            + "A list parameter takes a repeated flag (--layers A --layers B) or a comma list (--layers A,B). A node responsibility has at most 240 characters.",
             true, new[] { "plan", "approve_changes", "work_token", "expected_revision", "any architector_edit parameter" }),
         new("status", "status", "The project, its Architector data and whether the Unity Editor is reachable.", false, Array.Empty<string>()),
         new("doctor", "doctor", "Checks everything the tools need and says what to fix: project, data, code index, Editor, package, agent skills.", false, Array.Empty<string>()),
@@ -154,6 +164,27 @@ public static partial class McpServer
                 action = "lookup";
                 arguments["names"] = Nodes(positional.Skip(2).Select(name => (JsonNode?)name));
                 break;
+            case "audit":
+                action = "facts_audit";
+                if (positional.Count > 2)
+                    arguments["target"] = positional[2];
+                if (options.TryGetValue("min-uses", out var minUses) && int.TryParse(minUses.Last(), out var minimum))
+                    arguments["min_uses"] = minimum;
+                Copy("offset", "limit", "output");
+                break;
+            case "snapshot":
+                action = "facts_snapshot";
+                Copy("name");
+                break;
+            case "diff":
+                action = "facts_diff";
+                if (positional.Count < 3)
+                    return Fail("usage", "Usage: architector-mcp facts diff <snapshot> [<other snapshot>]", ExitUsage);
+                arguments["snapshot"] = positional[2];
+                if (positional.Count > 3)
+                    arguments["against"] = positional[3];
+                Copy("offset", "limit", "output");
+                break;
             case "what-if":
                 action = "scope_what_if";
                 var moves = new JsonArray();
@@ -170,7 +201,7 @@ public static partial class McpServer
                 Copy("output");
                 break;
             default:
-                return Fail("usage", "facts takes evidence, layer, what-if, dump or lookup. architector-mcp help facts lists their options.", ExitUsage);
+                return Fail("usage", "facts takes evidence, layer, audit, snapshot, diff, what-if, dump or lookup. architector-mcp help facts lists their options.", ExitUsage);
         }
         var cache = new FactsCache(root!, "net100", () => Basic.Reference.Assemblies.Net100.References.All);
         var model = FactsQueries.ArchitectureOnlyActions.Contains(action) ? cache.Architecture() : cache.Get();
@@ -187,6 +218,12 @@ public static partial class McpServer
         {
             if (name is "project" or "pretty")
                 continue;
+            // A repeated flag (--layers A --layers B) is a list.
+            if (values.Count > 1 && name != "plan")
+            {
+                arguments[name.Replace('-', '_')] = Nodes(values.Select(item => (JsonNode?)item));
+                continue;
+            }
             var value = values.Last();
             if (name == "plan" && File.Exists(value))
                 value = File.ReadAllText(value);

@@ -55,8 +55,20 @@ public sealed class FactsArchitecture
         }
         foreach (var layer in architecture.Layers.Values)
             layer.Path = architecture.BuildPath(layer);
+        var settings = System.IO.Path.Combine(dataRoot, "architector.settings.json");
+        if (File.Exists(settings))
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(settings));
+            if (document.RootElement.TryGetProperty("rules", out var rules) && rules.ValueKind == JsonValueKind.Object
+                && rules.TryGetProperty("standaloneNodes", out var standalone) && standalone.ValueKind == JsonValueKind.Array)
+                foreach (var item in standalone.EnumerateArray())
+                    architecture.StandaloneNodes.Add(Text(item, "nodeId"));
+        }
         return architecture;
     }
+
+    // Nodes marked as having no relationship on purpose (shared settings, rules.standaloneNodes).
+    public HashSet<string> StandaloneNodes { get; } = new(StringComparer.Ordinal);
 
     public string Path(string layerId) => Layers.TryGetValue(layerId, out var layer) ? layer.Path : layerId;
 
@@ -177,8 +189,11 @@ public sealed class FactsNode
             var name = FactsArchitecture.Text(type, "metadataName");
             if (name.Length == 0)
                 name = FactsArchitecture.Text(type, "name");
+            // Unity stores metadataName as the full name (Ns.Type); a short metadataName gets the namespace in front.
             var space = FactsArchitecture.Text(type, "typeNamespace");
-            node.TypeName = name.Length == 0 ? string.Empty : space.Length == 0 ? name : space + "." + name;
+            node.TypeName = name.Length == 0 ? string.Empty
+                : space.Length == 0 || name.StartsWith(space + ".", StringComparison.Ordinal) ? name
+                : space + "." + name;
         }
         if (element.TryGetProperty("members", out var members) && members.ValueKind == JsonValueKind.Array)
             foreach (var member in members.EnumerateArray())
@@ -202,6 +217,11 @@ public sealed record FactsMember(string Id, string Kind, string Declaration, str
 // "suggestions": { "exclude": ["Assets/Plugins/**"] } leaves uses in those folders out of the rule suggestions.
 // A genericCalls entry may be an object, { "name": "Get", "access": "read" | "write" }, for the behaviour facts; without
 // it the method name decides (Get, Read, Has, Try, Is, Find read; Set, Write, Add, Remove, Change, Apply, Clear write).
+// A non-generic overload of a genericCalls method (Add(instance) next to Add<T>()) is listed the same way.
+// "memberCalls": [{ "name": "Set", "on": "ParameterBase", "access": "write" }] lists non-generic calls on receivers of
+// that type or its subclasses. "recurringCalls": ["Schedule"] names calls that register per-frame work.
+// "wiring": { "testPlaces": ["**/Sandbox/**", "**/* OLD.prefab"] } marks test, sample and old-copy assets (globs over
+// full paths; "testFolders" is the older name of the same list).
 // These rules only add facts per type; they never change the dependency evidence.
 public sealed class FactsExtractors
 {
@@ -238,6 +258,11 @@ public sealed class FactsExtractors
     public List<string> Problems { get; } = new();
     public List<string> SuggestionExclude { get; } = new();
     public Dictionary<string, string> CallAccess { get; } = new(StringComparer.Ordinal);
+    // "memberCalls": [{ "name": "Set", "on": "ParameterBase", "access": "write" }]: non-generic calls on a receiver whose
+    // type is or derives from "on" (by type name), listed in the behaviour facts only.
+    public Dictionary<string, List<(string? On, string Access)>> MemberCalls { get; } = new(StringComparer.Ordinal);
+    // "recurringCalls": ["Schedule"]: calls that register per-frame work (tween schedulers, player-loop hooks).
+    public HashSet<string> RecurringCalls { get; } = new(StringComparer.Ordinal);
     // "wiring": { "testFolders": [...] }: assets under these folders count as test or sample uses.
     public static readonly string[] DefaultTestFolders = { "**/Tests/**", "**/Test/**", "**/Samples/**", "**/Examples/**" };
     public List<string> TestFolders { get; } = new(DefaultTestFolders);
@@ -323,12 +348,31 @@ public sealed class FactsExtractors
                     else if (access.Length > 0)
                         extractors.Problems.Add($"genericCalls entry '{name}' has access '{access}'; use read or write.");
                 }
+            if (root.TryGetProperty("memberCalls", out var memberCalls) && memberCalls.ValueKind == JsonValueKind.Array)
+                foreach (var call in memberCalls.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.Object))
+                {
+                    var (name, on, access) = (FactsArchitecture.Text(call, "name"), FactsArchitecture.Text(call, "on"), FactsArchitecture.Text(call, "access"));
+                    if (name.Length == 0 || on.Length == 0)
+                    {
+                        extractors.Problems.Add("A memberCalls entry needs name and on (the receiver's type or base type name).");
+                        continue;
+                    }
+                    if (access.Length > 0 && access is not ("read" or "write" or "use"))
+                        extractors.Problems.Add($"memberCalls entry '{name}' has access '{access}'; use read, write or use.");
+                    if (!extractors.MemberCalls.TryGetValue(name, out var rules))
+                        extractors.MemberCalls[name] = rules = new List<(string? On, string Access)>();
+                    rules.Add((on, access.Length == 0 ? extractors.Access(name) : access));
+                }
+            extractors.RecurringCalls.UnionWith(FactsArchitecture.Strings(root, "recurringCalls"));
             extractors.InjectionAttributes.UnionWith(FactsArchitecture.Strings(root, "injectionAttributes").Select(AttributeName));
             extractors.SerializedAttributes.UnionWith(FactsArchitecture.Strings(root, "serializedAttributes").Select(AttributeName));
-            if (root.TryGetProperty("wiring", out var wiring) && wiring.ValueKind == JsonValueKind.Object && wiring.TryGetProperty("testFolders", out _))
+            // testPlaces is the clearer name of testFolders; both take globs over full paths, so file patterns such as
+            // "**/* OLD.prefab" work as well as folders. Together they replace the defaults.
+            if (root.TryGetProperty("wiring", out var wiring) && wiring.ValueKind == JsonValueKind.Object
+                && (wiring.TryGetProperty("testFolders", out _) || wiring.TryGetProperty("testPlaces", out _)))
             {
                 extractors.TestFolders.Clear();
-                extractors.TestFolders.AddRange(FactsArchitecture.Strings(wiring, "testFolders"));
+                extractors.TestFolders.AddRange(FactsArchitecture.Strings(wiring, "testFolders").Concat(FactsArchitecture.Strings(wiring, "testPlaces")).Distinct(StringComparer.Ordinal));
                 extractors.testFolderPatterns = extractors.TestFolders.Select(Glob).ToList();
             }
             if (root.TryGetProperty("suggestions", out var suggestions) && suggestions.ValueKind == JsonValueKind.Object)

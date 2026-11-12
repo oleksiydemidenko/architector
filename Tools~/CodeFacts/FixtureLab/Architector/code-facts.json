@@ -1,0 +1,25 @@
+{
+    "genericCalls": [
+        "Get",
+        {
+            "name": "Add",
+            "access": "write"
+        }
+    ],
+    "memberCalls": [
+        {
+            "name": "Set",
+            "on": "ParameterBase",
+            "access": "write"
+        }
+    ],
+    "recurringCalls": [
+        "Schedule"
+    ],
+    "wiring": {
+        "testPlaces": [
+            "**/Tests/**",
+            "**/* OLD.prefab"
+        ]
+    }
+}

@@ -28,7 +28,7 @@ Requires Unity 6000.3 or later.
 In Unity open **Window > Package Manager > + > Add package from git URL** and enter a pinned version:
 
 ```
-https://github.com/oleksiydemidenko/architector.git#v0.3.6
+https://github.com/oleksiydemidenko/architector.git#v0.3.7
 ```
 
 The MCP server is installed from inside Unity. The .NET SDK is needed only for the `DependencyEvidence` and `ContextRoute` command-line tools.
@@ -52,11 +52,13 @@ Reading works from files; writing needs the Editor, because validation, the type
 | `architector_status`, `architector_route`, `architector_digest` (MCP) | no | Project state, routing and the approved architecture |
 | `context_route` | no | From a file or type to its layer, digest lines and documents |
 | `DependencyEvidence` | no | Code dependencies between layers that the graph does not declare |
-| `architector_query` code facts: `code_evidence`, `layer_facts`, `scope_what_if`, `layer_dump`, `lookup` | no | Who owns which types, every reference between layers with file:line, node candidates, what a type reads, writes and subscribes to, where its scripts are wired in prefabs, scenes and assets, what a scope move would change, layer ids by name. Answered by the server itself, the same totals as `DependencyEvidence` |
+| `architector_query` code facts: `code_evidence`, `layer_facts`, `scope_what_if`, `layer_dump`, `lookup`, `facts_audit`, `facts_snapshot`, `facts_diff` | no | Who owns which types, every reference between layers with file:line, node candidates, what a type reads, writes and subscribes to, where its scripts are wired in prefabs, scenes and assets, what a scope move would change, layer ids by name, where the graph contradicts the facts, and what changed since a saved snapshot. Answered by the server itself, the same totals as `DependencyEvidence` |
 | `architector_query` | yes | Layers, approval, conformance and type queries |
 | `architector_edit` | yes | Work sessions, plans, arrangement and approvals |
 
 The server binary is also a command line for agents and scripts that can run shell commands, with the same JSON replies: `architector-mcp facts layer Core/Input`, `architector-mcp query layer_graph --target Core/Input --detail summary`, `architector-mcp edit dry_run_plan --plan plan.json`, `architector-mcp doctor`, `architector-mcp help`. `architector_status` gives the binary's path. `architector-mcp skill install claude` copies the authoring skill into the project.
+
+`Architector/code-facts.json` (optional) adapts the facts to the project: `presets` (`unity` by default, `zenject`, `vcontainer`, `addressables`), `genericCalls` (with `access` read or write), `memberCalls` (`{"name": "Set", "on": "ParameterBase", "access": "write"}`: calls on receivers of that type), `recurringCalls` (calls that register per-frame work), `injectionAttributes`, `serializedAttributes`, `suggestions.exclude`, and `wiring.testPlaces` (globs for test, sample, sandbox and old-copy assets such as `**/* OLD.prefab`; list them before trusting wiring statuses).
 
 Keep **Project Settings > Player > Run In Background** on when agents talk to the Editor; otherwise it stops answering while its window has no focus.
 

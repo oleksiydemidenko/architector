@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.3.7
+
+Code facts checked against a large approved graph: wiring statuses that were wrong, behaviour facts that missed or misread code, and two new tools for checking a graph against the facts. Existing fields keep their names and meaning; new fields are additive. Both caches (`code-index-*.bin` and `wiring-index.json`) change format and rebuild by themselves on the first call.
+
+**Wiring facts:**
+
+- **Script assets are found from the file that declares the type.** Every part of a partial type counts, a file name that differs only in letter case counts, and so does the only placeable class of a file with another name. Such a type is `wired` when assets use the GUID. `script_name` names the file and the match (`exact`, `case`, `single_class`); `name_warning` explains the risk of the last two.
+- **Abstract and generic types are never `wired` themselves.** A generic base that shares its file and name with the placed class (`Turret<T>` and `Turret`) is `base_only`.
+- **Prefab-variant overrides count.** A `[SerializeReference]` value that a variant adds by override (`managedReferences[<rid>]`) places its type; the variant appears in `places` with `"via": "variant_override"`.
+- **Managed references list their places.** `places` names the file and the object of every `[SerializeReference]` use (`"via": "managed_reference"`), as for MonoBehaviours.
+- **Types only `[SerializeReference]` can store.** A `[Serializable]` class that fits a `[SerializeReference]` field, is never a by-value serialized field and is never created with `new`, is `unwired` when no asset stores it; `siblings_in_assets` counts the stored types of the same field. When a condition fails, the type stays `not_tracked` and `note` says why.
+- **`created_by_reflection`.** A method that lists types with `GetTypes`, filters them by a project base type and creates them with `Activator.CreateInstance` makes the matching subclasses `created_by_reflection` instead of `unwired` or `not_tracked`. `code_evidence` lists the sites in `reflection_sites`.
+- **`base_of` has a total and pages:** `base_of_total`, and `section=base_of` with `offset`/`limit`.
+- **Test places take file patterns.** `wiring.testPlaces` (the clearer name of `testFolders`) takes globs over full paths, for example `**/* OLD.prefab`. `layer_facts` reports the active patterns in `wiring_test_places`.
+
+**Behaviour facts:**
+
+- **Writes.** A non-generic overload of a `genericCalls` method (`Add(instance)` next to `Add<T>()`) is listed like the generic call. New `memberCalls` rules in `code-facts.json` list calls on receivers of a given type, for example `Set` on a parameter base.
+- **`assigns` leaves out copies.** Assignments to locals, by-value parameters and struct copies are no longer reported as another type's state.
+- **Unity callbacks only on Unity types.** `lifecycle`, `unpaired` and `loops` appear only on `MonoBehaviour` and `ScriptableObject` types.
+- **`recurring`:** per-frame work outside `Update` with file:line: frame waits in loops (`UniTask.Yield`, `NextFrame`, `DelayFrame`, `yield return null`), polling calls (`UniTask.WaitUntil`, `WaitWhile`, `EveryUpdate`) and the calls named in `recurringCalls`. `recurring_note` states what stays unseen.
+- **Inherited callbacks pair.** `unpaired` counts the callbacks of project base classes; `inherited_lifecycle` names the base that supplied the pair.
+
+**Graph data and conformance:**
+
+- **Nodes with Unity's full `metadataName` are linked again.** The code facts doubled the namespace (`Ns.Ns.Type`), so `node_candidates[].node` stayed `null` and `facts dump` showed the doubled name. `node_candidates` also gets `node_title`.
+- **An allowed cycle inside one layer no longer lowers the state.** It is a `dependency_cycle` diagnostic with the new severity `info`. Conformance answers add `counts.info` and `warning_kinds`, so an `Incomplete` state names its causes.
+
+**Command line and plans:**
+
+- `--output file` writes the full answer, every list unpaged, unless `--limit` is given.
+- List parameters take a repeated flag (`--layers A --layers B`) or a comma list (`--layers A,B`).
+- A linked plan node may name its type by `typeNamespace` and `typeName`; failures name the fields and list candidate keys.
+- A responsibility over 240 characters fails with `operation` naming the plan item.
+- `layer_facts` with a short `type` name shared by a generic and a non-generic type picks the non-generic one, and several matches fail with `type_ambiguous` and the candidates instead of an internal error.
+
+**New tools:**
+
+- **`facts audit [<layer>]`** (MCP `facts_audit`): the contradictions between the graph and the facts, each with node, type and evidence: nodes on `unwired`, `test_only` or `created_in_code` types, often used or extension types without a node (`--min-uses`, default 20), dependency relationships without evidence or drawn on types that hold none of the references, nodes without relationships and without a standalone mark.
+- **`facts snapshot`** and **`facts diff <a> [<b>]`** (MCP `facts_snapshot`, `facts_diff`): save the facts under `Library/Architector/snapshots` and list what changed between two snapshots or since one: types added and removed, owner, wiring, behaviour, member and evidence changes.
+
 ## 0.3.6
 
 - **The 0.3.5 changes are published.** The 0.3.5 release was not published, because its Windows build failed a test. The test compared the project path as text. On Windows, the temporary folder can come as a short 8.3 path (`RUNNER~1`) while the server reports the long path. The test now checks that both paths point to the same folder. The package code is the same as in 0.3.5.

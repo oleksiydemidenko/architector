@@ -16,6 +16,8 @@ namespace Architector.Editor
     {
         public const string Warning = "warning";
         public const string Error = "error";
+        // Reported for information; never lowers the state.
+        public const string Info = "info";
     }
 
     public static class ArchitectorConformanceCodes
@@ -70,6 +72,10 @@ namespace Architector.Editor
         public int PassedCount { get; internal set; }
         public int WarningCount { get; internal set; }
         public int ErrorCount { get; internal set; }
+        public int InfoCount { get; internal set; }
+        // Warnings per code, so an Incomplete state names its causes.
+        public IReadOnlyDictionary<string, int> WarningKinds => warningKinds;
+        internal readonly SortedDictionary<string, int> warningKinds = new(StringComparer.Ordinal);
         public int UnverifiedMemberCount { get; internal set; }
         public int UnverifiedTypeFactCount { get; internal set; }
         public int TotalDiagnosticCount { get; internal set; }
@@ -189,9 +195,12 @@ namespace Architector.Editor
                 foreach (var cycle in cycles.Where(cycle => cycle.LayerIds.Contains(layer.id)))
                 {
                     var member = cycle.Members.First(endpoint => string.Equals(endpoint.LayerId, layer.id, StringComparison.Ordinal));
-                    report.WarningCount++;
+                    if (cycle.CrossesLayers)
+                        report.WarningCount++;
+                    else
+                        report.InfoCount++;
                     AddDiagnostic(report, limit, Diagnostic(
-                        ArchitectorConformanceSeverities.Warning,
+                        cycle.CrossesLayers ? ArchitectorConformanceSeverities.Warning : ArchitectorConformanceSeverities.Info,
                         ArchitectorConformanceCodes.DependencyCycle,
                         layer,
                         semantic.nodes.First(node => string.Equals(node.id, member.NodeId, StringComparison.Ordinal)),
@@ -470,6 +479,7 @@ namespace Architector.Editor
             report.PassedCount += partial.PassedCount;
             report.WarningCount += partial.WarningCount;
             report.ErrorCount += partial.ErrorCount;
+            report.InfoCount += partial.InfoCount;
             report.UnverifiedMemberCount += partial.UnverifiedMemberCount;
             report.UnverifiedTypeFactCount += partial.UnverifiedTypeFactCount;
             foreach (var diagnostic in partial.Diagnostics)
@@ -482,6 +492,8 @@ namespace Architector.Editor
             ArchitectorConformanceDiagnostic diagnostic)
         {
             report.TotalDiagnosticCount++;
+            if (string.Equals(diagnostic.Severity, ArchitectorConformanceSeverities.Warning, StringComparison.Ordinal))
+                report.warningKinds[diagnostic.Code] = report.warningKinds.TryGetValue(diagnostic.Code, out var count) ? count + 1 : 1;
             if (report.diagnostics.Count < limit)
                 report.diagnostics.Add(diagnostic);
         }

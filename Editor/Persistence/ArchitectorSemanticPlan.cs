@@ -829,8 +829,46 @@ namespace Architector.Editor
             ArchitectorTypeIndex typeIndex)
         {
             var node = CreatePlannedNodeContract(nodeId, title, item, layer, typeIndex);
-            node.responsibility = ArchitectorNodeResponsibility.Normalize(item?.responsibility);
+            node.responsibility = PlannedResponsibility(item?.responsibility, title);
             return node;
+        }
+
+        // Checked here and not only by validation, so the failure names the plan item.
+        private static string PlannedResponsibility(string value, string title)
+        {
+            var text = ArchitectorNodeResponsibility.Normalize(value);
+            if (text.Length > ArchitectorNodeResponsibility.MaxLength)
+                throw new ArchitectorDataException(
+                    $"Node '{title}' responsibility has {text.Length} characters; the limit is {ArchitectorNodeResponsibility.MaxLength}.");
+            return text;
+        }
+
+        // A linked node names its type by typeKey, or by typeNamespace and typeName (assemblyName is not needed when
+        // the pair names one indexed type).
+        private static string PlannedTypeKey(string typeKey, string typeNamespace, string typeName, string title, ArchitectorTypeIndex typeIndex)
+        {
+            if (!string.IsNullOrWhiteSpace(typeKey))
+                return typeKey.Trim();
+            if (string.IsNullOrWhiteSpace(typeName))
+                throw new ArchitectorDataException(
+                    $"Linked node '{title}' needs typeKey, or typeNamespace and typeName of one indexed type; none is given.");
+            var space = typeNamespace?.Trim() ?? string.Empty;
+            var name = typeName.Trim();
+            var fullName = space.Length == 0 ? name : $"{space}.{name}";
+            var matches = typeIndex.Types
+                .Where(type => string.Equals(type.FullDisplayName, fullName, StringComparison.Ordinal)
+                               || string.Equals(type.MetadataName, fullName, StringComparison.Ordinal))
+                .ToArray();
+            if (matches.Length == 1)
+                return matches[0].Key;
+            var candidates = (matches.Length > 1 ? matches : typeIndex.Types.Where(type => string.Equals(type.DisplayName, name, StringComparison.Ordinal)))
+                .Take(5)
+                .Select(type => type.Key)
+                .ToArray();
+            throw new ArchitectorDataException(matches.Length > 1
+                ? $"Linked node '{title}': typeNamespace '{space}' and typeName '{name}' match {matches.Length} indexed types; give typeKey: {string.Join(", ", candidates)}."
+                : $"Linked node '{title}': no indexed type '{fullName}' (typeNamespace + typeName)."
+                  + (candidates.Length > 0 ? $" Types with that name: {string.Join(", ", candidates)}." : string.Empty));
         }
 
         private ArchitectorNodeRecord CreatePlannedNodeContract(
@@ -871,8 +909,9 @@ namespace Architector.Editor
                 throw new ArchitectorDataException($"Unsupported planned node mode '{item?.mode}'.");
             if (typeIndex == null)
                 throw new ArchitectorDataException("Linked semantic-plan nodes require the local C# type index.");
-            var indexedType = typeIndex.Types.SingleOrDefault(type => string.Equals(type.Key, item.typeKey, StringComparison.Ordinal))
-                              ?? throw new ArchitectorDataException($"Indexed type '{item.typeKey}' was not found.");
+            var typeKey = PlannedTypeKey(item.typeKey, item.typeNamespace, item.typeName, title, typeIndex);
+            var indexedType = typeIndex.Types.SingleOrDefault(type => string.Equals(type.Key, typeKey, StringComparison.Ordinal))
+                              ?? throw new ArchitectorDataException($"Indexed type '{typeKey}' (typeKey) was not found.");
             EnsureLinkedTypeIsUnique(layer, indexedType, null);
             var result = CreateLinkedNodeRecord(nodeId, title, indexedType);
             ApplyPlannedTypeFacts(result.type, item.baseType, item.interfaces, typeIndex, true);
@@ -1051,13 +1090,13 @@ namespace Architector.Editor
                                  .Where(before => existing.type.interfaces.All(after => ArchitectorTypeReference.Key(after) != ArchitectorTypeReference.Key(before))))
                         planWarnings.Add($"{planOperation}: removes interface '{removed.name}' from node '{existing.title}'.");
                 existing.title = planned.title;
-                existing.responsibility = ArchitectorNodeResponsibility.Normalize(planned.responsibility);
+                existing.responsibility = PlannedResponsibility(planned.responsibility, planned.title);
                 return;
             }
             if (mode == "none" && string.Equals(existing.type?.mode, "none", StringComparison.Ordinal))
             {
                 existing.title = planned.title;
-                existing.responsibility = ArchitectorNodeResponsibility.Normalize(planned.responsibility);
+                existing.responsibility = PlannedResponsibility(planned.responsibility, planned.title);
                 return;
             }
             throw new ArchitectorDataException($"Unsupported node contract transition '{existing.type?.mode}' -> '{mode}'.");
