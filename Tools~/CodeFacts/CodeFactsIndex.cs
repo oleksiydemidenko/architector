@@ -14,7 +14,7 @@ namespace Architector.CodeFacts;
 // The index is saved under Library/Architector and reused while no C# file, csproj or code-facts.json changed.
 public sealed class CodeIndex
 {
-    private const int FormatVersion = 4;
+    private const int FormatVersion = 5;
 
     public string Signature { get; private set; } = string.Empty;
     public string ReferenceSet { get; private set; } = string.Empty;
@@ -183,6 +183,7 @@ public sealed class CodeIndex
             }
         }
 
+        GenericCreations(compilation, trees, TypeOf);
         foreach (var type in index.Types)
             Describe(type, symbols[type.Key], byKey, KeyOf);
         index.UnresolvedBaseTypes = symbols.Values.Count(symbol => HasUnseenBase(symbol));
@@ -378,9 +379,34 @@ public sealed class CodeIndex
                     byValue.ByValueAt = At(variable);
             }
         }
+        void Created(IndexType created, SyntaxNode at, string how)
+        {
+            if (created.CreatedAt.Length > 0)
+                return;
+            created.CreatedAt = At(at);
+            created.CreatedBy = how;
+        }
         foreach (var creation in declaration.DescendantNodes().Where(node => node is BaseObjectCreationExpressionSyntax))
-            if (Project(semantic.GetTypeInfo(creation).Type) is { } created && created.CreatedAt.Length == 0)
-                created.CreatedAt = At(creation);
+            if (Project(semantic.GetTypeInfo(creation).Type) is { } created)
+                Created(created, creation, "new");
+        // Activator.CreateInstance<X>() and Activator.CreateInstance(typeof(X), ...) create X as surely as new does.
+        foreach (var call in declaration.DescendantNodes().OfType<InvocationExpressionSyntax>().Where(call => CallName(call) == "CreateInstance"))
+        {
+            if (semantic.GetSymbolInfo(call).Symbol is not IMethodSymbol activator || !IsActivator(activator))
+                continue;
+            var target = activator.IsGenericMethod
+                ? activator.TypeArguments[0]
+                : call.ArgumentList.Arguments.FirstOrDefault()?.Expression is TypeOfExpressionSyntax typeOfTarget
+                    ? semantic.GetTypeInfo(typeOfTarget.Type).Type
+                    : null;
+            if (Project(target) is { } created)
+                Created(created, call, "Activator.CreateInstance");
+        }
+        // A type named by typeof (an attribute, a reflection call) may be created where the facts cannot see. An attribute
+        // repeated on one declaration is a registry (a serialization union, known types): it lists types and creates none.
+        foreach (var typeOfName in declaration.DescendantNodes().OfType<TypeOfExpressionSyntax>().Where(node => !InRegistryAttribute(node)))
+            if (Project(semantic.GetTypeInfo(typeOfName.Type).Type) is { } named && !ReferenceEquals(named, type) && named.TypeOfAt.Length == 0)
+                named.TypeOfAt = At(typeOfName);
         foreach (var body in declaration.DescendantNodes().Where(node => node is BaseMethodDeclarationSyntax or LocalFunctionStatementSyntax or AccessorDeclarationSyntax))
         {
             var calls = body.DescendantNodes().OfType<InvocationExpressionSyntax>().ToArray();
@@ -399,6 +425,117 @@ public sealed class CodeIndex
             foreach (var found in bases)
                 index.ReflectionSites.Add((found!.Key, At(create)));
         }
+    }
+
+    private static bool InRegistryAttribute(TypeOfExpressionSyntax node)
+    {
+        if (node.FirstAncestorOrSelf<AttributeSyntax>() is not { Parent.Parent: { } owner } attribute)
+            return false;
+        var name = attribute.Name.ToString();
+        return owner.ChildNodes().OfType<AttributeListSyntax>().SelectMany(list => list.Attributes).Count(other => other.Name.ToString() == name) > 1;
+    }
+
+    // The generic method a call binds to, with all its type arguments. An extension method called on a receiver binds to
+    // a reduced symbol; its constructed static form matches the declaration.
+    private static IMethodSymbol? Called(SemanticModel semantic, InvocationExpressionSyntax call)
+    {
+        if (semantic.GetSymbolInfo(call).Symbol is not IMethodSymbol method)
+            return null;
+        if (method.ReducedFrom != null)
+            method = method.GetConstructedReducedFrom() ?? method.ReducedFrom;
+        return method.IsGenericMethod ? method : null;
+    }
+
+    private static bool IsActivator(IMethodSymbol method) =>
+        method.Name == "CreateInstance" && method.ContainingType is { Name: "Activator", ContainingNamespace.Name: "System" };
+
+    // A generic method creates its type argument when its body has new T() or Activator.CreateInstance<T>(), or passes T
+    // on to a method that creates it; a method without a body creates T when T has the new() constraint. A call of such a
+    // method with a project type there (written or inferred) creates that type, which no asset can show.
+    private static void GenericCreations(CSharpCompilation compilation, SyntaxTree[] trees, Func<INamedTypeSymbol, IndexType> typeOf)
+    {
+        var creates = new Dictionary<IMethodSymbol, HashSet<int>>(SymbolEqualityComparer.Default);
+        var forwards = new List<(IMethodSymbol From, int FromOrdinal, IMethodSymbol To, int ToOrdinal)>();
+        var models = new Dictionary<SyntaxTree, SemanticModel>();
+        SemanticModel Model(SyntaxTree tree) => models.TryGetValue(tree, out var model) ? model : models[tree] = compilation.GetSemanticModel(tree);
+        bool AddCreated(IMethodSymbol method, int ordinal)
+        {
+            if (!creates.TryGetValue(method, out var ordinals))
+                creates[method] = ordinals = new HashSet<int>();
+            return ordinals.Add(ordinal);
+        }
+        foreach (var tree in trees)
+            foreach (var declaration in tree.GetRoot().DescendantNodes()
+                         .Where(node => node is MethodDeclarationSyntax { TypeParameterList: not null } or LocalFunctionStatementSyntax { TypeParameterList: not null }))
+            {
+                var semantic = Model(tree);
+                if (semantic.GetDeclaredSymbol(declaration) is not IMethodSymbol { IsGenericMethod: true } declared)
+                    continue;
+                var method = declared.OriginalDefinition;
+                int Ordinal(ITypeSymbol? candidate) =>
+                    candidate is ITypeParameterSymbol { TypeParameterKind: TypeParameterKind.Method } parameter
+                    && SymbolEqualityComparer.Default.Equals(parameter.DeclaringMethod?.OriginalDefinition, method)
+                        ? parameter.Ordinal
+                        : -1;
+                SyntaxNode? body = declaration switch
+                {
+                    MethodDeclarationSyntax syntax => (SyntaxNode?)syntax.Body ?? syntax.ExpressionBody,
+                    LocalFunctionStatementSyntax syntax => (SyntaxNode?)syntax.Body ?? syntax.ExpressionBody,
+                    _ => null
+                };
+                if (body == null)
+                {
+                    foreach (var parameter in method.TypeParameters.Where(parameter => parameter.HasConstructorConstraint))
+                        AddCreated(method, parameter.Ordinal);
+                    continue;
+                }
+                foreach (var node in body.DescendantNodes())
+                {
+                    if (node is BaseObjectCreationExpressionSyntax)
+                    {
+                        var created = Ordinal(semantic.GetTypeInfo(node).Type);
+                        if (created >= 0)
+                            AddCreated(method, created);
+                    }
+                    else if (node is InvocationExpressionSyntax call && Called(semantic, call) is { } callee)
+                        for (var index = 0; index < callee.TypeArguments.Length; index++)
+                        {
+                            var ordinal = Ordinal(callee.TypeArguments[index]);
+                            if (ordinal < 0)
+                                continue;
+                            if (IsActivator(callee))
+                                AddCreated(method, ordinal);
+                            else if (callee.OriginalDefinition.Locations.Any(location => location.IsInSource))
+                                forwards.Add((method, ordinal, callee.OriginalDefinition, index));
+                        }
+                }
+            }
+        for (var changed = true; changed;)
+        {
+            changed = false;
+            foreach (var (from, fromOrdinal, to, toOrdinal) in forwards)
+                if (creates.TryGetValue(to, out var ordinals) && ordinals.Contains(toOrdinal))
+                    changed |= AddCreated(from, fromOrdinal);
+        }
+        if (creates.Count == 0)
+            return;
+        var names = creates.Keys.Select(method => method.Name).ToHashSet(StringComparer.Ordinal);
+        foreach (var tree in trees)
+            foreach (var call in tree.GetRoot().DescendantNodes().OfType<InvocationExpressionSyntax>().Where(call => names.Contains(CallName(call))))
+            {
+                if (Called(Model(tree), call) is not { } callee || !creates.TryGetValue(callee.OriginalDefinition, out var ordinals))
+                    continue;
+                foreach (var ordinal in ordinals.OrderBy(ordinal => ordinal))
+                {
+                    if (callee.TypeArguments[ordinal] is not INamedTypeSymbol named || !named.Locations.Any(location => location.IsInSource))
+                        continue;
+                    var created = typeOf(Outermost(named.OriginalDefinition));
+                    if (created.CreatedAt.Length > 0)
+                        continue;
+                    created.CreatedAt = $"{tree.FilePath}:{call.GetLocation().GetLineSpan().StartLinePosition.Line + 1}";
+                    created.CreatedBy = $"{callee.Name}<{string.Join(", ", callee.OriginalDefinition.TypeParameters.Select(parameter => parameter.Name))}>";
+                }
+            }
     }
 
     internal static string CallName(InvocationExpressionSyntax call) => call.Expression switch
@@ -951,6 +1088,8 @@ public sealed class CodeIndex
                 writer.Write(type.IsUnityObject);
                 writer.Write(S(type.ByValueAt));
                 writer.Write(S(type.CreatedAt));
+                writer.Write(S(type.CreatedBy));
+                writer.Write(S(type.TypeOfAt));
                 writer.Write(type.ReferenceFields.Count);
                 foreach (var (field, element, at) in type.ReferenceFields)
                 {
@@ -1116,6 +1255,8 @@ public sealed class CodeIndex
                 };
                 type.ByValueAt = S();
                 type.CreatedAt = S();
+                type.CreatedBy = S();
+                type.TypeOfAt = S();
                 for (var fields = reader.ReadInt32(); fields > 0; fields--)
                     type.ReferenceFields.Add((S(), S(), S()));
                 type.Parts.AddRange(List());
@@ -1197,9 +1338,13 @@ public sealed class IndexType
     public bool UnityEntry;
     public bool IsSerializable;
     public bool IsUnityObject;
-    // First place where Unity stores this type by value (a serialized field), and the first "new" of it; empty when none.
+    // First place where Unity stores this type by value (a serialized field), the first place code creates it (CreatedBy
+    // says how: "new", "Activator.CreateInstance" or the generic call that creates its type argument), and the first
+    // typeof of it outside its own declaration; empty when none.
     public string ByValueAt = string.Empty;
     public string CreatedAt = string.Empty;
+    public string CreatedBy = string.Empty;
+    public string TypeOfAt = string.Empty;
     // [SerializeReference] fields declared here: "Owner.field", the element type's key (empty when not a project type), file:line.
     public List<(string Field, string ElementKey, string At)> ReferenceFields { get; } = new();
     public List<string> Parts { get; } = new();

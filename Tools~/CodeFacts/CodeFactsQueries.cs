@@ -751,7 +751,9 @@ public static class FactsQueries
             else if (type.Placeable && createdAt.TryGetValue(type.Name, out var created))
             {
                 item.Status = "created_in_code";
-                item.Reason = "created from code at " + created;
+                item.Reason = IsEditorFile(created)
+                    ? $"created from Editor code at {created} (an importer or a tool; the assets it makes are not scanned)"
+                    : "created from code at " + created;
             }
             else if (type.Placeable)
             {
@@ -780,6 +782,9 @@ public static class FactsQueries
             }
         return wiring;
     }
+
+    // Unity compiles every script under a folder named Editor into the Editor only.
+    internal static bool IsEditorFile(string at) => ("/" + at).Contains("/Editor/", StringComparison.Ordinal);
 
     // The non-abstract, non-generic classes a reflection site over this base type can create.
     internal static IEnumerable<FactsType> ReflectionCreated(FactsModel model, FactsType baseType)
@@ -818,7 +823,14 @@ public static class FactsQueries
             }
             if (type.Data.CreatedAt.Length > 0)
             {
-                item.Note = $"Created with new at {type.Data.CreatedAt}; assets cannot show that use.";
+                item.Note = type.Data.CreatedBy is "new" or ""
+                    ? $"Created with new at {type.Data.CreatedAt}; assets cannot show that use."
+                    : $"Created in code by {type.Data.CreatedBy} at {type.Data.CreatedAt}; assets cannot show that use.";
+                continue;
+            }
+            if (type.Data.TypeOfAt.Length > 0)
+            {
+                item.Note = $"Named by typeof at {type.Data.TypeOfAt}; reflection, a registry or an importer may create it where the facts cannot see, so its absence proves nothing.";
                 continue;
             }
             item.Status = "unwired";
@@ -1009,7 +1021,9 @@ public static class FactsQueries
                 if (wiring.Status == "test_only")
                     evidence["places"] = Array(wiring.Places.Select(place => place.File).Concat(wiring.SerializedIn).Distinct(StringComparer.Ordinal).Take(5).Select(path => (JsonNode?)path));
                 if (wiring.Status == "created_in_code")
-                    evidence["check"] = "The type is live but nothing places it in assets; check that the node describes it as created at run time.";
+                    evidence["check"] = wiring.Reason.StartsWith("created from Editor code", StringComparison.Ordinal)
+                        ? "Editor code (an importer or a tool) makes this type; check that the node describes it as made in the Editor, not placed or created at run time."
+                        : "The type is live but nothing places it in assets; check that the node describes it as created at run time.";
                 Add(kind, layer.Id, node, type.FullName, evidence);
             }
 

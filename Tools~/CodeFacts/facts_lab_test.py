@@ -51,7 +51,7 @@ evidence = answer({"action": "code_evidence"})
 assert evidence["reflection_sites"] == [{"base": "Lab.Core.ModuleBase", "at": "Assets/Lab/Core/ModuleLoader.cs:17", "matching_types": 2}], evidence
 
 game = answer({"action": "layer_facts", "target": "Game"})
-assert game["wiring"] == {"wired": 22, "test_only": 1, "base_only": 3, "created_in_code": 1, "created_by_reflection": 2, "unwired": 2, "not_tracked": 6}, game["wiring"]
+assert game["wiring"] == {"wired": 22, "test_only": 1, "base_only": 3, "created_in_code": 2, "created_by_reflection": 2, "unwired": 3, "not_tracked": 18}, game["wiring"]
 assert "**/* OLD.prefab" in game["wiring_test_places"], game["wiring_test_places"]
 
 # 1. The script asset is found from every part of a partial type, by a name that differs only in case, and as the only
@@ -85,6 +85,25 @@ value = wiring("ValueInstaller")
 assert value["status"] == "not_tracked" and "by value at Assets/Lab/Game/InstallerList.cs:9" in value["note"], value
 created = wiring("NewInstaller")
 assert created["status"] == "not_tracked" and "Created with new at Assets/Lab/Game/InstallerList.cs:41" in created["note"], created
+
+# 0.3.8: code that creates a type without "new X()" keeps it not_tracked: a generic method that creates its type argument
+# (directly, through another generic method, with the argument inferred, or called as an extension method), Activator
+# with typeof; a type named only by
+# typeof is undecidable. A type that code only reads stays unwired.
+for name, how, line in [("FactoryInstaller", "Create<T>", 29), ("ForwardedInstaller", "Ensure<T>", 30), ("InferredInstaller", "TryMake<T>", 31),
+                        ("TypeOfInstaller", "Activator.CreateInstance", 32), ("ExtensionInstaller", "Install<T>", 36)]:
+    made = wiring(name)
+    assert made["status"] == "not_tracked" and f"Created in code by {how} at Assets/Lab/Game/InstallerFactory.cs:{line}" in made["note"], made
+named = wiring("NamedInstaller")
+assert named["status"] == "not_tracked" and "Named by typeof at Assets/Lab/Game/InstallerFactory.cs:45" in named["note"], named
+read_only = wiring("ReadOnlyInstaller")
+assert read_only["status"] == "unwired" and read_only["siblings_in_assets"] == 2, read_only
+# A registry attribute repeated on one type (a serialization union) names types by typeof but creates none.
+assert "note" not in read_only and wiring("UnusedInstaller")["status"] == "unwired"
+
+# 0.3.8: a type that only Editor code creates is created_in_code with a reason that names the Editor.
+graph = wiring("GraphAsset")
+assert graph["status"] == "created_in_code" and graph["reason"] == "created from Editor code at Assets/Lab/Game/Editor/GraphImporter.cs:5 (an importer or a tool; the assets it makes are not scanned)", graph
 
 # 6. base_of has a total and pages.
 effect = wiring("Effect")
@@ -145,7 +164,7 @@ central = {item["type"] for item in audit["items"] if item["kind"] == "central_t
 assert central == {"Lab.Core.ModuleBase", "Lab.Core.ParameterBase", "Lab.Core.Parameter`1", "Lab.Core.Container", "Lab.Core.IInstaller"}, central
 assert items[("relationship_without_evidence", "node_hud")]["evidence"]["relationship"] == "rel_hud_loader"
 wrong = items[("relationship_on_wrong_types", "Lab/Game")]["evidence"]
-assert [item["relationship"] for item in wrong["relationships"]] == ["rel_ticker_loader"] and wrong["references"] == 27, wrong
+assert [item["relationship"] for item in wrong["relationships"]] == ["rel_ticker_loader"] and wrong["references"] == 49, wrong
 assert ("isolated_node", "node_note") in items and not any(key[1] == "node_mover" for key in items), items.keys()
 assert answer({"action": "facts_audit", "min_uses": 20})["by_kind"]["central_type_without_node"] == 4
 ui = answer({"action": "facts_audit", "target": "Ui"})
