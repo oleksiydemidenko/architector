@@ -238,11 +238,11 @@ public sealed class FactsExtractors
                 System.Array.Empty<string>(),
                 new[] { "SerializeField", "SerializeReference" }),
             ["zenject"] = (
-                new[] { "Bind", "BindInterfacesTo", "BindInterfacesAndSelfTo", "BindFactory", "Resolve", "TryResolve", "ResolveAll", "InstantiateComponent" },
+                new[] { "Bind", "BindInterfacesTo", "BindInterfacesAndSelfTo", "BindFactory", "Resolve", "TryResolve", "ResolveAll", "InstantiateComponent", "InstantiateComponentOnNewGameObject" },
                 new[] { "Inject", "InjectOptional", "InjectLocal" },
                 System.Array.Empty<string>()),
             ["vcontainer"] = (
-                new[] { "Register", "RegisterComponent", "RegisterComponentInHierarchy", "RegisterInstance", "RegisterEntryPoint", "Resolve" },
+                new[] { "Register", "RegisterComponent", "RegisterComponentInHierarchy", "RegisterComponentOnNewGameObject", "RegisterInstance", "RegisterEntryPoint", "Resolve" },
                 new[] { "Inject" },
                 System.Array.Empty<string>()),
             ["addressables"] = (

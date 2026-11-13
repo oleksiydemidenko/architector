@@ -14,7 +14,7 @@ namespace Architector.CodeFacts;
 // The index is saved under Library/Architector and reused while no C# file, csproj or code-facts.json changed.
 public sealed class CodeIndex
 {
-    private const int FormatVersion = 5;
+    private const int FormatVersion = 6;
 
     public string Signature { get; private set; } = string.Empty;
     public string ReferenceSet { get; private set; } = string.Empty;
@@ -304,7 +304,8 @@ public sealed class CodeIndex
         {
             IMethodSymbol { MethodKind: MethodKind.Constructor } method => ("constructor", ".ctor", Parameters(method.Parameters)),
             IMethodSymbol { MethodKind: MethodKind.UserDefinedOperator or MethodKind.Conversion } method => ("operator", method.MetadataName, Parameters(method.Parameters)),
-            IMethodSymbol method => ("method", method.Name, Parameters(method.Parameters)),
+            // A generic method carries its arity (GetAll`1), so plans can tell it from a plain overload (GetAll).
+            IMethodSymbol method => ("method", method.IsGenericMethod ? $"{method.Name}`{method.Arity}" : method.Name, Parameters(method.Parameters)),
             IPropertySymbol property => ("property", property.MetadataName, property.Parameters.Length > 0 ? Parameters(property.Parameters) : null),
             IEventSymbol eventSymbol => ("event", eventSymbol.Name, null),
             IFieldSymbol field => ("field", field.Name, null),

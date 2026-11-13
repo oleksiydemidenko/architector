@@ -1,4 +1,4 @@
-"""Checks the 0.3.7 and 0.3.8 code facts on FixtureLab: script assets resolved by file, managed references and prefab-variant
+"""Checks the 0.3.7 to 0.3.10 code facts on FixtureLab: script assets resolved by file, managed references and prefab-variant
 overrides, [SerializeReference]-only types, reflection creation, behaviour facts, the audit and facts snapshots.
 
 Usage: python facts_lab_test.py <server binary>
@@ -51,7 +51,7 @@ evidence = answer({"action": "code_evidence"})
 assert evidence["reflection_sites"] == [{"base": "Lab.Core.ModuleBase", "at": "Assets/Lab/Core/ModuleLoader.cs:17", "matching_types": 2}], evidence
 
 game = answer({"action": "layer_facts", "target": "Game"})
-assert game["wiring"] == {"wired": 23, "test_only": 1, "base_only": 3, "created_in_code": 3, "created_by_reflection": 2, "unwired": 7, "not_tracked": 41}, game["wiring"]
+assert game["wiring"] == {"wired": 23, "test_only": 1, "base_only": 3, "created_in_code": 4, "created_by_reflection": 2, "unwired": 7, "not_tracked": 45}, game["wiring"]
 assert "**/* OLD.prefab" in game["wiring_test_places"], game["wiring_test_places"]
 
 # 1. The script asset is found from every part of a partial type, by a name that differs only in case, and as the only
@@ -232,6 +232,18 @@ code, text = cli("facts", "diff", "before", "after")
 assert code == 0 and json.loads(text)["by_kind"] == diff["by_kind"], text
 code, text = cli("facts", "diff", "missing")
 assert code == 6 and json.loads(text)["snapshots"] == ["after", "before"], text
+
+# 0.3.10: a container call that adds a component on a new GameObject creates it (VContainer RegisterComponentOnNewGameObject).
+platform = wiring("PlatformService")
+assert platform["status"] == "created_in_code" and platform["reason"] == "created from code at Assets/Lab/Game/RegisteredCases.cs:15", platform
+# 0.3.10: member_ref gives a generic method its arity and keeps the in: prefix of an in parameter.
+catalog = {member[1]: member[3] for member in answer({"action": "layer_facts", "target": "Game", "type": "Catalog"})["members"]}
+refs = sorted((ref["name"], tuple(ref.get("parameters", []))) for ref in catalog.values())
+assert refs == [("Distance", ("in:Spot",)), ("GetAll", ()), ("GetAll`1", ())], refs
+# 0.3.10: a command-line value that starts with a bracket but is not JSON stays text.
+# Without an Editor the call stops at the bridge, after the value was parsed.
+code, text = cli("query", "lookup", "--reason", "[InitializeOnLoad] hook")
+assert code == 7 and json.loads(text)["code"] == "editor_unreachable", text
 
 process.stdin.close()
 assert process.wait(timeout=30) == 0

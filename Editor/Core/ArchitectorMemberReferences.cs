@@ -32,9 +32,33 @@ namespace Architector.Editor
             return SplitTopLevel(rest).Select(ShortName).ToArray();
         }
 
+        // The number of type parameters of a generic method (GetAll<T> -> 1), 0 for every other member.
+        public static int Arity(ArchitectorIndexedMember member)
+        {
+            var key = member?.SymbolKey ?? string.Empty;
+            var loose = member?.LooseKey ?? string.Empty;
+            if (member?.Kind is not ("method" or "operator") || !key.StartsWith(loose + "|", StringComparison.Ordinal))
+                return 0;
+            var rest = key.Substring(loose.Length + 1);
+            var bar = rest.IndexOf('|');
+            return int.TryParse(bar < 0 ? rest : rest.Substring(0, bar), out var arity) ? arity : 0;
+        }
+
+        // A planned name may carry the arity of a generic method as the code facts list it: "GetAll`1". Without it any
+        // arity matches.
+        public static (string Name, int Arity) SplitArity(string name)
+        {
+            var value = name?.Trim() ?? string.Empty;
+            var tick = value.LastIndexOf('`');
+            return tick > 0 && int.TryParse(value.Substring(tick + 1), out var arity) ? (value.Substring(0, tick), arity) : (value, -1);
+        }
+
         public static bool Matches(ArchitectorIndexedMember member, string kind, string name, IReadOnlyList<string> parameters)
         {
-            if (member == null || !string.Equals(Name(member), name?.Trim(), StringComparison.Ordinal))
+            var (plainName, arity) = SplitArity(name);
+            if (member == null || !string.Equals(Name(member), plainName, StringComparison.Ordinal))
+                return false;
+            if (arity >= 0 && Arity(member) != arity)
                 return false;
             if (!string.IsNullOrWhiteSpace(kind) && !string.Equals(member.Kind, kind.Trim(), StringComparison.OrdinalIgnoreCase))
                 return false;
@@ -42,11 +66,16 @@ namespace Architector.Editor
                 return true;
             var actual = Parameters(member);
             return actual.Count == parameters.Count
-                   && actual.Zip(parameters, (left, right) => string.Equals(left, right?.Trim(), StringComparison.OrdinalIgnoreCase)).All(same => same);
+                   && actual.Zip(parameters, (left, right) => string.Equals(ByRef(left), ByRef(right?.Trim()), StringComparison.OrdinalIgnoreCase)).All(same => same);
         }
 
+        // Reflection reports an in parameter as by-reference, so its key says "ref:"; the code facts say "in:". C# cannot
+        // overload on in, ref or out alone, so in and ref name the same parameter.
+        private static string ByRef(string parameter) =>
+            parameter != null && parameter.StartsWith("in:", StringComparison.Ordinal) ? "ref:" + parameter.Substring(3) : parameter;
+
         public static string Describe(ArchitectorIndexedMember member) =>
-            $"{{\"kind\": \"{member.Kind}\", \"name\": \"{Name(member)}\", \"parameters\": [{string.Join(", ", Parameters(member).Select(parameter => $"\"{parameter}\""))}]}} ({member.Declaration})";
+            $"{{\"kind\": \"{member.Kind}\", \"name\": \"{Name(member)}{(Arity(member) > 0 ? $"`{Arity(member)}" : string.Empty)}\", \"parameters\": [{string.Join(", ", Parameters(member).Select(parameter => $"\"{parameter}\""))}]}} ({member.Declaration})";
 
         // "System.Collections.Generic.List`1[System.Int32]" -> "List", "ref:Sample.Clock" -> "ref:Clock",
         // "System.Int32[]" -> "Int32[]", "!0" stays.

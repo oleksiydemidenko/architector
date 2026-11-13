@@ -4,7 +4,8 @@
         {
             "name": "Add",
             "access": "write"
-        }
+        },
+        "RegisterComponentOnNewGameObject"
     ],
     "memberCalls": [
         {

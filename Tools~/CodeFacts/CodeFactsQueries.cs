@@ -705,7 +705,10 @@ public static class FactsQueries
     }
 
     internal static readonly string[] WiringStatusNames = { "wired", "test_only", "base_only", "created_in_code", "created_by_reflection", "unwired", "not_tracked" };
-    private static readonly string[] CreatingCalls = { "AddComponent", "CreateInstance" };
+    // Calls that add a new component or asset of their type argument: Unity, VContainer (a component on a new GameObject)
+    // and Zenject (a component the container instantiates).
+    private static readonly string[] CreatingCalls =
+        { "AddComponent", "CreateInstance", "RegisterComponentOnNewGameObject", "InstantiateComponent", "InstantiateComponentOnNewGameObject" };
 
     // Every type gets a status. wired and test_only come from the assets. A type that is never placed itself but that
     // placed types inherit from (directly or further down) is base_only. A script type (MonoBehaviour, ScriptableObject)

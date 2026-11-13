@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.10
+
+Fixes found while building a 60-layer graph of a production project. The code index cache changes format and rebuilds by itself on the first call.
+
+- **`doctor` checks the Unity project files.** Without `Assembly-CSharp.csproj` the code facts cannot see engine and package base classes: MonoBehaviours with such a base stay `not_tracked` instead of `unwired`, and an attribute can resolve to a project type of the same name. The new `project_files` check says so and how to generate the files (they stay local). On the project above, generating them turned 145 dead types from `not_tracked` into `unwired` and removed a false layer pair.
+- **Components a container adds on a new GameObject are created in code.** VContainer `RegisterComponentOnNewGameObject<T>()` and Zenject `InstantiateComponent<T>()` / `InstantiateComponentOnNewGameObject<T>()` count like `AddComponent<T>()`, so such a type is `created_in_code` instead of `unwired`. The `vcontainer` and `zenject` presets list the calls.
+- **member_ref tells a generic method from a plain overload.** A generic method's name carries its arity (``GetAll`1``), so `GetAll()` and `GetAll<T>()` are no longer ambiguous in a plan. A plan name without the arity still matches any arity and, when a plain and a generic overload have the same parameters, names the plain one.
+- **`in` parameters match.** The code facts write `in:Type`; the Editor's member keys say `ref:` for them (reflection reports `in` as by-reference). Plans accept either.
+- **A wrong assembly in a typeKey is accepted when the name is unique.** The code facts do not know assemblies, so an agent may write `Assembly-CSharp:` for a type under an `Editor` folder. A plan now takes the type by its name when exactly one assembly has it, and otherwise lists the keys that have the name.
+- **Command-line values that only start with a bracket stay text.** `--reason "[InitializeOnLoad] hook"` no longer fails as broken JSON.
+
 ## 0.3.9
 
 - **Compiles on Unity 6000.5.** The main window compared the owner of a drag (Explorer entries and layer tabs) with `GetInstanceID()`, which Unity 6000.5 marks obsolete as an error (`CS0619`), so the package did not compile there. The drag payload now holds the window itself and the check compares references. No behaviour change on earlier versions.

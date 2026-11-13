@@ -845,6 +845,24 @@ namespace Architector.Editor
 
         // A linked node names its type by typeKey, or by typeNamespace and typeName (assemblyName is not needed when
         // the pair names one indexed type).
+        // A typeKey is "Assembly:Metadata.Name". The code facts do not know assemblies, so an agent may guess the wrong one
+        // (Assembly-CSharp for a type under an Editor folder); the type is then taken by its name when exactly one assembly
+        // has it.
+        private static ArchitectorIndexedType IndexedType(ArchitectorTypeIndex typeIndex, string typeKey, string label)
+        {
+            var exact = typeIndex?.Types.SingleOrDefault(type => string.Equals(type.Key, typeKey, StringComparison.Ordinal));
+            if (exact != null)
+                return exact;
+            var colon = typeKey?.IndexOf(':') ?? -1;
+            var metadataName = colon >= 0 ? typeKey.Substring(colon + 1) : typeKey ?? string.Empty;
+            var byName = typeIndex?.Types.Where(type => string.Equals(type.MetadataName, metadataName, StringComparison.Ordinal)).Take(6).ToArray()
+                         ?? Array.Empty<ArchitectorIndexedType>();
+            if (byName.Length == 1)
+                return byName[0];
+            throw new ArchitectorDataException($"Indexed type '{typeKey}' {label}was not found."
+                                               + (byName.Length > 1 ? $" Types with that name: {string.Join(", ", byName.Select(type => type.Key))}." : string.Empty));
+        }
+
         private static string PlannedTypeKey(string typeKey, string typeNamespace, string typeName, string title, ArchitectorTypeIndex typeIndex)
         {
             if (!string.IsNullOrWhiteSpace(typeKey))
@@ -910,8 +928,7 @@ namespace Architector.Editor
             if (typeIndex == null)
                 throw new ArchitectorDataException("Linked semantic-plan nodes require the local C# type index.");
             var typeKey = PlannedTypeKey(item.typeKey, item.typeNamespace, item.typeName, title, typeIndex);
-            var indexedType = typeIndex.Types.SingleOrDefault(type => string.Equals(type.Key, typeKey, StringComparison.Ordinal))
-                              ?? throw new ArchitectorDataException($"Indexed type '{typeKey}' (typeKey) was not found.");
+            var indexedType = IndexedType(typeIndex, typeKey, "(typeKey) ");
             EnsureLinkedTypeIsUnique(layer, indexedType, null);
             var result = CreateLinkedNodeRecord(nodeId, title, indexedType);
             ApplyPlannedTypeFacts(result.type, item.baseType, item.interfaces, typeIndex, true);
@@ -949,6 +966,10 @@ namespace Architector.Editor
             // kind defaults to "method", so a name given without a kind also finds a property, field or event.
             if (matches.Length == 0)
                 matches = available.Values.Where(member => ArchitectorMemberReferences.Matches(member, null, planned.name, planned.parameters)).ToArray();
+            // A name without an arity (GetAll) names the plain method when a generic overload (GetAll`1) has the same parameters.
+            if (matches.Length > 1 && ArchitectorMemberReferences.SplitArity(planned.name).Arity < 0
+                && matches.Where(member => ArchitectorMemberReferences.Arity(member) == 0).ToArray() is { Length: 1 } plain)
+                matches = plain;
             if (matches.Length == 1)
                 return matches[0];
             var named = available.Values.Where(member => ArchitectorMemberReferences.Matches(member, null, planned.name, null)).Take(8).ToArray();
@@ -1146,8 +1167,7 @@ namespace Architector.Editor
         {
             if (!string.IsNullOrWhiteSpace(reference?.typeKey))
             {
-                var indexed = typeIndex?.Types.SingleOrDefault(type => string.Equals(type.Key, reference.typeKey, StringComparison.Ordinal))
-                              ?? throw new ArchitectorDataException($"Indexed type '{reference.typeKey}' was not found.");
+                var indexed = IndexedType(typeIndex, reference.typeKey, string.Empty);
                 return new ArchitectorTypeReferenceRecord
                 {
                     mode = "linked",

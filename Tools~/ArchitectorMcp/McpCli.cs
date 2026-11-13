@@ -265,6 +265,14 @@ public static partial class McpServer
                         "stale" => "Saved but the code changed; the next code facts call analyses again.",
                         _ => "Not built yet; the first code facts call analyses Assets (seconds to a minute)."
                     }, false);
+                // Without the project files the code facts see no engine or package base class: MonoBehaviours with such a
+                // base stay not_tracked instead of unwired, and attributes resolve by name only.
+                var projectFiles = File.Exists(Path.Combine(root, "Assembly-CSharp.csproj"));
+                Check("project_files", scoped == 0 || projectFiles,
+                    projectFiles
+                        ? "Assembly-CSharp.csproj found; code facts see engine and package base classes."
+                        : "No Assembly-CSharp.csproj: code facts cannot see engine and package base classes, so dead MonoBehaviours stay not_tracked and some references are missed. Generate the project files once (Unity: Preferences > External Tools > Regenerate project files, or Assets > Open C# Project with an IDE selected); they stay local and out of version control.",
+                    false);
             }
             Check("editor", EditorReachable(), EditorReachable() ? "Reachable; query and edit work." : "Not reachable: open the project in Unity for query and edit. facts, status and doctor work without it.", false);
             var package = FindPackage(root);
@@ -443,9 +451,20 @@ public static partial class McpServer
             return number;
         if (bool.TryParse(value, out var flag))
             return flag;
+        // A value that looks like JSON is parsed as JSON; text that only starts with a bracket ("[InitializeOnLoad] hook")
+        // stays text.
         var trimmed = value.TrimStart();
         if (trimmed.StartsWith('{') || trimmed.StartsWith('['))
-            return JsonNode.Parse(value);
+        {
+            try
+            {
+                return JsonNode.Parse(value);
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return value;
+            }
+        }
         return value;
     }
 

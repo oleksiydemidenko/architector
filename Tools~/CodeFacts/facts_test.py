@@ -167,6 +167,9 @@ code, text = cli("skill", "install", "claude")
 assert code == 4 and json.loads(text)["code"] == "package_not_found", text
 code, text = cli("doctor")
 assert code == 0 and any(item["check"] == "code_index" for item in json.loads(text)["checks"]), text
+# The fixture has no Unity project files: doctor says so without failing.
+files_check = next(item for item in json.loads(text)["checks"] if item["check"] == "project_files")
+assert not files_check["ok"] and "Assembly-CSharp.csproj" in files_check["detail"], files_check
 help_text = subprocess.run([server, "help", "facts"], capture_output=True, text=True, encoding="utf-8").stdout
 assert "facts what-if" in help_text and "Exit codes" in help_text, help_text
 
