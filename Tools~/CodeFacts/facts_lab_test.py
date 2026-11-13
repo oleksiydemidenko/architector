@@ -51,7 +51,7 @@ evidence = answer({"action": "code_evidence"})
 assert evidence["reflection_sites"] == [{"base": "Lab.Core.ModuleBase", "at": "Assets/Lab/Core/ModuleLoader.cs:17", "matching_types": 2}], evidence
 
 game = answer({"action": "layer_facts", "target": "Game"})
-assert game["wiring"] == {"wired": 22, "test_only": 1, "base_only": 3, "created_in_code": 2, "created_by_reflection": 2, "unwired": 3, "not_tracked": 18}, game["wiring"]
+assert game["wiring"] == {"wired": 23, "test_only": 1, "base_only": 3, "created_in_code": 2, "created_by_reflection": 2, "unwired": 6, "not_tracked": 24}, game["wiring"]
 assert "**/* OLD.prefab" in game["wiring_test_places"], game["wiring_test_places"]
 
 # 1. The script asset is found from every part of a partial type, by a name that differs only in case, and as the only
@@ -73,13 +73,16 @@ assert generic["status"] == "base_only" and generic["base_of"] == ["Lab.Game.Tur
 # 3 and 5. Managed references, also those a variant adds by override, are placements with their objects.
 audio = wiring("AudioInstaller")
 assert audio["status"] == "wired" and places(audio) == [("Assets/Lab/Prefabs/Hero Variant.prefab", "Hero Variant", "variant_override")], audio
+# 0.3.8: Unity quotes a property path with brackets and a value with a colon; the target line may wrap.
+quoted = wiring("QuotedInstaller")
+assert quoted["status"] == "wired" and places(quoted) == [("Assets/Lab/Prefabs/Hero Quoted Variant.prefab", "Hero: Quoted", "variant_override")], quoted
 inputs = wiring("InputInstaller")
 assert inputs["status"] == "wired" and places(inputs) == [("Assets/Lab/Prefabs/Hero.prefab", "Hero", "managed_reference")], inputs
 
 # 4. A type only [SerializeReference] can store is unwired when no asset stores it; by-value storage or "new" keep it
 # not_tracked and the note says why.
 unused = wiring("UnusedInstaller")
-assert unused["status"] == "unwired" and unused["unused"] and unused["siblings_in_assets"] == 2, unused
+assert unused["status"] == "unwired" and unused["unused"] and unused["siblings_in_assets"] == 3, unused
 assert unused["reason"] == "stored only through [SerializeReference] fields (InstallerList.installers: IInstaller); no asset stores it", unused
 value = wiring("ValueInstaller")
 assert value["status"] == "not_tracked" and "by value at Assets/Lab/Game/InstallerList.cs:9" in value["note"], value
@@ -88,16 +91,21 @@ assert created["status"] == "not_tracked" and "Created with new at Assets/Lab/Ga
 
 # 0.3.8: code that creates a type without "new X()" keeps it not_tracked: a generic method that creates its type argument
 # (directly, through another generic method, with the argument inferred, or called as an extension method), Activator
-# with typeof; a type named only by
+# with typeof, and a generic type that creates its argument (new G<X>() or a base type G<X>); a type named only by
 # typeof is undecidable. A type that code only reads stays unwired.
 for name, how, line in [("FactoryInstaller", "Create<T>", 29), ("ForwardedInstaller", "Ensure<T>", 30), ("InferredInstaller", "TryMake<T>", 31),
                         ("TypeOfInstaller", "Activator.CreateInstance", 32), ("ExtensionInstaller", "Install<T>", 36)]:
     made = wiring(name)
     assert made["status"] == "not_tracked" and f"Created in code by {how} at Assets/Lab/Game/InstallerFactory.cs:{line}" in made["note"], made
+for name, line in [("PooledInstaller", 14), ("InheritedInstaller", 17)]:
+    pooled = wiring(name)
+    assert pooled["status"] == "not_tracked" and f"Created in code by InstallerPool<T> at Assets/Lab/Game/InstallerPools.cs:{line}" in pooled["note"], pooled
+self_made = wiring("SelfInstaller")
+assert self_made["status"] == "unwired" and "note" not in self_made, self_made
 named = wiring("NamedInstaller")
 assert named["status"] == "not_tracked" and "Named by typeof at Assets/Lab/Game/InstallerFactory.cs:45" in named["note"], named
 read_only = wiring("ReadOnlyInstaller")
-assert read_only["status"] == "unwired" and read_only["siblings_in_assets"] == 2, read_only
+assert read_only["status"] == "unwired" and read_only["siblings_in_assets"] == 3, read_only
 # A registry attribute repeated on one type (a serialization union) names types by typeof but creates none.
 assert "note" not in read_only and wiring("UnusedInstaller")["status"] == "unwired"
 
@@ -143,11 +151,17 @@ assert "recurring_note" in poller and "loops" not in poller, poller
 # 11. Callbacks of a project base class pair with the type's own.
 listener = behaviour("ScoreListener")
 assert "unpaired" not in listener and listener["inherited_lifecycle"] == [["OnDisable", "Lab.Game.Listener", "Assets/Lab/Game/Listener.cs:6"]], listener
+# 0.3.8: unpaired_subscriptions keeps only an unpaired OnEnable that subscribes.
+reset = behaviour("ResetOnEnable")
+assert reset["unpaired"] == ["OnEnable without OnDisable"] and "unpaired_subscriptions" not in reset, reset
+leaky = behaviour("LeakyListener")
+assert leaky["unpaired_subscriptions"] == [["OnEnable", "Assets/Lab/Game/EnableOnly.cs:23"]], leaky
 
 # 12 and 13. Unity's full metadataName links nodes; facts dump keeps the full type name.
 candidates = {item["type"]: item for item in game["node_candidates"]}
 assert candidates["Lab.Game.OldOnly"]["node"] == "node_old" and candidates["Lab.Game.OldOnly"]["node_title"] == "Old Only", candidates["Lab.Game.OldOnly"]
-assert next(item for item in game["type_list"] if item["type"] == "Lab.Game.Ticker")["nodes"] == ["node_ticker"], game
+game_types = answer({"action": "layer_facts", "target": "Game", "limit": 500})["type_list"]
+assert next(item for item in game_types if item["type"] == "Lab.Game.Ticker")["nodes"] == ["node_ticker"], game_types
 dump = answer({"action": "layer_dump", "target": "Game"})
 assert {item["node"]: item["type"] for item in dump["items"] if "node" in item}["node_ticker"] == "Lab.Game.Ticker", dump
 
@@ -164,9 +178,9 @@ central = {item["type"] for item in audit["items"] if item["kind"] == "central_t
 assert central == {"Lab.Core.ModuleBase", "Lab.Core.ParameterBase", "Lab.Core.Parameter`1", "Lab.Core.Container", "Lab.Core.IInstaller"}, central
 assert items[("relationship_without_evidence", "node_hud")]["evidence"]["relationship"] == "rel_hud_loader"
 wrong = items[("relationship_on_wrong_types", "Lab/Game")]["evidence"]
-assert [item["relationship"] for item in wrong["relationships"]] == ["rel_ticker_loader"] and wrong["references"] == 49, wrong
+assert [item["relationship"] for item in wrong["relationships"]] == ["rel_ticker_loader"] and wrong["references"] == 58, wrong
 assert ("isolated_node", "node_note") in items and not any(key[1] == "node_mover" for key in items), items.keys()
-assert answer({"action": "facts_audit", "min_uses": 20})["by_kind"]["central_type_without_node"] == 4
+assert answer({"action": "facts_audit", "min_uses": 20})["by_kind"]["central_type_without_node"] == 5
 ui = answer({"action": "facts_audit", "target": "Ui"})
 assert ui["layer"] == "Lab/Ui" and ui["by_kind"] == {"isolated_node": 1, "relationship_without_evidence": 1}, ui
 

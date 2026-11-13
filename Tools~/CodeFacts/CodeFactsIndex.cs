@@ -449,67 +449,95 @@ public sealed class CodeIndex
     private static bool IsActivator(IMethodSymbol method) =>
         method.Name == "CreateInstance" && method.ContainingType is { Name: "Activator", ContainingNamespace.Name: "System" };
 
-    // A generic method creates its type argument when its body has new T() or Activator.CreateInstance<T>(), or passes T
-    // on to a method that creates it; a method without a body creates T when T has the new() constraint. A call of such a
-    // method with a project type there (written or inferred) creates that type, which no asset can show.
+    // A generic method or type creates its type argument when its code has new T() or Activator.CreateInstance<T>(), or
+    // passes T on to a method or type that creates it (a call, new G<T>(), a base type G<T>); a method without a body
+    // creates T when T has the new() constraint. A use with a project type there (a call, written or inferred, new G<X>()
+    // or a base type G<X>) creates that type, which no asset can show; a use inside the type's own declaration does not.
     private static void GenericCreations(CSharpCompilation compilation, SyntaxTree[] trees, Func<INamedTypeSymbol, IndexType> typeOf)
     {
-        var creates = new Dictionary<IMethodSymbol, HashSet<int>>(SymbolEqualityComparer.Default);
-        var forwards = new List<(IMethodSymbol From, int FromOrdinal, IMethodSymbol To, int ToOrdinal)>();
+        var comparer = SymbolEqualityComparer.Default;
+        var creates = new Dictionary<ISymbol, HashSet<int>>(comparer);
+        var forwards = new List<(ISymbol From, int FromOrdinal, ISymbol To, int ToOrdinal)>();
         var models = new Dictionary<SyntaxTree, SemanticModel>();
         SemanticModel Model(SyntaxTree tree) => models.TryGetValue(tree, out var model) ? model : models[tree] = compilation.GetSemanticModel(tree);
-        bool AddCreated(IMethodSymbol method, int ordinal)
+        bool AddCreated(ISymbol owner, int ordinal)
         {
-            if (!creates.TryGetValue(method, out var ordinals))
-                creates[method] = ordinals = new HashSet<int>();
+            if (!creates.TryGetValue(owner, out var ordinals))
+                creates[owner] = ordinals = new HashSet<int>();
             return ordinals.Add(ordinal);
         }
+        static bool InSource(ISymbol symbol) => symbol.Locations.Any(location => location.IsInSource);
+        static (ISymbol? Owner, int Ordinal) ParameterOf(ITypeSymbol? candidate) => candidate switch
+        {
+            ITypeParameterSymbol { TypeParameterKind: TypeParameterKind.Method, DeclaringMethod: { } method } parameter => (method.OriginalDefinition, parameter.Ordinal),
+            ITypeParameterSymbol { TypeParameterKind: TypeParameterKind.Type, DeclaringType: { } type } parameter => (type.OriginalDefinition, parameter.Ordinal),
+            _ => (null, -1)
+        };
+        void Forward(ITypeSymbol argument, ISymbol to, int toOrdinal)
+        {
+            var (owner, ordinal) = ParameterOf(argument);
+            if (owner != null)
+                forwards.Add((owner, ordinal, to, toOrdinal));
+        }
+        void ForwardConstructed(INamedTypeSymbol? constructed)
+        {
+            if (constructed is not { IsGenericType: true } || !InSource(constructed.OriginalDefinition))
+                return;
+            for (var index = 0; index < constructed.TypeArguments.Length; index++)
+                Forward(constructed.TypeArguments[index], constructed.OriginalDefinition, index);
+        }
+
+        // Code inside generic methods and generic types: what each creates and what it passes on.
         foreach (var tree in trees)
-            foreach (var declaration in tree.GetRoot().DescendantNodes()
-                         .Where(node => node is MethodDeclarationSyntax { TypeParameterList: not null } or LocalFunctionStatementSyntax { TypeParameterList: not null }))
+        {
+            var root = tree.GetRoot();
+            var scopes = root.DescendantNodes()
+                .Where(node => node is TypeDeclarationSyntax { TypeParameterList: not null }
+                               || node is MethodDeclarationSyntax { TypeParameterList: not null } or LocalFunctionStatementSyntax { TypeParameterList: not null })
+                .Where(node => !node.Ancestors().Any(ancestor => ancestor is TypeDeclarationSyntax { TypeParameterList: not null }))
+                .ToArray();
+            if (scopes.Length == 0)
+                continue;
+            var semantic = Model(tree);
+            foreach (var scope in scopes)
             {
-                var semantic = Model(tree);
-                if (semantic.GetDeclaredSymbol(declaration) is not IMethodSymbol { IsGenericMethod: true } declared)
-                    continue;
-                var method = declared.OriginalDefinition;
-                int Ordinal(ITypeSymbol? candidate) =>
-                    candidate is ITypeParameterSymbol { TypeParameterKind: TypeParameterKind.Method } parameter
-                    && SymbolEqualityComparer.Default.Equals(parameter.DeclaringMethod?.OriginalDefinition, method)
-                        ? parameter.Ordinal
-                        : -1;
-                SyntaxNode? body = declaration switch
-                {
-                    MethodDeclarationSyntax syntax => (SyntaxNode?)syntax.Body ?? syntax.ExpressionBody,
-                    LocalFunctionStatementSyntax syntax => (SyntaxNode?)syntax.Body ?? syntax.ExpressionBody,
-                    _ => null
-                };
-                if (body == null)
-                {
-                    foreach (var parameter in method.TypeParameters.Where(parameter => parameter.HasConstructorConstraint))
-                        AddCreated(method, parameter.Ordinal);
-                    continue;
-                }
-                foreach (var node in body.DescendantNodes())
-                {
-                    if (node is BaseObjectCreationExpressionSyntax)
+                if (scope is MethodDeclarationSyntax { Body: null, ExpressionBody: null } bodiless
+                    && semantic.GetDeclaredSymbol(bodiless) is IMethodSymbol abstractMethod)
+                    foreach (var parameter in abstractMethod.TypeParameters.Where(parameter => parameter.HasConstructorConstraint))
+                        AddCreated(abstractMethod.OriginalDefinition, parameter.Ordinal);
+                foreach (var node in scope.DescendantNodesAndSelf())
+                    switch (node)
                     {
-                        var created = Ordinal(semantic.GetTypeInfo(node).Type);
-                        if (created >= 0)
-                            AddCreated(method, created);
+                        case MethodDeclarationSyntax { TypeParameterList: not null, Body: null, ExpressionBody: null } nested when !ReferenceEquals(nested, scope)
+                                                                                                                                  && semantic.GetDeclaredSymbol(nested) is IMethodSymbol nestedMethod:
+                            foreach (var parameter in nestedMethod.TypeParameters.Where(parameter => parameter.HasConstructorConstraint))
+                                AddCreated(nestedMethod.OriginalDefinition, parameter.Ordinal);
+                            break;
+                        case BaseObjectCreationExpressionSyntax creation:
+                            var createdType = semantic.GetTypeInfo(creation).Type;
+                            if (ParameterOf(createdType) is ({ } owner, var ordinal))
+                                AddCreated(owner, ordinal);
+                            else
+                                ForwardConstructed(createdType as INamedTypeSymbol);
+                            break;
+                        case InvocationExpressionSyntax call when Called(semantic, call) is { } callee:
+                            for (var index = 0; index < callee.TypeArguments.Length; index++)
+                            {
+                                if (IsActivator(callee))
+                                {
+                                    if (ParameterOf(callee.TypeArguments[index]) is ({ } activated, var activatedOrdinal))
+                                        AddCreated(activated, activatedOrdinal);
+                                }
+                                else if (InSource(callee.OriginalDefinition))
+                                    Forward(callee.TypeArguments[index], callee.OriginalDefinition, index);
+                            }
+                            break;
+                        case TypeDeclarationSyntax { BaseList: not null } declaration when semantic.GetDeclaredSymbol(declaration) is { } declared:
+                            ForwardConstructed(declared.BaseType);
+                            break;
                     }
-                    else if (node is InvocationExpressionSyntax call && Called(semantic, call) is { } callee)
-                        for (var index = 0; index < callee.TypeArguments.Length; index++)
-                        {
-                            var ordinal = Ordinal(callee.TypeArguments[index]);
-                            if (ordinal < 0)
-                                continue;
-                            if (IsActivator(callee))
-                                AddCreated(method, ordinal);
-                            else if (callee.OriginalDefinition.Locations.Any(location => location.IsInSource))
-                                forwards.Add((method, ordinal, callee.OriginalDefinition, index));
-                        }
-                }
             }
+        }
         for (var changed = true; changed;)
         {
             changed = false;
@@ -519,23 +547,59 @@ public sealed class CodeIndex
         }
         if (creates.Count == 0)
             return;
-        var names = creates.Keys.Select(method => method.Name).ToHashSet(StringComparer.Ordinal);
-        foreach (var tree in trees)
-            foreach (var call in tree.GetRoot().DescendantNodes().OfType<InvocationExpressionSyntax>().Where(call => names.Contains(CallName(call))))
+
+        // Uses with project types: calls of creating methods, new G<X>() and base types G<X> of creating types.
+        void Created(ISymbol creator, IReadOnlyList<ITypeSymbol> arguments, SyntaxTree tree, SyntaxNode at)
+        {
+            if (!creates.TryGetValue(creator, out var ordinals))
+                return;
+            foreach (var ordinal in ordinals.OrderBy(ordinal => ordinal))
             {
-                if (Called(Model(tree), call) is not { } callee || !creates.TryGetValue(callee.OriginalDefinition, out var ordinals))
+                if (ordinal >= arguments.Count || arguments[ordinal] is not INamedTypeSymbol named || !InSource(named))
                     continue;
-                foreach (var ordinal in ordinals.OrderBy(ordinal => ordinal))
+                // A type that passes itself (a base type G<Self>, a registration in its own static constructor) creates
+                // itself only once an instance exists, so that use makes nothing live.
+                var outermost = Outermost(named.OriginalDefinition);
+                if (outermost.DeclaringSyntaxReferences.Any(reference => reference.SyntaxTree == tree && reference.Span.Contains(at.Span)))
+                    continue;
+                var created = typeOf(outermost);
+                if (created.CreatedAt.Length > 0)
+                    continue;
+                created.CreatedAt = $"{tree.FilePath}:{at.GetLocation().GetLineSpan().StartLinePosition.Line + 1}";
+                created.CreatedBy = creator switch
                 {
-                    if (callee.TypeArguments[ordinal] is not INamedTypeSymbol named || !named.Locations.Any(location => location.IsInSource))
-                        continue;
-                    var created = typeOf(Outermost(named.OriginalDefinition));
-                    if (created.CreatedAt.Length > 0)
-                        continue;
-                    created.CreatedAt = $"{tree.FilePath}:{call.GetLocation().GetLineSpan().StartLinePosition.Line + 1}";
-                    created.CreatedBy = $"{callee.Name}<{string.Join(", ", callee.OriginalDefinition.TypeParameters.Select(parameter => parameter.Name))}>";
-                }
+                    IMethodSymbol method => $"{method.Name}<{string.Join(", ", method.TypeParameters.Select(parameter => parameter.Name))}>",
+                    INamedTypeSymbol type => $"{type.Name}<{string.Join(", ", type.TypeParameters.Select(parameter => parameter.Name))}>",
+                    _ => creator.Name
+                };
             }
+        }
+        var names = creates.Keys.Select(symbol => symbol.Name).ToHashSet(StringComparer.Ordinal);
+        static string Simple(TypeSyntax? syntax) => syntax switch
+        {
+            GenericNameSyntax generic => generic.Identifier.ValueText,
+            QualifiedNameSyntax qualified => Simple(qualified.Right),
+            AliasQualifiedNameSyntax alias => Simple(alias.Name),
+            _ => string.Empty
+        };
+        foreach (var tree in trees)
+            foreach (var node in tree.GetRoot().DescendantNodes())
+                switch (node)
+                {
+                    case InvocationExpressionSyntax call when names.Contains(CallName(call)):
+                        if (Called(Model(tree), call) is { } callee)
+                            Created(callee.OriginalDefinition, callee.TypeArguments, tree, call);
+                        break;
+                    case ObjectCreationExpressionSyntax creation when names.Contains(Simple(creation.Type)):
+                        if (Model(tree).GetTypeInfo(creation).Type is INamedTypeSymbol { IsGenericType: true } constructed)
+                            Created(constructed.OriginalDefinition, constructed.TypeArguments, tree, creation);
+                        break;
+                    case TypeDeclarationSyntax { BaseList: not null } declaration
+                        when declaration.BaseList.Types.Any(baseType => names.Contains(Simple(baseType.Type))):
+                        if (Model(tree).GetDeclaredSymbol(declaration) is { BaseType: { IsGenericType: true } baseType })
+                            Created(baseType.OriginalDefinition, baseType.TypeArguments, tree, declaration);
+                        break;
+                }
     }
 
     internal static string CallName(InvocationExpressionSyntax call) => call.Expression switch
@@ -929,7 +993,23 @@ public sealed class CodeIndex
             foreach (var method in declaration.DescendantNodes().OfType<MethodDeclarationSyntax>()
                          .Where(method => method.Parent == declaration && method.ParameterList.Parameters.Count == 0)
                          .Where(method => LifecycleMethods.Contains(method.Identifier.ValueText)))
+            {
                 type.AddBehaviour("lifecycle", method.Identifier.ValueText, At(method.Identifier.Parent!));
+                // An OnEnable that subscribes itself, so an unpaired one can be told from one that only resets state.
+                if (method.Identifier.ValueText == "OnEnable"
+                    && method.DescendantNodes().OfType<AssignmentExpressionSyntax>().FirstOrDefault(assignment =>
+                            assignment.IsKind(SyntaxKind.AddAssignmentExpression)
+                            && semantic.GetSymbolInfo(assignment.Left).Symbol is { } symbol
+                            && (symbol is IEventSymbol || symbol switch
+                            {
+                                IFieldSymbol field => field.Type,
+                                IPropertySymbol property => property.Type,
+                                ILocalSymbol local => local.Type,
+                                IParameterSymbol parameter => parameter.Type,
+                                _ => null
+                            } is { TypeKind: TypeKind.Delegate })) is { } subscription)
+                    type.AddBehaviour("lifecycle_subscriptions", method.Identifier.ValueText, At(subscription));
+            }
         }
 
         // An assignment whose receiver chain starts at a local or a by-value parameter of a value type changes a copy,

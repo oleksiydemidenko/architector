@@ -2,11 +2,14 @@
 
 ## 0.3.8
 
-Wiring facts no longer call code-created `[SerializeReference]` types unused. 0.3.7 made a `[Serializable]` class that only `[SerializeReference]` fields can store `unwired` when no asset stored it and no `new` of it existed; types that code creates in other ways became false dead-code candidates. The code index cache changes format and rebuilds by itself on the first call.
+Wiring facts no longer call code-created `[SerializeReference]` types unused. 0.3.7 made a `[Serializable]` class that only `[SerializeReference]` fields can store `unwired` when no asset stored it and no `new` of it existed; types that code creates in other ways became false dead-code candidates, and placements that prefab variants add with a quoted property path were missed. Both caches (`code-index-*.bin` and `wiring-index.json`) change format and rebuild by themselves on the first call.
 
 - **Generic creating calls.** A generic method creates its type argument when its body has `new T()` or `Activator.CreateInstance<T>()`, or passes `T` on to a method that does; a method without a body counts when `T` has the `new()` constraint. A call of such a method with a project type there, written or inferred, and also when called as an extension method, keeps that type `not_tracked`. `note` names the call: `Created in code by GetOrCreate<T> at <file:line>`.
+- **Generic types that create their type argument.** `new Pool<X>()` and a base type `Pool<X>` create `X` when `Pool<T>` creates `T` (`new T()`, `Activator.CreateInstance<T>()`, or passing `T` on). A type that passes itself (a base type `Base<Self>`, a registration in its own static constructor) creates itself only once an instance exists, so that use does not count.
 - **`Activator.CreateInstance(typeof(X))`** and `Activator.CreateInstance<X>()` count as creating `X`.
 - **Types named by `typeof`** stay `not_tracked` with `note` "Named by typeof at <file:line>": an attribute or a reflection call may create them where the facts cannot see. A registry attribute repeated on one declaration (a serialization union, known types) lists types and creates none, so it does not count.
+- **Quoted property paths in prefab-variant overrides.** Unity writes `propertyPath: 'managedReferences[<rid>]'` in quotes (and wraps the `target:` line); 0.3.7 read only the unquoted form, so types that live variants add by override stayed `unwired` or `not_tracked`. Quoted values (`value: 'Name: x'`) are read too.
+- **`unpaired_subscriptions`.** `unpaired` is by callback name. The new list keeps only an unpaired `OnEnable` that subscribes (`+=`), with the file:line of the subscription: the case that can leak a handler. An `OnEnable` that only resets state, or an `OnDisable` that removes handlers added elsewhere, is no longer a subscription finding.
 - **Types only Editor code creates.** `created_in_code` from a file under an `Editor` folder has the reason `created from Editor code at <file:line> (an importer or a tool; the assets it makes are not scanned)`, and the audit asks to check that the node describes it as made in the Editor.
 
 ## 0.3.7

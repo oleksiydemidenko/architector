@@ -12,7 +12,7 @@ namespace Architector.CodeFacts;
 // Library/Architector/wiring-index.json and read again only when its size or time changes.
 public sealed class AssetWiring
 {
-    private const int FormatVersion = 3;
+    private const int FormatVersion = 4;
     private static readonly Regex Header = new(@"^--- !u!(\d+) &(-?\d+)", RegexOptions.Compiled);
     private static readonly Regex ScriptReference = new(@"m_Script: \{fileID: -?\d+, guid: ([0-9a-f]{32})", RegexOptions.Compiled);
     private static readonly Regex GameObjectReference = new(@"^  m_GameObject: \{fileID: (-?\d+)\}", RegexOptions.Compiled);
@@ -25,6 +25,18 @@ public sealed class AssetWiring
     private static readonly Regex TypeSpace = new(@"(?:^|[{,\s])ns:\s*([\w.]*)", RegexOptions.Compiled);
     private static readonly Regex MetaGuid = new(@"^guid: ([0-9a-f]{32})", RegexOptions.Compiled | RegexOptions.Multiline);
     private static readonly Regex ModificationTarget = new(@"^\s*- target: \{fileID: (-?\d+)", RegexOptions.Compiled);
+    // A plain scalar as written, or the text of a quoted one: Unity quotes property paths with brackets and values with
+    // colons ('managedReferences[1]', 'Name: x'); a doubled quote inside single quotes is one quote.
+    internal static string YamlScalar(string raw)
+    {
+        var value = raw.Trim();
+        if (value.Length >= 2 && value[0] == '\'' && value[^1] == '\'')
+            return value[1..^1].Replace("''", "'");
+        if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
+            return value[1..^1].Replace("\\\"", "\"");
+        return value;
+    }
+
     private static readonly Regex PropertyPath = new(@"^\s*propertyPath: (.*)$", RegexOptions.Compiled);
     private static readonly Regex ModificationValue = new(@"^\s*value: (.*)$", RegexOptions.Compiled);
     private static readonly string[] AssetPatterns = { "*.prefab", "*.unity", "*.asset" };
@@ -339,13 +351,13 @@ public sealed class AssetWiring
                 var propertyPath = PropertyPath.Match(line);
                 if (propertyPath.Success)
                 {
-                    modificationPath = propertyPath.Groups[1].Value.Trim();
+                    modificationPath = YamlScalar(propertyPath.Groups[1].Value);
                     continue;
                 }
                 var modification = ModificationValue.Match(line);
                 if (modification.Success && modificationTarget != null)
                 {
-                    var value = modification.Groups[1].Value.Trim();
+                    var value = YamlScalar(modification.Groups[1].Value);
                     if (modificationPath == "m_Name")
                         modificationNames[modificationTarget] = value;
                     else if (modificationPath.StartsWith("managedReferences[", StringComparison.Ordinal))

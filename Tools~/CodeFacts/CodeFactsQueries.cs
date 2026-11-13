@@ -1164,6 +1164,16 @@ public static class FactsQueries
                 .ToArray();
             if (unpaired.Length > 0)
                 entry["unpaired"] = Array(unpaired);
+            // An unpaired OnEnable that subscribes itself: the one that can leak a handler.
+            if (type.Behaviour.TryGetValue("lifecycle_subscriptions", out var subscriptions))
+            {
+                var leaking = subscriptions
+                    .Where(item => item.Value == "OnEnable" && !all.Contains("OnDisable"))
+                    .Select(item => (JsonNode?)new JsonArray(item.Value, item.At))
+                    .ToArray();
+                if (leaking.Length > 0)
+                    entry["unpaired_subscriptions"] = Array(leaking);
+            }
             var pairs = inherited.Where(item => (item.Name == "OnDisable" && names.Contains("OnEnable")) || (item.Name == "OnEnable" && names.Contains("OnDisable"))).ToArray();
             if (pairs.Length > 0)
                 entry["inherited_lifecycle"] = Array(pairs.Select(item => (JsonNode?)new JsonArray(item.Name, item.Base, item.At)));
