@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.9
+
+- **Compiles on Unity 6000.5.** The main window compared the owner of a drag (Explorer entries and layer tabs) with `GetInstanceID()`, which Unity 6000.5 marks obsolete as an error (`CS0619`), so the package did not compile there. The drag payload now holds the window itself and the check compares references. No behaviour change on earlier versions.
+
 ## 0.3.8
 
 Wiring facts no longer call code-created `[SerializeReference]` types unused. 0.3.7 made a `[Serializable]` class that only `[SerializeReference]` fields can store `unwired` when no asset stored it and no `new` of it existed; types that code creates in other ways became false dead-code candidates, and placements that prefab variants add with a quoted property path were missed. Both caches (`code-index-*.bin` and `wiring-index.json`) change format and rebuild by themselves on the first call.

@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <StartupObject>McpServer</StartupObject>
     <AssemblyName>architector-mcp</AssemblyName>
-    <Version>0.3.8</Version>
+    <Version>0.3.9</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>

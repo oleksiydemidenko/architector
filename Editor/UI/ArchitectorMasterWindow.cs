@@ -1249,7 +1249,7 @@ namespace Architector.Editor
             if (orderedIds.Length == 0)
                 return false;
 
-            var payload = new ExplorerDragPayload(GetInstanceID(), orderedIds);
+            var payload = new ExplorerDragPayload(this, orderedIds);
             DragAndDrop.PrepareStartDrag();
             DragAndDrop.objectReferences = Array.Empty<UnityEngine.Object>();
             DragAndDrop.SetGenericData(ExplorerDragDataKey, payload);
@@ -1439,7 +1439,7 @@ namespace Architector.Editor
         private bool TryGetExplorerDrag(out ExplorerDragPayload payload)
         {
             return TryGetExplorerReferenceDrag(out payload)
-                   && payload.ownerWindowId == GetInstanceID()
+                   && ReferenceEquals(payload.ownerWindow, this)
                    && string.IsNullOrWhiteSpace(search);
         }
 
@@ -1703,7 +1703,7 @@ namespace Architector.Editor
         {
             DragAndDrop.PrepareStartDrag();
             DragAndDrop.objectReferences = Array.Empty<UnityEngine.Object>();
-            DragAndDrop.SetGenericData(LayerTabDragDataKey, new LayerTabDragPayload(GetInstanceID(), layerId));
+            DragAndDrop.SetGenericData(LayerTabDragDataKey, new LayerTabDragPayload(this, layerId));
             DragAndDrop.StartDrag("Reorder Architector Tab");
             pressedLayerTabId = string.Empty;
         }
@@ -1727,7 +1727,7 @@ namespace Architector.Editor
             if (DragAndDrop.GetGenericData(LayerTabDragDataKey) is LayerTabDragPayload tabPayload)
             {
                 explorerTabDropActive = false;
-                if (tabPayload.ownerWindowId != GetInstanceID() || !openLayerIds.Contains(tabPayload.layerId))
+                if (!ReferenceEquals(tabPayload.ownerWindow, this) || !openLayerIds.Contains(tabPayload.layerId))
                 {
                     DragAndDrop.visualMode = DragAndDropVisualMode.Rejected;
                     layerTabDropIndicatorX = -1f;
@@ -3357,25 +3357,25 @@ namespace Architector.Editor
 
         private sealed class ExplorerDragPayload
         {
-            public ExplorerDragPayload(int ownerWindowId, string[] entryIds)
+            public ExplorerDragPayload(ArchitectorMasterWindow ownerWindow, string[] entryIds)
             {
-                this.ownerWindowId = ownerWindowId;
+                this.ownerWindow = ownerWindow;
                 this.entryIds = entryIds;
             }
 
-            public readonly int ownerWindowId;
+            public readonly ArchitectorMasterWindow ownerWindow;
             public readonly string[] entryIds;
         }
 
         private sealed class LayerTabDragPayload
         {
-            public LayerTabDragPayload(int ownerWindowId, string layerId)
+            public LayerTabDragPayload(ArchitectorMasterWindow ownerWindow, string layerId)
             {
-                this.ownerWindowId = ownerWindowId;
+                this.ownerWindow = ownerWindow;
                 this.layerId = layerId;
             }
 
-            public readonly int ownerWindowId;
+            public readonly ArchitectorMasterWindow ownerWindow;
             public readonly string layerId;
         }
     }
