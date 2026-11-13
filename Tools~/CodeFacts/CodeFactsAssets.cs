@@ -12,7 +12,7 @@ namespace Architector.CodeFacts;
 // Library/Architector/wiring-index.json and read again only when its size or time changes.
 public sealed class AssetWiring
 {
-    private const int FormatVersion = 4;
+    private const int FormatVersion = 5;
     private static readonly Regex Header = new(@"^--- !u!(\d+) &(-?\d+)", RegexOptions.Compiled);
     private static readonly Regex ScriptReference = new(@"m_Script: \{fileID: -?\d+, guid: ([0-9a-f]{32})", RegexOptions.Compiled);
     private static readonly Regex GameObjectReference = new(@"^  m_GameObject: \{fileID: (-?\d+)\}", RegexOptions.Compiled);

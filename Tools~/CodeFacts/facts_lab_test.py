@@ -51,7 +51,7 @@ evidence = answer({"action": "code_evidence"})
 assert evidence["reflection_sites"] == [{"base": "Lab.Core.ModuleBase", "at": "Assets/Lab/Core/ModuleLoader.cs:17", "matching_types": 2}], evidence
 
 game = answer({"action": "layer_facts", "target": "Game"})
-assert game["wiring"] == {"wired": 23, "test_only": 1, "base_only": 3, "created_in_code": 3, "created_by_reflection": 2, "unwired": 7, "not_tracked": 37}, game["wiring"]
+assert game["wiring"] == {"wired": 23, "test_only": 1, "base_only": 3, "created_in_code": 3, "created_by_reflection": 2, "unwired": 7, "not_tracked": 41}, game["wiring"]
 assert "**/* OLD.prefab" in game["wiring_test_places"], game["wiring_test_places"]
 
 # 1. The script asset is found from every part of a partial type, by a name that differs only in case, and as the only
@@ -108,6 +108,9 @@ for name, how, line in [("TargetTypedInstaller", "InstallerPool<T>", 25), ("Type
                         ("GroupInstaller", "Create<T>", 34), ("RentedInstaller", "Create<T>", 50)]:
     made = wiring(name)
     assert made["status"] == "not_tracked" and f"Created in code by {how} at Assets/Lab/Game/ReviewCases.cs:{line}" in made["note"], made
+for name, how, line in [("QualifiedInstaller", "StaticCache<T>", 11), ("SingletonInstaller", "Create<T>", 22), ("InitInstaller", "Create<T>", 32)]:
+    made = wiring(name)
+    assert made["status"] == "not_tracked" and f"Created in code by {how} at Assets/Lab/Game/ReviewCases2.cs:{line}" in made["note"], made
 base = wiring("BaseReviewInstaller")
 assert base["status"] == "not_tracked" and base["note"].startswith("Base of Lab.Game.DerivedReviewInstaller"), base
 shared = wiring("SharedAsset")
@@ -191,7 +194,7 @@ central = {item["type"] for item in audit["items"] if item["kind"] == "central_t
 assert central == {"Lab.Core.ModuleBase", "Lab.Core.ParameterBase", "Lab.Core.Parameter`1", "Lab.Core.Container", "Lab.Core.IInstaller"}, central
 assert items[("relationship_without_evidence", "node_hud")]["evidence"]["relationship"] == "rel_hud_loader"
 wrong = items[("relationship_on_wrong_types", "Lab/Game")]["evidence"]
-assert [item["relationship"] for item in wrong["relationships"]] == ["rel_ticker_loader"] and wrong["references"] == 74, wrong
+assert [item["relationship"] for item in wrong["relationships"]] == ["rel_ticker_loader"] and wrong["references"] == 80, wrong
 assert ("isolated_node", "node_note") in items and not any(key[1] == "node_mover" for key in items), items.keys()
 assert answer({"action": "facts_audit", "min_uses": 20})["by_kind"]["central_type_without_node"] == 5
 ui = answer({"action": "facts_audit", "target": "Ui"})

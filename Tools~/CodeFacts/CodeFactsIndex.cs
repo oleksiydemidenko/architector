@@ -540,7 +540,7 @@ public sealed class CodeIndex
                                      && ParameterOf(TypeOfArgument(semantic, call)) is ({ } reflected, var reflectedOrdinal))
                                 AddCreated(reflected, reflectedOrdinal);
                             break;
-                        case MemberAccessExpressionSyntax { Expression: GenericNameSyntax or QualifiedNameSyntax } access:
+                        case MemberAccessExpressionSyntax { Expression: GenericNameSyntax or QualifiedNameSyntax or MemberAccessExpressionSyntax { Name: GenericNameSyntax } } access:
                             ForwardConstructed(semantic.GetSymbolInfo(access.Expression).Symbol as INamedTypeSymbol);
                             break;
                         case TypeDeclarationSyntax { BaseList: not null } declaration when semantic.GetDeclaredSymbol(declaration) is { } declaredType:
@@ -608,6 +608,7 @@ public sealed class CodeIndex
             GenericNameSyntax generic => generic.Identifier.ValueText,
             QualifiedNameSyntax qualified => Simple(qualified.Right),
             AliasQualifiedNameSyntax alias => Simple(alias.Name),
+            MemberAccessExpressionSyntax access => Simple(access.Name),
             _ => string.Empty
         };
         foreach (var tree in trees)
@@ -642,7 +643,8 @@ public sealed class CodeIndex
 
     // A use in the type's own base list, static constructor, static field initializer or static void method (a
     // registration): the type passes itself, so it creates itself only once an instance exists. A static factory that
-    // returns the type is a real creation.
+    // returns the type, a static field of the type itself (a singleton) and an assignment in a static void method (an
+    // initializer) are real creations.
     private static bool SelfUse(INamedTypeSymbol outermost, SyntaxTree tree, SyntaxNode at)
     {
         bool Own(SyntaxNode declaration) => outermost.DeclaringSyntaxReferences.Any(reference => reference.SyntaxTree == tree && reference.Span.Contains(declaration.Span));
@@ -651,9 +653,12 @@ public sealed class CodeIndex
             || node is ConstructorDeclarationSyntax { Parent: TypeDeclarationSyntax ctorOwner } constructor
                && constructor.Modifiers.Any(SyntaxKind.StaticKeyword) && Own(ctorOwner)
             || node is FieldDeclarationSyntax { Parent: TypeDeclarationSyntax fieldOwner } field
-               && field.Modifiers.Any(SyntaxKind.StaticKeyword) && Own(fieldOwner)
+               && field.Modifiers.Any(SyntaxKind.StaticKeyword) && Own(fieldOwner) && !OfOwnType(field.Declaration.Type)
             || node is MethodDeclarationSyntax { Parent: TypeDeclarationSyntax methodOwner, ReturnType: PredefinedTypeSyntax returned } registration
-               && returned.Keyword.IsKind(SyntaxKind.VoidKeyword) && registration.Modifiers.Any(SyntaxKind.StaticKeyword) && Own(methodOwner));
+               && returned.Keyword.IsKind(SyntaxKind.VoidKeyword) && registration.Modifiers.Any(SyntaxKind.StaticKeyword) && Own(methodOwner)
+               && at.Parent is not AssignmentExpressionSyntax);
+        // A static field of the type itself holds an instance (a singleton), so its initializer creates one.
+        bool OfOwnType(TypeSyntax fieldType) => fieldType.ToString().Split('<')[0].Split('.')[^1].Trim() == outermost.Name;
     }
 
     // Keep the first creation site, but a site in run-time code replaces one in Editor code.
