@@ -130,7 +130,7 @@ public static class FactsSnapshots
             if (types.ContainsKey(type.FullName))
                 continue;
             var behaviour = new JsonObject();
-            foreach (var (section, entries) in type.Behaviour)
+            foreach (var (section, entries) in type.Behaviour.Where(pair => FactsQueries.BehaviourSections.Contains(pair.Key)))
                 behaviour[section] = Values(entries.Select(entry => entry.Value).OrderBy(value => value, StringComparer.Ordinal).ToList());
             types[type.FullName] = new JsonObject
             {

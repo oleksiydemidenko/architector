@@ -718,12 +718,17 @@ public static class FactsQueries
         var byKey = model.Types.ToDictionary(type => type.Key, StringComparer.Ordinal);
         var scripts = ScriptFiles(model);
         var wiring = model.Types.ToDictionary(type => type.Key, type => WiringOf(model, assets, scripts, type), StringComparer.Ordinal);
+        // The first creating call per type name; a call in run-time code replaces one in Editor code.
         var createdAt = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var type in model.Types)
             if (type.Extras.TryGetValue("generic_calls", out var calls))
                 foreach (var (call, at) in calls)
                     foreach (var name in CreatingCalls.Where(name => call.StartsWith(name + "<", StringComparison.Ordinal)))
-                        createdAt.TryAdd(call[(name.Length + 1)..^1].Split('.').Last().Trim(), at);
+                    {
+                        var target = call[(name.Length + 1)..^1].Split('.').Last().Trim();
+                        if (!createdAt.TryGetValue(target, out var known) || IsEditorFile(known) && !IsEditorFile(at))
+                            createdAt[target] = at;
+                    }
         foreach (var (key, item) in wiring)
         {
             if (item.Found)
@@ -783,6 +788,22 @@ public static class FactsQueries
         return wiring;
     }
 
+    // Every type that derives from this one, directly or further down.
+    private static IEnumerable<FactsType> Subclasses(FactsType type, Dictionary<string, FactsType> byKey)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var queue = new Queue<string>(type.DerivedByKeys);
+        while (queue.Count > 0)
+        {
+            var next = queue.Dequeue();
+            if (!seen.Add(next) || !byKey.TryGetValue(next, out var child))
+                continue;
+            yield return child;
+            foreach (var grandchild in child.DerivedByKeys)
+                queue.Enqueue(grandchild);
+        }
+    }
+
     // Unity compiles every script under a folder named Editor into the Editor only.
     internal static bool IsEditorFile(string at) => ("/" + at).Contains("/Editor/", StringComparison.Ordinal);
 
@@ -823,14 +844,24 @@ public static class FactsQueries
             }
             if (type.Data.CreatedAt.Length > 0)
             {
-                item.Note = type.Data.CreatedBy is "new" or ""
-                    ? $"Created with new at {type.Data.CreatedAt}; assets cannot show that use."
-                    : $"Created in code by {type.Data.CreatedBy} at {type.Data.CreatedAt}; assets cannot show that use.";
+                item.Note = (type.Data.CreatedBy is "new" or ""
+                                ? $"Created with new at {type.Data.CreatedAt}"
+                                : $"Created in code by {type.Data.CreatedBy} at {type.Data.CreatedAt}")
+                            + (IsEditorFile(type.Data.CreatedAt) ? ", only by Editor code" : string.Empty)
+                            + "; assets cannot show that use.";
                 continue;
             }
             if (type.Data.TypeOfAt.Length > 0)
             {
                 item.Note = $"Named by typeof at {type.Data.TypeOfAt}; reflection, a registry or an importer may create it where the facts cannot see, so its absence proves nothing.";
+                continue;
+            }
+            // A base class whose subclasses live (stored, created, stored by value or named by typeof) lives with them.
+            var liveSubclass = Subclasses(type, byKey).FirstOrDefault(sub => wiring[sub.Key].Found || sub.Data.CreatedAt.Length > 0
+                                                                              || sub.Data.ByValueAt.Length > 0 || sub.Data.TypeOfAt.Length > 0);
+            if (liveSubclass != null)
+            {
+                item.Note = $"Base of {liveSubclass.FullName}, which lives without an asset of its own type; its absence proves nothing.";
                 continue;
             }
             item.Status = "unwired";
@@ -1115,7 +1146,7 @@ public static class FactsQueries
         return result;
     }
 
-    private static readonly string[] BehaviourSections = { "reads", "writes", "uses", "subscribes", "unsubscribes", "assigns", "lifecycle", "recurring" };
+    internal static readonly string[] BehaviourSections = { "reads", "writes", "uses", "subscribes", "unsubscribes", "assigns", "lifecycle", "recurring" };
     private const int BehaviourPerSection = 40;
 
     // Counts per section, then each section's entries with file:line, at most 40 each; "section" with offset and limit

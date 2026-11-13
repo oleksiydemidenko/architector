@@ -1,4 +1,4 @@
-"""Checks the 0.3.7 code facts on FixtureLab: script assets resolved by file, managed references and prefab-variant
+"""Checks the 0.3.7 and 0.3.8 code facts on FixtureLab: script assets resolved by file, managed references and prefab-variant
 overrides, [SerializeReference]-only types, reflection creation, behaviour facts, the audit and facts snapshots.
 
 Usage: python facts_lab_test.py <server binary>
@@ -51,7 +51,7 @@ evidence = answer({"action": "code_evidence"})
 assert evidence["reflection_sites"] == [{"base": "Lab.Core.ModuleBase", "at": "Assets/Lab/Core/ModuleLoader.cs:17", "matching_types": 2}], evidence
 
 game = answer({"action": "layer_facts", "target": "Game"})
-assert game["wiring"] == {"wired": 23, "test_only": 1, "base_only": 3, "created_in_code": 2, "created_by_reflection": 2, "unwired": 6, "not_tracked": 24}, game["wiring"]
+assert game["wiring"] == {"wired": 23, "test_only": 1, "base_only": 3, "created_in_code": 3, "created_by_reflection": 2, "unwired": 7, "not_tracked": 37}, game["wiring"]
 assert "**/* OLD.prefab" in game["wiring_test_places"], game["wiring_test_places"]
 
 # 1. The script asset is found from every part of a partial type, by a name that differs only in case, and as the only
@@ -100,6 +100,18 @@ for name, how, line in [("FactoryInstaller", "Create<T>", 29), ("ForwardedInstal
 for name, line in [("PooledInstaller", 14), ("InheritedInstaller", 17)]:
     pooled = wiring(name)
     assert pooled["status"] == "not_tracked" and f"Created in code by InstallerPool<T> at Assets/Lab/Game/InstallerPools.cs:{line}" in pooled["note"], pooled
+# Review cases: target-typed new() of a creating type, Activator with typeof(T), a static member of a creating type, an
+# interface method whose implementation creates, a method group, a type's own static factory called from outside, and the
+# base class of a created type.
+for name, how, line in [("TargetTypedInstaller", "InstallerPool<T>", 25), ("TypeOfGenericInstaller", "ViaTypeOf<T>", 31),
+                        ("StaticCacheInstaller", "StaticCache<T>", 32), ("InterfaceInstaller", "Make<T>", 33),
+                        ("GroupInstaller", "Create<T>", 34), ("RentedInstaller", "Create<T>", 50)]:
+    made = wiring(name)
+    assert made["status"] == "not_tracked" and f"Created in code by {how} at Assets/Lab/Game/ReviewCases.cs:{line}" in made["note"], made
+base = wiring("BaseReviewInstaller")
+assert base["status"] == "not_tracked" and base["note"].startswith("Base of Lab.Game.DerivedReviewInstaller"), base
+shared = wiring("SharedAsset")
+assert shared["status"] == "created_in_code" and shared["reason"] == "created from code at Assets/Lab/Game/ReviewCases.cs:37", shared
 self_made = wiring("SelfInstaller")
 assert self_made["status"] == "unwired" and "note" not in self_made, self_made
 named = wiring("NamedInstaller")
@@ -156,6 +168,7 @@ reset = behaviour("ResetOnEnable")
 assert reset["unpaired"] == ["OnEnable without OnDisable"] and "unpaired_subscriptions" not in reset, reset
 leaky = behaviour("LeakyListener")
 assert leaky["unpaired_subscriptions"] == [["OnEnable", "Assets/Lab/Game/EnableOnly.cs:23"]], leaky
+assert "unpaired_subscriptions" not in behaviour("ToggleListener")
 
 # 12 and 13. Unity's full metadataName links nodes; facts dump keeps the full type name.
 candidates = {item["type"]: item for item in game["node_candidates"]}
@@ -178,7 +191,7 @@ central = {item["type"] for item in audit["items"] if item["kind"] == "central_t
 assert central == {"Lab.Core.ModuleBase", "Lab.Core.ParameterBase", "Lab.Core.Parameter`1", "Lab.Core.Container", "Lab.Core.IInstaller"}, central
 assert items[("relationship_without_evidence", "node_hud")]["evidence"]["relationship"] == "rel_hud_loader"
 wrong = items[("relationship_on_wrong_types", "Lab/Game")]["evidence"]
-assert [item["relationship"] for item in wrong["relationships"]] == ["rel_ticker_loader"] and wrong["references"] == 58, wrong
+assert [item["relationship"] for item in wrong["relationships"]] == ["rel_ticker_loader"] and wrong["references"] == 74, wrong
 assert ("isolated_node", "node_note") in items and not any(key[1] == "node_mover" for key in items), items.keys()
 assert answer({"action": "facts_audit", "min_uses": 20})["by_kind"]["central_type_without_node"] == 5
 ui = answer({"action": "facts_audit", "target": "Ui"})

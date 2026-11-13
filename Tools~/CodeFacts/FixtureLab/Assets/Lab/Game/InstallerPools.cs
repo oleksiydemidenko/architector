@@ -42,7 +42,9 @@ namespace Lab.Game
     [System.Serializable]
     public sealed class SelfInstaller : SelfCloning<SelfInstaller>, IInstaller
     {
-        static SelfInstaller() => InstallerFactory.Create<SelfInstaller>();
+        static SelfInstaller() => Register();
+
+        public static void Register() => InstallerFactory.Create<SelfInstaller>();
 
         public void Install(Container container) { }
     }

@@ -33,7 +33,10 @@ public sealed class AssetWiring
         if (value.Length >= 2 && value[0] == '\'' && value[^1] == '\'')
             return value[1..^1].Replace("''", "'");
         if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
-            return value[1..^1].Replace("\\\"", "\"");
+            return value[1..^1].Replace("\\\"", "\"").Replace("\\\\", "\\");
+        // A quoted scalar that Unity wrapped onto the next line: its first line has only the opening quote.
+        if (value.Length >= 1 && value[0] is '\'' or '"')
+            return value[1..];
         return value;
     }
 
@@ -366,6 +369,9 @@ public sealed class AssetWiring
                         if (separator > 0 && separator < value.Length - 1)
                         {
                             var type = value[(separator + 1)..].Trim().Replace('/', '.');
+                            var arguments = type.IndexOf("[[", StringComparison.Ordinal);
+                            if (arguments > 0)
+                                type = type[..arguments];
                             entry.SerializedTypes.Add(type);
                             uses.Add((type, "override:" + modificationTarget, "variant_override"));
                         }
