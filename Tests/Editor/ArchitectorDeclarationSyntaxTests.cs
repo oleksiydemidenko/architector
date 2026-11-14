@@ -35,17 +35,43 @@ namespace Architector.Editor.Tests
         }
 
         [Test]
-        public void RichTextColorsPartsAndEscapesGenerics()
+        public void RichTextColorsKeywordsAndTypesOnly()
         {
-            var rich = ArchitectorSemanticPalette.RichDeclaration("public List<Int32> Items { get; }", "property");
-            StringAssert.Contains("<color=#", rich);
-            StringAssert.Contains(">public</color>", rich);
+            string Hex(UnityEngine.Color color) => UnityEngine.ColorUtility.ToHtmlStringRGB(color);
+            var rich = ArchitectorSemanticPalette.RichDeclaration("public List<Int32> Items { get; }");
+            StringAssert.Contains($"<color=#{Hex(ArchitectorSemanticPalette.KeywordColor)}>public</color>", rich);
+            StringAssert.Contains($"<color=#{Hex(ArchitectorSemanticPalette.ForTypeKind("class"))}>List</color>", rich);
+            StringAssert.Contains($"<color=#{Hex(ArchitectorSemanticPalette.ForTypeKind("struct"))}>Int32</color>", rich);
             StringAssert.Contains("<​", rich);
             Assert.IsFalse(rich.Contains("<Int32"), rich);
-            var memberColor = UnityEngine.ColorUtility.ToHtmlStringRGB(ArchitectorSemanticPalette.ForMemberKind("property"));
-            StringAssert.Contains($"<color=#{memberColor}>Items</color>", rich);
-            var baseRow = ArchitectorSemanticPalette.RichDeclaration("base · Game.UnitModule", "base");
-            StringAssert.Contains($"<color=#{UnityEngine.ColorUtility.ToHtmlStringRGB(ArchitectorSemanticPalette.ForTypeKind("class"))}>Game.UnitModule</color>", baseRow);
+            // Member and parameter names keep the default text color.
+            StringAssert.Contains(" Items ", rich);
+            var method = ArchitectorSemanticPalette.RichDeclaration("public void Bind(IDisposable handle)");
+            StringAssert.Contains($"<color=#{Hex(ArchitectorSemanticPalette.ForTypeKind("interface"))}>IDisposable</color>", method);
+            StringAssert.Contains(" Bind(", method);
+            StringAssert.Contains(" handle)", method);
+        }
+
+        [Test]
+        public void TypeDeclarationShowsBaseAndInterfacesAsCode()
+        {
+            string Hex(UnityEngine.Color color) => UnityEngine.ColorUtility.ToHtmlStringRGB(color);
+            var type = new ArchitectorTypeRecord
+            {
+                kind = "class",
+                name = "HeldItemModule",
+                baseType = new ArchitectorTypeReferenceRecord { kind = "class", name = "UnitModule" },
+                interfaces = { new ArchitectorTypeReferenceRecord { name = "IHeldItemRelease" }, new ArchitectorTypeReferenceRecord { name = "IModuleView" } }
+            };
+            var segments = ArchitectorSemanticPalette.TypeDeclarationSegments(type);
+            Assert.AreEqual("class HeldItemModule : UnitModule, IHeldItemRelease, IModuleView", string.Concat(segments.Select(segment => segment.Text)));
+            var rich = ArchitectorSemanticPalette.RichSegments(segments);
+            StringAssert.Contains($"<color=#{Hex(ArchitectorSemanticPalette.KeywordColor)}>class </color>", rich);
+            StringAssert.Contains($"<color=#{Hex(ArchitectorSemanticPalette.ForTypeKind("class"))}>UnitModule</color>", rich);
+            StringAssert.Contains($"<color=#{Hex(ArchitectorSemanticPalette.ForTypeKind("interface"))}>IModuleView</color>", rich);
+            var cut = ArchitectorSemanticPalette.RichSegments(segments, "class HeldItemModule : Unit…");
+            StringAssert.EndsWith(">Unit</color>…", cut);
+            Assert.IsFalse(cut.Contains("IModuleView"), cut);
         }
     }
 }

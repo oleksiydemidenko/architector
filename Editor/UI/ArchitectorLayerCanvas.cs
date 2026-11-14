@@ -47,6 +47,7 @@ namespace Architector.Editor
         private Vector3[] gridBuffer = Array.Empty<Vector3>();
         private readonly Dictionary<string, ArchitectorNodeRecord> nodesById = new(StringComparer.Ordinal);
         private readonly Dictionary<string, (string Text, string Kind)[]> nodeRows = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, List<(string Text, Color? Color)>> nodeDeclarations = new(StringComparer.Ordinal);
         private readonly HashSet<string> focusNodeIds = new(StringComparer.Ordinal);
         private int edgeMinimumTier = EdgeTierUnrelated;
         private string memberScrollNodeId = string.Empty;
@@ -1912,6 +1913,7 @@ namespace Architector.Editor
             foreach (var node in documents.semantic.nodes)
                 nodesById[node.id] = node;
             nodeRows.Clear();
+            nodeDeclarations.Clear();
             fittedText.Clear();
         }
 
@@ -1928,10 +1930,13 @@ namespace Architector.Editor
             if (nodeRows.TryGetValue(node.id, out var rows))
                 return rows;
             var values = new List<(string Text, string Kind)>();
-            if (node.type?.baseType != null)
-                values.Add(($"base · {ArchitectorTypeReference.FullName(node.type.baseType)}", "base"));
-            values.AddRange((node.type?.interfaces ?? new List<ArchitectorTypeReferenceRecord>())
-                .Select(reference => ($"interface · {ArchitectorTypeReference.FullName(reference)}", "interface")));
+            // A type with a base or interfaces gets one row as code declares it: "class Item : Unit, IItem".
+            if (node.type != null && (node.type.baseType != null || node.type.interfaces?.Count > 0))
+            {
+                var segments = ArchitectorSemanticPalette.TypeDeclarationSegments(node.type);
+                nodeDeclarations[node.id] = segments;
+                values.Add((string.Concat(segments.Select(segment => segment.Text)), "declaration"));
+            }
             values.AddRange(ArchitectorMemberOrder.SortStable(node.members).Select(member => (member.declaration, member.kind)));
             rows = values.ToArray();
             nodeRows[node.id] = rows;
@@ -2111,7 +2116,10 @@ namespace Architector.Editor
                     var memberRect = new Rect(rect.x + 8f, memberY + index * EditorGUIUtility.singleLineHeight, rect.width - (scrolls ? 20f : 16f), EditorGUIUtility.singleLineHeight);
                     var row = values[firstRow + index];
                     var declaration = Fit(row.Text, memberRect.width, EditorStyles.miniLabel);
-                    GUI.Label(memberRect, ArchitectorSemanticPalette.RichDeclaration(declaration, row.Kind), memberRowStyle);
+                    var rich = row.Kind == "declaration" && nodeDeclarations.TryGetValue(node.id, out var segments)
+                        ? ArchitectorSemanticPalette.RichSegments(segments, declaration)
+                        : ArchitectorSemanticPalette.RichDeclaration(declaration);
+                    GUI.Label(memberRect, rich, memberRowStyle);
                 }
                 GUI.contentColor = palette.typeText.ToColor();
                 if (scrolls)

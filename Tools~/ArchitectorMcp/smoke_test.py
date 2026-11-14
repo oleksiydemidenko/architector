@@ -42,6 +42,8 @@ assert os.path.realpath(status["project"]) == os.path.realpath(project), text
 failed, text = tool("architector_route", {"queries": ["Assets"]})
 assert not failed and "layer: none" in text, text
 failed, text = tool("architector_digest")
+assert not failed and text.startswith("# Architecture Digest index") and "\nCore: Sample (0)" in text, text
+failed, text = tool("architector_digest", {"form": "compact"})
 assert not failed and text.startswith("# Architecture Digest (compact)") and "\n## Core/Sample" in text, text
 failed, text = tool("architector_digest", {"form": "list"})
 assert not failed and text.strip() == "Core/Sample", text
@@ -70,7 +72,7 @@ assert code == 0 and text == "Core/Sample", text
 code, text = cli("digest", "Sample")
 assert code == 0 and "a sample layer" in text, text
 code, text = cli("digest", "--json")
-assert code == 0 and json.loads(text)["text"].startswith("# Architecture Digest (compact)"), text
+assert code == 0 and json.loads(text)["text"].startswith("# Architecture Digest index"), text
 code, text = cli("digest", "missing")
 assert code == 6 and json.loads(text)["code"] == "digest", text
 code, text = cli("route", "Assets")

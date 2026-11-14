@@ -35,8 +35,8 @@ public static partial class McpServer
         else if (arguments?["layers"] is JsonValue layersText && layersText.TryGetValue<string>(out var joined))
             requested.AddRange(joined.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
         var form = ((string?)arguments?["form"])?.Trim().ToLowerInvariant();
-        if (form is not (null or "" or "compact" or "full" or "list"))
-            return $"form takes compact, full or list, not '{form}'.";
+        if (form is not (null or "" or "index" or "compact" or "full" or "list"))
+            return $"form takes index, compact, full or list, not '{form}'.";
 
         // Layers asked by name keep the digest order; a group names all its approved layers.
         var selected = sections;
@@ -57,10 +57,12 @@ public static partial class McpServer
             selected = sections.Where(chosen.Contains).ToList();
         }
         if (string.IsNullOrEmpty(form))
-            form = requested.Count == 0 || group ? "compact" : "full";
+            form = requested.Count == 0 ? "index" : group ? "compact" : "full";
         error = false;
         if (form == "list")
             return string.Join("\n", selected.Select(section => section.Heading));
+        if (form == "index")
+            return DigestIndex(selected);
 
         var access = StateAccessSource(out var accessNote);
         var text = new StringBuilder();
@@ -70,7 +72,7 @@ public static partial class McpServer
             text.Append($"{selected.Count} approved layer{(selected.Count == 1 ? string.Empty : "s")}, {selected.Sum(section => section.Nodes.Count)} nodes. "
                         + "A node line is its title, its kind unless class and its type when the name differs, then the first sentence of its responsibility, at most 80 characters (authored, may drift from the code). "
                         + "\"written by\" and \"read by\" are generated from the code facts (configured read and write calls), at most "
-                        + $"{CompactAccessLimit} names each, then the total. Full form with members and relationships: form full, or name the layers. A group path names all its layers in this compact form.\n");
+                        + $"{CompactAccessLimit} names each, then the total. Full form with members and relationships: name the layers, or form full for all.\n");
             if (accessNote != null)
                 text.Append(accessNote).Append('\n');
             foreach (var section in selected)
@@ -109,6 +111,29 @@ public static partial class McpServer
                         text.Append("  - ").Append(line).Append(" (generated from code facts)\n");
             }
             text.Append('\n');
+        }
+        return text.ToString().TrimEnd();
+    }
+
+    // The cheap answer to a bare call: the approved layers by group with their node counts, the size of the compact
+    // form, and how to ask for content. A whole compact digest of a large graph costs more than most tasks need.
+    private static string DigestIndex(List<DigestSection> sections)
+    {
+        var compactSize = sections.Sum(section => section.Heading.Length + 4 + section.Nodes.Sum(node => CompactNodeLine(node).Length + 1));
+        var text = new StringBuilder();
+        text.Append("# Architecture Digest index\n\n");
+        text.Append($"{sections.Count} approved layer{(sections.Count == 1 ? string.Empty : "s")}, {sections.Sum(section => section.Nodes.Count)} nodes; (n) is a layer's node count. "
+                    + "This call lists them only. For content name layers or groups: a layer gives its full section (members, base types, relationships), "
+                    + "a group gives its layers in compact form (node, type, one-line role, and the types that write and read its state, generated from the code facts). "
+                    + $"form compact gives every layer compactly (about {(compactSize / 1000 + 1) * 1000} characters here, more with writers and readers); form full gives the whole digest.\n\n");
+        foreach (var group in sections.GroupBy(section => section.Path.Contains('/') ? section.Path[..section.Path.LastIndexOf('/')] : string.Empty))
+        {
+            var layers = group.Select(section =>
+            {
+                var name = section.Path.Contains('/') ? section.Path[(section.Path.LastIndexOf('/') + 1)..] : section.Path;
+                return $"{name} ({section.Nodes.Count}{(section.Heading.EndsWith(" (Planned)", StringComparison.Ordinal) ? ", planned" : string.Empty)})";
+            });
+            text.Append(group.Key.Length > 0 ? $"{group.Key}: " : "Layers outside groups: ").Append(string.Join(", ", layers)).Append('\n');
         }
         return text.ToString().TrimEnd();
     }

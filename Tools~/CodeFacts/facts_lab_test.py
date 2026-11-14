@@ -286,6 +286,9 @@ Connected layers: Lab/Core
 - Health -> Lab/Core/Point (dependency)
 """)
 code, text = cli("digest")
+assert code == 0 and text.startswith("# Architecture Digest index") and "2 approved layers, 3 nodes;" in text, text
+assert text.endswith("\nLab: Core (1), Game (2, planned)") and "written by" not in text, text
+code, text = cli("digest", "--form", "compact")
 assert code == 0 and text.startswith("# Architecture Digest (compact)"), text
 assert "\n## Lab/Core\n- Point (struct): A position on the ground.\n" in text, text
 assert "\n## Lab/Game (Planned)\n- Health: Holds the hit points of a unit;\n" in text, text

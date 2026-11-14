@@ -479,7 +479,7 @@ namespace Architector.Editor
                     }
                     declarationStyle ??= new GUIStyle(EditorStyles.wordWrappedMiniLabel) { richText = true };
                     GUILayout.Label(
-                        new GUIContent(ArchitectorSemanticPalette.RichDeclaration(member.declaration, member.kind), member.declaration),
+                        new GUIContent(ArchitectorSemanticPalette.RichDeclaration(member.declaration), member.declaration),
                         declarationStyle);
                 }
                 if (string.Equals(pendingFocusNodeId, node.id, StringComparison.Ordinal)
@@ -600,6 +600,12 @@ namespace Architector.Editor
 
             EditorGUILayout.Space(8f);
             GUILayout.Label("Inheritance", EditorStyles.boldLabel);
+            // The declaration as code shows it, base and interfaces in their colors; the controls below edit them.
+            declarationStyle ??= new GUIStyle(EditorStyles.wordWrappedMiniLabel) { richText = true };
+            var typeDeclaration = ArchitectorSemanticPalette.TypeDeclarationSegments(node.type);
+            GUILayout.Label(
+                new GUIContent(ArchitectorSemanticPalette.RichSegments(typeDeclaration), string.Concat(typeDeclaration.Select(segment => segment.Text))),
+                declarationStyle);
             if (hasBaseContract)
             {
                 using (new EditorGUILayout.HorizontalScope())

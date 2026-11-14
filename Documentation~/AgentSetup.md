@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | `architector_status` | no | Which project is served, and whether the Editor is reachable |
 | `architector_route` | no | From a file or type to its layer, digest lines and documents; for the node it names, the types that write and read its state |
-| `architector_digest` | no | The approved layers: compact by default (node, type, one-line role, writers and readers from the code), full sections for named layers or groups with `form: full` |
+| `architector_digest` | no | The approved layers: without layers an index by group with node counts; full sections for named layers, a compact form for groups (node, type, one-line role, writers and readers from the code) |
 | `architector_query` | yes | Project, layer, approval, conformance and type queries |
 | `architector_edit` | yes | Work sessions, dry runs, plans and approvals |
 
