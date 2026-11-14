@@ -42,9 +42,13 @@ assert os.path.realpath(status["project"]) == os.path.realpath(project), text
 failed, text = tool("architector_route", {"queries": ["Assets"]})
 assert not failed and "layer: none" in text, text
 failed, text = tool("architector_digest")
+assert not failed and text.startswith("# Architecture Digest (compact)") and "\n## Core/Sample" in text, text
+failed, text = tool("architector_digest", {"form": "list"})
 assert not failed and text.strip() == "Core/Sample", text
 failed, text = tool("architector_digest", {"layer": "core/sample"})
 assert not failed and "a sample layer" in text, text
+failed, text = tool("architector_digest", {"layer": "missing"})
+assert failed and "No approved layer or group is called missing" in text, text
 failed, text = tool("architector_query", {"action": "project_summary"})
 assert failed and "not running" in text, text
 assert call("no/such/method")["error"]["code"] == -32601
@@ -53,4 +57,26 @@ process.stdin.flush()
 assert json.loads(process.stdout.readline())["error"]["code"] == -32700
 process.stdin.close()
 assert process.wait(timeout=10) == 0
+
+
+def cli(*arguments):
+    result = subprocess.run([server, *arguments, "--project", project], capture_output=True, text=True, encoding="utf-8")
+    return result.returncode, result.stdout.strip()
+
+
+# The command line answers route and digest without the Editor, with the text of the MCP tools.
+code, text = cli("digest", "--form", "list")
+assert code == 0 and text == "Core/Sample", text
+code, text = cli("digest", "Sample")
+assert code == 0 and "a sample layer" in text, text
+code, text = cli("digest", "--json")
+assert code == 0 and json.loads(text)["text"].startswith("# Architecture Digest (compact)"), text
+code, text = cli("digest", "missing")
+assert code == 6 and json.loads(text)["code"] == "digest", text
+code, text = cli("route", "Assets")
+assert code == 6 and "layer: none" in text, text
+code, text = cli("route")
+assert code == 2 and json.loads(text)["code"] == "usage", text
+code, text = cli("commands")
+assert {"route", "digest"} <= {item["command"] for item in json.loads(text)["commands"]}, text
 print("smoke test passed")

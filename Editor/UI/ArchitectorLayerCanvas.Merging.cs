@@ -112,7 +112,7 @@ namespace Architector.Editor
             }
             var hasSelection = selectedNodeIds.Count > 0 || !string.IsNullOrEmpty(selectedEdgeId);
             Handles.BeginGUI();
-            for (var tier = EdgeTierUnrelated; tier <= EdgeTierSelected; tier++)
+            for (var tier = edgeMinimumTier; tier <= EdgeTierSelected; tier++)
             {
                 foreach (var item in visibleStrokes)
                 {

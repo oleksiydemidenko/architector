@@ -36,6 +36,12 @@ public static partial class McpServer
         new("facts what-if", "facts what-if --move <Type|Assets/file.cs|Assets/folder>=<Layer> [--move ...]",
             "What moving types, files or folders to other layers would change: undeclared pairs and cycles added and removed, relationships that would lose their evidence. Changes nothing.",
             false, new[] { "move", "output" }),
+        new("route", "route <file|type>... [--limit N] [--json]",
+            "From a file path or type name to its layer (by code scope, then by linked node), the digest lines to read, connected layers, the documents worth reading and, for the node it names, the types that write and read its state (generated from the code facts). The text of architector_route; --json gives the same as structured JSON.",
+            false, new[] { "limit", "json" }),
+        new("digest", "digest [<layer>...] [--form compact|full|list] [--json]",
+            "The approved architecture. Without layers: the compact form of every approved layer (node, type, first sentence of its role, the types that write and read its state from the code facts, capped with a total). With layers (path or unique trailing part): their full sections with members, base types and relationships. --form overrides the default; list gives the layer names. The text of architector_digest; --json wraps it.",
+            false, new[] { "form", "json" }),
         new("facts dump", "facts dump <layer>", "A layer's nodes and relationships with ids, without layout, paged.", false, new[] { "offset", "limit", "output" }),
         new("facts lookup", "facts lookup <Layer/Path>[::Node Title[::Member]]...", "Layer, node and member ids by name.", false, Array.Empty<string>()),
         new("query", "query <action> [--<parameter> <value>]...",
@@ -56,7 +62,7 @@ public static partial class McpServer
         new("skill sync", "skill sync", "Updates every skill copy installed by Architector to the package version.", false, Array.Empty<string>())
     };
 
-    private static readonly string[] CliWords = { "facts", "query", "edit", "status", "doctor", "commands", "skill", "help", "--help", "-h" };
+    private static readonly string[] CliWords = { "facts", "route", "digest", "query", "edit", "status", "doctor", "commands", "skill", "help", "--help", "-h" };
 
     private static bool IsCliCommand(string word) => CliWords.Contains(word);
 
@@ -77,6 +83,15 @@ public static partial class McpServer
 
     private static int RunCli(string[] args)
     {
+        // Replies are UTF-8 on every platform: the Windows console code page would turn names and the digest's dashes
+        // into question marks.
+        try
+        {
+            Console.OutputEncoding = new System.Text.UTF8Encoding(false);
+        }
+        catch (Exception exception) when (exception is IOException or PlatformNotSupportedException)
+        {
+        }
         var (positional, options) = ParseArguments(args);
         pretty = options.ContainsKey("pretty");
         if (positional.Count == 0 || positional[0] is "help" or "--help" or "-h" || options.ContainsKey("help"))
@@ -112,6 +127,10 @@ public static partial class McpServer
                     return Emit(JsonNode.Parse(Status())!, ExitOk);
                 case "facts":
                     return CliFacts(positional, options);
+                case "route":
+                    return CliRoute(positional, options);
+                case "digest":
+                    return CliDigest(positional, options);
                 case "query":
                 case "edit":
                     return CliBridge(positional[0], positional, options);
@@ -207,6 +226,47 @@ public static partial class McpServer
         var model = FactsQueries.ArchitectureOnlyActions.Contains(action) ? cache.Architecture() : cache.Get();
         var answer = FactsQueries.Answer(model, action, arguments, root!);
         return Emit(answer, answer["success"]?.GetValue<bool>() == true ? ExitOk : ExitFailed);
+    }
+
+    // route and digest print the text of their MCP tools, which agents read directly; --json wraps it (route: the
+    // structured routes) so scripts still get JSON with success.
+    private static int CliRoute(List<string> positional, Dictionary<string, List<string>> options)
+    {
+        if (!HasData())
+            return Fail("no_architecture", NoData, ExitSetup);
+        if (positional.Count < 2)
+            return Fail("usage", "Usage: architector-mcp route <file|type>... [--limit N] [--json]", ExitUsage);
+        int? limit = null;
+        if (options.TryGetValue("limit", out var limitValues))
+        {
+            if (!int.TryParse(limitValues.Last(), out var parsed) || parsed < 1)
+                return Fail("usage", "--limit takes a positive number.", ExitUsage);
+            limit = parsed;
+        }
+        var json = options.ContainsKey("json");
+        var text = RouteText(positional.Skip(1), limit, json, out var allFound);
+        if (json)
+            return Emit(new JsonObject { ["success"] = allFound, ["routes"] = JsonNode.Parse(text) }, allFound ? ExitOk : ExitFailed);
+        Console.Out.Write(text);
+        return allFound ? ExitOk : ExitFailed;
+    }
+
+    private static int CliDigest(List<string> positional, Dictionary<string, List<string>> options)
+    {
+        if (!HasData())
+            return Fail("no_architecture", NoData, ExitSetup);
+        var arguments = new JsonObject { ["layers"] = Nodes(positional.Skip(1).Select(layer => (JsonNode?)layer)) };
+        if (options.TryGetValue("form", out var form))
+            arguments["form"] = form.Last();
+        else if (options.ContainsKey("full"))
+            arguments["form"] = "full";
+        var text = DigestText(arguments, out var error);
+        if (options.ContainsKey("json"))
+            return error ? Fail("digest", text, ExitFailed) : Emit(new JsonObject { ["success"] = true, ["text"] = text }, ExitOk);
+        if (error)
+            return Fail("digest", text, ExitFailed);
+        Console.Out.WriteLine(text);
+        return ExitOk;
     }
 
     private static int CliBridge(string tool, List<string> positional, Dictionary<string, List<string>> options)
@@ -409,7 +469,7 @@ public static partial class McpServer
         text.AppendLine();
         text.AppendLine("Global: --project <path> (default: the Unity project containing the current folder), --pretty (indented JSON).");
         text.AppendLine("Paged replies take --offset and --limit and report next_offset; --output file writes the full answer under Library/Architector/facts.");
-        text.AppendLine("Every reply is JSON with success. Exit codes: 0 success, 1 internal error, 2 usage, 4 setup missing, 6 success=false, 7 Unity Editor not reachable (retry when it is open).");
+        text.AppendLine("Every reply is JSON with success, except route and digest, which print the text of their MCP tools (--json gives JSON). Exit codes: 0 success, 1 internal error, 2 usage, 4 setup missing, 6 success=false, 7 Unity Editor not reachable (retry when it is open).");
         Console.Out.Write(text.ToString());
         return ExitOk;
     }
@@ -434,7 +494,7 @@ public static partial class McpServer
                 value = name[(equals + 1)..];
                 name = name[..equals];
             }
-            else if (index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal) && name is not ("pretty" or "force" or "help"))
+            else if (index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal) && name is not ("pretty" or "force" or "help" or "json" or "full"))
                 value = args[++index];
             else
                 value = "true";

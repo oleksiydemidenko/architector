@@ -13,8 +13,8 @@
 | Tool | Needs the Editor | Purpose |
 | --- | --- | --- |
 | `architector_status` | no | Which project is served, and whether the Editor is reachable |
-| `architector_route` | no | From a file or type to its layer, digest lines and documents |
-| `architector_digest` | no | The list of approved layers, or one layer's section |
+| `architector_route` | no | From a file or type to its layer, digest lines and documents; for the node it names, the types that write and read its state |
+| `architector_digest` | no | The approved layers: compact by default (node, type, one-line role, writers and readers from the code), full sections for named layers or groups with `form: full` |
 | `architector_query` | yes | Project, layer, approval, conformance and type queries |
 | `architector_edit` | yes | Work sessions, dry runs, plans and approvals |
 

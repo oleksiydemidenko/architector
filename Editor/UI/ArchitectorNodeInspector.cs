@@ -477,7 +477,10 @@ namespace Architector.Editor
                             GUIUtility.ExitGUI();
                         }
                     }
-                    GUILayout.Label(new GUIContent(member.declaration, member.declaration), EditorStyles.wordWrappedMiniLabel);
+                    declarationStyle ??= new GUIStyle(EditorStyles.wordWrappedMiniLabel) { richText = true };
+                    GUILayout.Label(
+                        new GUIContent(ArchitectorSemanticPalette.RichDeclaration(member.declaration, member.kind), member.declaration),
+                        declarationStyle);
                 }
                 if (string.Equals(pendingFocusNodeId, node.id, StringComparison.Ordinal)
                     && string.Equals(pendingFocusMemberId, member.id, StringComparison.Ordinal)
@@ -503,6 +506,8 @@ namespace Architector.Editor
                 MessageType.Info);
             EditorGUILayout.EndScrollView();
         }
+
+        private static GUIStyle declarationStyle;
 
         private static Color MemberStatusColor(ArchitectorMemberResolution resolution)
         {

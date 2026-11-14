@@ -46,7 +46,12 @@ namespace Architector.Editor
         private Rect edgeViewRect;
         private Vector3[] gridBuffer = Array.Empty<Vector3>();
         private readonly Dictionary<string, ArchitectorNodeRecord> nodesById = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, string[]> nodeRows = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, (string Text, string Kind)[]> nodeRows = new(StringComparer.Ordinal);
+        private readonly HashSet<string> focusNodeIds = new(StringComparer.Ordinal);
+        private int edgeMinimumTier = EdgeTierUnrelated;
+        private string memberScrollNodeId = string.Empty;
+        private int memberScrollOffset;
+        private GUIStyle memberRowStyle;
         private readonly Dictionary<(string value, int width, GUIStyle style), string> fittedText = new();
         private double viewStateSaveAt;
         private bool focusOnOpen;
@@ -267,17 +272,24 @@ namespace Architector.Editor
                 DrawGrid(localRect, repository.Settings.geometry.gridSize, palette.grid.ToColor());
                 DrawEdges(documents, palette, localRect);
                 DrawNodes(documents, palette, repository, localRect);
-                DrawConnectionAffordance(documents);
-                DrawSelectedEdgeAction(documents);
-                DrawSelectionMarquee(palette.selection.ToColor());
-                if (searchOpen && searchText.Trim().Length > 0)
+                if (UpdateFocusNodes(documents, out var selectionFocus))
                 {
-                    // Everything fades to about a third; the found nodes are drawn again at full strength.
+                    // Everything fades to about a third; the focused nodes (found by the search, the selected nodes and
+                    // the nodes related to them) are drawn again at full strength, and with a selection its relationships too.
                     var veil = palette.workspace.ToColor();
                     veil.a = 0.68f;
                     EditorGUI.DrawRect(localRect, veil);
-                    DrawNodes(documents, palette, repository, localRect, searchMatches);
+                    if (selectionFocus)
+                    {
+                        edgeMinimumTier = EdgeTierIncoming;
+                        DrawEdges(documents, palette, localRect);
+                        edgeMinimumTier = EdgeTierUnrelated;
+                    }
+                    DrawNodes(documents, palette, repository, localRect, focusNodeIds);
                 }
+                DrawConnectionAffordance(documents);
+                DrawSelectedEdgeAction(documents);
+                DrawSelectionMarquee(palette.selection.ToColor());
 
                 if (documents.semantic.nodes.Count == 0)
                 {
@@ -371,6 +383,34 @@ namespace Architector.Editor
                 var size = EditorStyles.boldLabel.CalcSize(found);
                 GUI.Label(new Rect(bar.xMax + 6f, bar.y + (bar.height - size.y) * 0.5f, size.x, size.y), found, EditorStyles.boldLabel);
             }
+        }
+
+        // The nodes kept at full brightness, or false when nothing is dimmed. One veil, one rule: an open search with
+        // text keeps its found nodes; a selection keeps the selected nodes and every node a relationship connects to
+        // them. Both apply together, except that the selection the search itself makes (all found nodes) adds no
+        // neighbours, so a search still shows only what it found until a node is picked.
+        private bool UpdateFocusNodes(ArchitectorLayerDocuments documents, out bool selectionFocus)
+        {
+            var searching = searchOpen && searchText.Trim().Length > 0;
+            // A marquee changes the selection on every move, so it dims nothing until it is released.
+            selectionFocus = selectedNodeIds.Count > 0 && !boxSelecting && !(searching && selectedNodeIds.SetEquals(searchMatches));
+            if (!searching && !selectionFocus)
+                return false;
+            focusNodeIds.Clear();
+            if (searching)
+                focusNodeIds.UnionWith(searchMatches);
+            if (selectionFocus)
+            {
+                focusNodeIds.UnionWith(selectedNodeIds);
+                foreach (var edge in documents.semantic.edges)
+                {
+                    if (selectedNodeIds.Contains(edge.sourceNodeId))
+                        focusNodeIds.Add(edge.targetNodeId);
+                    if (selectedNodeIds.Contains(edge.targetNodeId))
+                        focusNodeIds.Add(edge.sourceNodeId);
+                }
+            }
+            return true;
         }
 
         private void UpdateSearchMatches()
@@ -576,6 +616,12 @@ namespace Architector.Editor
                 return;
             }
 
+            if (current.type == EventType.ScrollWheel && ScrollSelectedMembers(mouse, current.delta.y))
+            {
+                requestRepaint?.Invoke();
+                current.Use();
+                return;
+            }
             if (current.type == EventType.ScrollWheel)
             {
                 var worldAtMouse = ScreenToWorld(mouse);
@@ -1294,7 +1340,7 @@ namespace Architector.Editor
             var casing = palette.workspace.ToColor();
             var hasSelection = selectedNodeIds.Count > 0 || !string.IsNullOrEmpty(selectedEdgeId);
             Handles.BeginGUI();
-            for (var tier = EdgeTierUnrelated; tier <= EdgeTierSelected; tier++)
+            for (var tier = edgeMinimumTier; tier <= EdgeTierSelected; tier++)
             {
                 edgesInTier.Clear();
                 foreach (var edge in documents.semantic.edges)
@@ -1877,19 +1923,51 @@ namespace Architector.Editor
             userState.FlushLayerViews();
         }
 
-        private string[] NodeRows(ArchitectorNodeRecord node)
+        private (string Text, string Kind)[] NodeRows(ArchitectorNodeRecord node)
         {
             if (nodeRows.TryGetValue(node.id, out var rows))
                 return rows;
-            var values = new List<string>();
+            var values = new List<(string Text, string Kind)>();
             if (node.type?.baseType != null)
-                values.Add($"base · {ArchitectorTypeReference.FullName(node.type.baseType)}");
+                values.Add(($"base · {ArchitectorTypeReference.FullName(node.type.baseType)}", "base"));
             values.AddRange((node.type?.interfaces ?? new List<ArchitectorTypeReferenceRecord>())
-                .Select(reference => $"interface · {ArchitectorTypeReference.FullName(reference)}"));
-            values.AddRange(ArchitectorMemberOrder.SortStable(node.members).Select(member => member.declaration));
+                .Select(reference => ($"interface · {ArchitectorTypeReference.FullName(reference)}", "interface")));
+            values.AddRange(ArchitectorMemberOrder.SortStable(node.members).Select(member => (member.declaration, member.kind)));
             rows = values.ToArray();
             nodeRows[node.id] = rows;
             return rows;
+        }
+
+        // Where a node's rows start and how many fit, the same in drawing and in scrolling.
+        private (float FirstRowY, int AvailableRows) MemberRowArea(ArchitectorNodeRecord node, Rect rect)
+        {
+            var memberY = rect.y + 5f + EditorGUIUtility.singleLineHeight + 5f;
+            if (!string.IsNullOrEmpty(node.responsibility) && memberY + EditorGUIUtility.singleLineHeight <= rect.yMax - 5f)
+                memberY += EditorGUIUtility.singleLineHeight;
+            return (memberY, Mathf.Max(0, Mathf.FloorToInt((rect.yMax - memberY - 5f) / EditorGUIUtility.singleLineHeight)));
+        }
+
+        // The selected node shows its whole list: the wheel over its rows scrolls them instead of zooming.
+        private bool ScrollSelectedMembers(Vector2 mouse, float delta)
+        {
+            var nodeId = SelectedNodeId;
+            if (nodeId.Length == 0 || zoom < MemberVisibilityZoom || !nodesById.TryGetValue(nodeId, out var node) || IsPortal(node))
+                return false;
+            var layout = hasCachedDocuments ? cachedDocuments.layout?.nodes.FirstOrDefault(candidate => candidate.nodeId == nodeId) : null;
+            if (layout == null)
+                return false;
+            var rect = GetScreenNodeRect(layout);
+            var (firstRowY, availableRows) = MemberRowArea(node, rect);
+            var total = NodeRows(node).Length;
+            if (total <= availableRows || availableRows == 0 || !rect.Contains(mouse) || mouse.y < firstRowY)
+                return false;
+            if (memberScrollNodeId != nodeId)
+            {
+                memberScrollNodeId = nodeId;
+                memberScrollOffset = 0;
+            }
+            memberScrollOffset = Mathf.Clamp(memberScrollOffset + (delta > 0f ? 3 : -3), 0, total - availableRows);
+            return true;
         }
 
         private string Fit(string value, float availableWidth, GUIStyle style)
@@ -2010,17 +2088,47 @@ namespace Architector.Editor
                 var availableRows = Mathf.Max(0, Mathf.FloorToInt((rect.yMax - memberY - 5f) / EditorGUIUtility.singleLineHeight));
                 var values = NodeRows(node);
                 var totalRows = values.Length;
+                // Rows that do not fit: an unselected node ends with a "+N more" row in place of its last row; the one
+                // selected node scrolls through all of them with the wheel. Only the rows in view are drawn.
+                var firstRow = 0;
                 var displayedCount = Mathf.Min(totalRows, availableRows);
+                var scrolls = totalRows > availableRows && availableRows > 0 && selectedNodeIds.Count == 1 && selectedNodeIds.Contains(node.id);
+                if (scrolls)
+                {
+                    if (memberScrollNodeId != node.id)
+                    {
+                        memberScrollNodeId = node.id;
+                        memberScrollOffset = 0;
+                    }
+                    firstRow = Mathf.Clamp(memberScrollOffset, 0, totalRows - availableRows);
+                }
+                else if (totalRows > availableRows)
+                    displayedCount = Mathf.Max(0, availableRows - 1);
+                memberRowStyle ??= new GUIStyle(EditorStyles.miniLabel) { richText = true, clipping = TextClipping.Clip };
+                GUI.contentColor = Color.white;
                 for (var index = 0; index < displayedCount; index++)
                 {
-                    var memberRect = new Rect(rect.x + 8f, memberY + index * EditorGUIUtility.singleLineHeight, rect.width - 16f, EditorGUIUtility.singleLineHeight);
-                    var declaration = Fit(values[index], memberRect.width, EditorStyles.miniLabel);
-                    GUI.Label(memberRect, declaration, EditorStyles.miniLabel);
+                    var memberRect = new Rect(rect.x + 8f, memberY + index * EditorGUIUtility.singleLineHeight, rect.width - (scrolls ? 20f : 16f), EditorGUIUtility.singleLineHeight);
+                    var row = values[firstRow + index];
+                    var declaration = Fit(row.Text, memberRect.width, EditorStyles.miniLabel);
+                    GUI.Label(memberRect, ArchitectorSemanticPalette.RichDeclaration(declaration, row.Kind), memberRowStyle);
                 }
-                if (totalRows > displayedCount && availableRows > 0)
+                GUI.contentColor = palette.typeText.ToColor();
+                if (scrolls)
                 {
-                    var moreRect = new Rect(rect.x + 8f, memberY + (availableRows - 1) * EditorGUIUtility.singleLineHeight, rect.width - 16f, EditorGUIUtility.singleLineHeight);
-                    GUI.Label(moreRect, $"+{totalRows - displayedCount + 1} more…", EditorStyles.miniLabel);
+                    var track = new Rect(rect.xMax - 9f, memberY, 3f, availableRows * EditorGUIUtility.singleLineHeight);
+                    var thumbHeight = Mathf.Max(8f, track.height * availableRows / totalRows);
+                    var thumbY = track.y + (track.height - thumbHeight) * firstRow / Mathf.Max(1, totalRows - availableRows);
+                    var trackColor = palette.selection.ToColor();
+                    trackColor.a = 0.18f;
+                    EditorGUI.DrawRect(track, trackColor);
+                    trackColor.a = 0.75f;
+                    EditorGUI.DrawRect(new Rect(track.x, thumbY, track.width, thumbHeight), trackColor);
+                }
+                else if (totalRows > displayedCount && availableRows > 0)
+                {
+                    var moreRect = new Rect(rect.x + 8f, memberY + displayedCount * EditorGUIUtility.singleLineHeight, rect.width - 16f, EditorGUIUtility.singleLineHeight);
+                    GUI.Label(moreRect, new GUIContent($"+{totalRows - displayedCount} more", "Select the node and scroll over its rows to see them all."), EditorStyles.centeredGreyMiniLabel);
                 }
                 GUI.contentColor = previousContentColor;
             }

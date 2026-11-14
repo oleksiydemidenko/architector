@@ -9,6 +9,10 @@ public static class Program
     private static readonly string[] DefaultDocumentRoots = { "Documentation", "docs" };
     private static string[] DocumentRoots = DefaultDocumentRoots;
 
+    // Set by the Architector server: for a node (layer id, node title) the types that write and read the state of its
+    // linked type, from the code facts, or null. Without it (the standalone tool) route names no writers or readers.
+    public static Func<string, string, (string? Writers, string? Readers)?>? NodeAccess;
+
     public static int Main(string[] args)
     {
         var positional = args.Where(arg => !arg.StartsWith("--")).ToList();
@@ -183,6 +187,8 @@ public static class Program
         public List<(Layer Layer, string Reason)> Layers = new();
         // Nodes linked to the queried type that sit in another layer than the one whose scope owns its file.
         public List<(Layer Layer, string Node)> LinkedElsewhere = new();
+        // The node the query names in each layer, for the writers and readers of its state.
+        public Dictionary<Layer, string> NodeHits = new();
         public List<(string Path, string Matches)> Documents = new();
         public Model Model = null!;
         public bool Found => Layers.Count > 0 || Documents.Count > 0;
@@ -229,6 +235,7 @@ public static class Program
                 var node = layer.Nodes.FirstOrDefault(node => (route.File != null && node.Files.Contains(route.File)) || route.Types.Contains(node.Type));
                 if (node.Title == null)
                     continue;
+                route.NodeHits[layer] = node.Title;
                 var owned = route.Layers.FindIndex(entry => entry.Layer == layer);
                 if (owned >= 0)
                     route.Layers[owned] = (layer, route.Layers[owned].Reason + ", node " + node.Title);
@@ -283,14 +290,31 @@ public static class Program
                 var connected = layer.Connected.Select(id => Model.Layers.FirstOrDefault(other => other.Id == id)?.Path).Where(path => path != null).Order(StringComparer.Ordinal).ToList();
                 if (connected.Count > 0)
                     text.AppendLine("    connected: " + string.Join(", ", connected));
+                WriteAccess(text, layer);
                 if (!approved)
                     foreach (var line in Model.Summary(layer))
                         text.AppendLine("    " + line);
             }
             foreach (var (layer, node) in LinkedElsewhere)
+            {
                 text.AppendLine($"  linked node in another layer: {layer.Path}::{node} (the file belongs to the layer above; conformance reports linked_node_outside_scope)");
+                WriteAccess(text, layer);
+            }
             foreach (var (path, matches) in Documents)
                 text.AppendLine($"  read: {path} ({matches})");
+        }
+
+        private (string? Writers, string? Readers)? Access(Layer layer) =>
+            NodeAccess != null && NodeHits.TryGetValue(layer, out var title) ? NodeAccess(layer.Id, title) : null;
+
+        private void WriteAccess(StringBuilder text, Layer layer)
+        {
+            if (Access(layer) is not { } access)
+                return;
+            if (access.Writers != null)
+                text.AppendLine($"    node {NodeHits[layer]} written by (code facts): {access.Writers}");
+            if (access.Readers != null)
+                text.AppendLine($"    node {NodeHits[layer]} read by (code facts): {access.Readers}");
         }
 
         public object ToJson()
@@ -307,9 +331,12 @@ public static class Program
                     purpose = entry.Layer.Purpose,
                     digest = Model.DigestSections.TryGetValue(entry.Layer.Path, out var section) ? $"{section.Start}-{section.End}" : null,
                     connected = entry.Layer.Connected.Select(id => Model.Layers.FirstOrDefault(other => other.Id == id)?.Path).Where(path => path != null).Order(StringComparer.Ordinal),
-                    design = Model.DigestSections.ContainsKey(entry.Layer.Path) ? null : Model.Summary(entry.Layer)
+                    design = Model.DigestSections.ContainsKey(entry.Layer.Path) ? null : Model.Summary(entry.Layer),
+                    node = NodeHits.TryGetValue(entry.Layer, out var title) ? title : null,
+                    written_by = Access(entry.Layer)?.Writers,
+                    read_by = Access(entry.Layer)?.Readers
                 }),
-                linked_elsewhere = LinkedElsewhere.Select(entry => new { layer = entry.Layer.Path, node = entry.Node }),
+                linked_elsewhere = LinkedElsewhere.Select(entry => new { layer = entry.Layer.Path, node = entry.Node, written_by = Access(entry.Layer)?.Writers, read_by = Access(entry.Layer)?.Readers }),
                 documents = Documents.Select(entry => new { path = entry.Path, matches = entry.Matches })
             };
         }

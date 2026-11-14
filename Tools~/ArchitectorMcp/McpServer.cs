@@ -7,7 +7,7 @@ using Architector.CodeFacts;
 public static partial class McpServer
 {
     private const string ProtocolVersion = "2025-06-18";
-    private const string Instructions = "Architector holds the architecture of this Unity project as layers with contracts. Before changing an unfamiliar file or type, call architector_route and read only what it names. Use architector_digest for approved layers. Code facts work without Unity: before reading a layer's code call architector_query layer_facts; before moving a scope call scope_what_if; layer_dump and lookup give ids by name. Writing needs the open Unity Editor: use architector_edit with a work session (begin_work, dry_run_plan, apply_plan, end_work). Saving does not approve. Approving needs the user's confirmation in the Editor unless capabilities reports agent_may_approve. With a shell, the same binary is a command line: architector_status gives its path (cli); run it with help.";
+    private const string Instructions = "Architector holds the architecture of this Unity project as layers with contracts. Before changing an unfamiliar file or type, call architector_route and read only what it names. architector_digest gives the approved layers in a compact form (nodes, types, one-line roles, writers and readers from the code); name layers for their full sections. Code facts work without Unity: before reading a layer's code call architector_query layer_facts; before moving a scope call scope_what_if; layer_dump and lookup give ids by name. Writing needs the open Unity Editor: use architector_edit with a work session (begin_work, dry_run_plan, apply_plan, end_work). Saving does not approve. Approving needs the user's confirmation in the Editor unless capabilities reports agent_may_approve. With a shell, the same binary is a command line: architector_status gives its path (cli); run it with help.";
     private static readonly UTF8Encoding Utf8 = new(false);
     private static string? root;
     private static FactsCache? facts;
@@ -105,14 +105,19 @@ public static partial class McpServer
     {
         return new JsonArray(
             Tool("architector_status", "Report the Unity project this server serves, whether it has architecture data and whether the Unity Editor is reachable. Works without Unity.", Schema(new JsonObject())),
-            Tool("architector_route", "From a file path or type name to its Architector layer, digest lines and the documents worth reading. Works without Unity.",
+            Tool("architector_route", "From a file path or type name to its Architector layer, digest lines and the documents worth reading; for the node it names, the types that write and read its state (from the code facts). Works without Unity.",
                 Schema(new JsonObject
                 {
                     ["queries"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "File paths or type names." },
                     ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Maximum documents per query, default 6." }
                 }, "queries")),
-            Tool("architector_digest", "Read the approved architecture. Without layer it lists the approved layers; with layer it returns that layer's section. Works without Unity.",
-                Schema(new JsonObject { ["layer"] = new JsonObject { ["type"] = "string", ["description"] = "Layer path, for example Core/Player/Movement." } })),
+            Tool("architector_digest", "Read the approved architecture. Without layers: the compact form of every approved layer (node, type, first sentence of its role, and the types that write and read its state, generated from the code facts). With layer or layers: the full sections (members, base types, relationships) of those layers. form overrides the default; list gives the layer names. Works without Unity.",
+                Schema(new JsonObject
+                {
+                    ["layer"] = new JsonObject { ["type"] = "string", ["description"] = "Layer path or a unique trailing part of it, for example Core/Player/Movement; a comma list names several." },
+                    ["layers"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Several layers." },
+                    ["form"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("compact", "full", "list"), ["description"] = "compact (default without layers), full (default with layers) or list (layer names only)." }
+                })),
             Tool("architector_query", "Read Architector data. code_evidence, layer_facts, scope_what_if, layer_dump, lookup, facts_audit (graph against facts), facts_snapshot and facts_diff answer without Unity from the code and the Architector files; the other actions need the open Unity Editor. Prefer the narrow actions node, relationships and dependency_path, or layer_graph with detail=summary, over a full layer_graph.", ActionSchema(
                 new[] { "capabilities", "work_status", "project_summary", "group_contents", "layer_graph", "node", "relationships", "dependency_path", "setup_check", "approval_status", "baseline_diff", "conformance", "find", "type_search", "type_contract", "validate", "code_evidence", "layer_facts", "scope_what_if", "layer_dump", "lookup", "facts_audit", "facts_snapshot", "facts_diff" },
                 new JsonObject
@@ -242,39 +247,15 @@ public static partial class McpServer
 
     private static string Route(JsonNode? arguments)
     {
-        var routeArguments = new List<string> { root! };
-        routeArguments.AddRange(arguments?["queries"]?.AsArray().Select(item => (string)item!) ?? Enumerable.Empty<string>());
-        if (arguments?["limit"] != null)
-            routeArguments.Add("--limit=" + (int)arguments["limit"]!);
-        var console = Console.Out;
-        var captured = new StringWriter();
-        Console.SetOut(captured);
-        try
-        {
-            Program.Main(routeArguments.ToArray());
-        }
-        finally
-        {
-            Console.SetOut(console);
-        }
-        return captured.ToString();
+        var queries = arguments?["queries"]?.AsArray().Select(item => (string)item!) ?? Enumerable.Empty<string>();
+        var limit = arguments?["limit"] == null ? (int?)null : (int)arguments["limit"]!;
+        return RouteText(queries, limit, false, out _);
     }
 
     private static JsonNode Digest(JsonNode? arguments)
     {
-        var path = Path.Combine(DataRoot, "Architecture.digest.md");
-        if (!File.Exists(path))
-            return Text("No layer is approved yet, so there is no digest. Use architector_query for drafts.", true);
-        var lines = File.ReadAllLines(path);
-        var headings = lines.Select((line, index) => (Line: line, Index: index)).Where(entry => entry.Line.StartsWith("## ")).ToList();
-        var layer = (string?)arguments?["layer"];
-        if (string.IsNullOrEmpty(layer))
-            return Text(string.Join("\n", headings.Select(entry => entry.Line[3..].Trim())), false);
-        var position = headings.FindIndex(entry => string.Equals(entry.Line[3..].Trim(), layer, StringComparison.OrdinalIgnoreCase));
-        if (position < 0)
-            return Text("No approved layer is called " + layer + ". Call architector_digest without layer for the list.", true);
-        var end = position + 1 < headings.Count ? headings[position + 1].Index : lines.Length;
-        return Text(string.Join("\n", lines[headings[position].Index..end]).TrimEnd(), false);
+        var text = DigestText(arguments, out var error);
+        return Text(text, error);
     }
 
     private static JsonNode Facts(JsonNode? arguments)
