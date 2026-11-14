@@ -2,7 +2,7 @@
 
 ## 1. Choose Your Access
 
-**File access needs an agent with a shell.** Nothing to install beyond the .NET SDK. The agent reads the digest and runs `context_route`.
+**File access needs an agent with a shell.** Nothing to install beyond the .NET SDK. The agent runs `context_route`.
 
 **The Architector MCP server is for MCP clients.** It is one program for Windows, macOS or Linux. It needs no .NET SDK and no other Unity MCP package.
 
@@ -64,10 +64,11 @@ Add this to your `AGENTS.md`, `CLAUDE.md` or Cursor rules. Keep it short: every 
 
 Architecture lives in `Architector/`. Do not edit its JSON by hand.
 
-- Before changing an unfamiliar file or type, run
+- Search the code for names and text. For what code does not show (which layer owns a file,
+  where a component is placed and which serialized lists hold it, who writes or reads a state type) run
   `dotnet run --project <architector package>/Tools~/ContextRoute -- . <file or type>`
-  and read only the digest lines and documents it prints.
-- `Architector/Architecture.digest.md` is the approved architecture. Do not read it whole.
+  or, with the server installed, `architector-mcp route <file or type>`.
+- `Architector/Architecture.digest.md` is for people. Do not read it whole; `architector-mcp digest <layer>` gives one layer.
 - To change the architecture, use `architector_edit` with a work session. Saving does not approve.
   Architector asks the user to confirm every approval.
 ```
