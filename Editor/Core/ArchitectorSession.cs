@@ -91,7 +91,10 @@ namespace Architector.Editor
             {
                 instance.AiWork.RefreshFromRecoveryMarker();
                 if (instance.Repository.StoredRevision > instance.Repository.Revision)
+                {
                     instance.Repository.RefreshExternalChanges();
+                    instance.Repository.AdoptStoredRevision();
+                }
             }
             catch (ArchitectorDataException)
             {

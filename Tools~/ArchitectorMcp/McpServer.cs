@@ -318,12 +318,22 @@ public static partial class McpServer
 
     private const string NotRunning = "The Unity Editor is not running for this project, or it is compiling. Open the project and try again. architector_route and architector_digest work without it.";
 
+    // As the command line: the Editor when its bridge answers now, otherwise the Architector core on the files.
     private static JsonNode Bridge(string tool, JsonNode? arguments)
     {
-        var answer = BridgeAnswer(tool, arguments, McpClient, out _);
-        if (answer == null)
-            return Text(NotRunning, true);
-        return Text(answer, !((bool?)JsonNode.Parse(answer)!["success"] ?? false));
+        var parameters = arguments?.DeepClone() as JsonObject ?? new JsonObject();
+        var answer = BridgeAnswer(tool, parameters, McpClient, out var reached, ClaimSeconds);
+        JsonNode reply;
+        if (answer != null && (string?)JsonNode.Parse(answer)!["code"] != "editor_timeout")
+        {
+            reply = JsonNode.Parse(answer)!;
+            reply["source"] = "editor";
+        }
+        else if (answer == null && reached && tool == "edit")
+            return Text("The Editor closed the connection after it got the edit, so the edit may have run. Check query work_status or the revision before you send it again.", true);
+        else
+            reply = LocalAnswer(tool, parameters, McpServerId, answer != null ? $"the Editor did not start the call in {ClaimSeconds} s" : "no Unity Editor answers now");
+        return Text(reply.ToJsonString(), !((bool?)reply["success"] ?? false));
     }
 
     // The bridge answers each client only while its own integration is on: "mcp" needs Architector MCP server,
@@ -335,7 +345,7 @@ public static partial class McpServer
 
     // The Editor's raw reply, or null when no Editor serves this project. sent is false when the request never
     // reached the Editor (no state file, connection refused), so a retry cannot run it twice.
-    private static string? BridgeAnswer(string tool, JsonNode? arguments, string clientName, out bool sent)
+    private static string? BridgeAnswer(string tool, JsonNode? arguments, string clientName, out bool sent, int? claimSeconds = null)
     {
         sent = false;
         if (!File.Exists(BridgeState))
@@ -348,7 +358,10 @@ public static partial class McpServer
             using var writer = new StreamWriter(stream, Utf8) { AutoFlush = true, NewLine = "\n" };
             using var reader = new StreamReader(stream, Utf8);
             sent = true;
-            writer.WriteLine(new JsonObject { ["token"] = (string?)bridge["token"], ["client"] = clientName, ["tool"] = tool, ["parameters"] = arguments?.DeepClone() ?? new JsonObject() }.ToJsonString());
+            var request = new JsonObject { ["token"] = (string?)bridge["token"], ["client"] = clientName, ["tool"] = tool, ["parameters"] = arguments?.DeepClone() ?? new JsonObject() };
+            if (claimSeconds != null)
+                request["claim_seconds"] = claimSeconds.Value;
+            writer.WriteLine(request.ToJsonString());
             var reply = reader.ReadLine();
             return tool == "edit" ? WithCodeReferences(reply) : reply;
         }

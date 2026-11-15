@@ -231,7 +231,7 @@ namespace Architector.Editor.Agents
                     if (planObject.Count == 1 && planObject["plan_token"]?.Type == JTokenType.String)
                     {
                         var token = planObject["plan_token"].Value<string>();
-                        if (!DryRunPlans.TryGetValue(token, out var cached))
+                        if (!TryGetDryRunPlan(token, out var cached))
                             return ArchitectorAgentResult.Fail("plan_token_unknown", new
                             {
                                 message = "The plan token is unknown or expired (for example after script compilation); send the full plan again.",
@@ -324,6 +324,51 @@ namespace Architector.Editor.Agents
         private static readonly Dictionary<string, (JObject plan, int revision)> DryRunPlans = new(StringComparer.Ordinal);
         private static readonly Queue<string> DryRunPlanOrder = new();
 
+        // Where a dry run also keeps its plan, so that apply_plan in another process (the next command line call) finds
+        // the token. Null keeps plans in memory only, as the Editor does.
+        public static string PlanTokenFolder { get; set; }
+
+        private static bool TryGetDryRunPlan(string token, out (JObject plan, int revision) cached)
+        {
+            if (DryRunPlans.TryGetValue(token, out cached))
+                return true;
+            if (string.IsNullOrEmpty(PlanTokenFolder) || token.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) >= 0)
+                return false;
+            var path = System.IO.Path.Combine(PlanTokenFolder, token + ".json");
+            try
+            {
+                if (!System.IO.File.Exists(path))
+                    return false;
+                var stored = JObject.Parse(System.IO.File.ReadAllText(path));
+                if (stored["plan"] is not JObject plan || stored["revision"]?.Type != JTokenType.Integer)
+                    return false;
+                cached = (plan, stored["revision"].Value<int>());
+                return true;
+            }
+            catch (Exception exception) when (exception is System.IO.IOException or UnauthorizedAccessException or Newtonsoft.Json.JsonException)
+            {
+                return false;
+            }
+        }
+
+        private static void StoreDryRunPlan(string token, JObject plan, int revision)
+        {
+            if (string.IsNullOrEmpty(PlanTokenFolder))
+                return;
+            try
+            {
+                System.IO.Directory.CreateDirectory(PlanTokenFolder);
+                ArchitectorJson.WriteTextAtomic(System.IO.Path.Combine(PlanTokenFolder, token + ".json"),
+                    new JObject { ["revision"] = revision, ["plan"] = plan }.ToString(Newtonsoft.Json.Formatting.None));
+                foreach (var old in new System.IO.DirectoryInfo(PlanTokenFolder).GetFiles("plan_*.json")
+                             .OrderByDescending(file => file.LastWriteTimeUtc).Skip(MaxDryRunPlans))
+                    old.Delete();
+            }
+            catch (Exception exception) when (exception is System.IO.IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+
         private static string RememberDryRunPlan(JObject plan, int revision)
         {
             var text = plan.ToString(Newtonsoft.Json.Formatting.None);
@@ -337,6 +382,7 @@ namespace Architector.Editor.Agents
                     DryRunPlans.Remove(DryRunPlanOrder.Dequeue());
             }
             DryRunPlans[token] = ((JObject)plan.DeepClone(), revision);
+            StoreDryRunPlan(token, plan, revision);
             return token;
         }
 
@@ -351,6 +397,13 @@ namespace Architector.Editor.Agents
                 "revoke_approvals" => "revoke the approval of",
                 _ => "revert to the approved version"
             };
+            if (ArchitectorApprovalGate.NobodyToAsk)
+                return ArchitectorAgentResult.Fail("needs_person", new
+                {
+                    message = "Only a person approves, revokes or reverts layers, in the open Unity Editor: no Editor serves this call. Ask the user to open the project and repeat it there.",
+                    revision = repository.Revision,
+                    layers = layerIds
+                });
             if (ArchitectorApprovalGate.Confirm($"An agent wants to {question}:\n\n{string.Join("\n", names)}"))
                 return null;
             return ArchitectorAgentResult.Fail("user_refused", new

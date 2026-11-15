@@ -154,6 +154,17 @@ namespace Architector.Editor
         // The revision another process stored, for example the command line after an edit without the Editor.
         public int StoredRevision => ReadStoredRevision();
 
+        // Takes a higher stored revision, so the Editor and the command line give agents the same count.
+        public bool AdoptStoredRevision()
+        {
+            var stored = ReadStoredRevision();
+            if (stored <= revision)
+                return false;
+            Revision = stored;
+            Changed?.Invoke();
+            return true;
+        }
+
         public bool RefreshExternalChanges()
         {
             var currentStamps = ReadDiskStamps();

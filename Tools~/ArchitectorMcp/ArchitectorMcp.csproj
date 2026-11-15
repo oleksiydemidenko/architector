@@ -12,6 +12,12 @@
     <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
   </PropertyGroup>
   <ItemGroup>
+    <!-- The Architector core (Editor/ compiled without Unity) answers query and edit on the files when no Editor answers. -->
+    <ProjectReference Include="../ArchitectorCore/ArchitectorCore.csproj" />
+    <TrimmerRootAssembly Include="ArchitectorCore" />
+    <TrimmerRootAssembly Include="Newtonsoft.Json" />
+  </ItemGroup>
+  <ItemGroup>
     <Compile Include="../ContextRoute/Program.cs" />
     <Compile Include="../CodeFacts/*.cs" />
   </ItemGroup>

@@ -336,25 +336,29 @@ public static partial class McpServer
         return ExitOk;
     }
 
-    // query and edit wait this long for a Unity Editor that runs for the project but whose bridge does not answer yet
-    // (compile, domain reload); --wait <seconds> changes it, 0 turns it off.
+    // With --source editor, query and edit wait this long for a Unity Editor that runs for the project but whose bridge
+    // does not answer yet (compile, domain reload); --wait <seconds> changes it, 0 turns it off. By default they do not
+    // wait: the Architector core answers on the files at once.
     private const int DefaultEditorWaitSeconds = 30;
     private const int EditorPollMilliseconds = 500;
 
-    private const string CliNotRunning = "The Unity Editor is not running for this project. Open the project in Unity and try again. facts, route, digest, slice, check and status work without it.";
+    private const string CliNotRunning = "The Unity Editor is not running for this project. Without --source editor, query and edit run on the Architector files.";
     private const string CliOff = "The integration 'Architector CLI' is off for this project. Turn it on in Window > Architector > Settings > AI > Connections.";
 
     private static int CliBridge(string tool, List<string> positional, Dictionary<string, List<string>> options)
     {
         if (positional.Count < 2)
-            return Fail("usage", $"Usage: architector-mcp {tool} <action> [--<parameter> <value>]... [--wait <seconds>]", ExitUsage);
+            return Fail("usage", $"Usage: architector-mcp {tool} <action> [--<parameter> <value>]... [--source auto|editor|files] [--wait <seconds>]", ExitUsage);
         var wait = DefaultEditorWaitSeconds;
         if (options.TryGetValue("wait", out var waitValues) && (!int.TryParse(waitValues.Last(), out wait) || wait < 0))
             return Fail("usage", "--wait takes whole seconds, 0 or more.", ExitUsage);
+        var source = options.TryGetValue("source", out var sourceValues) ? sourceValues.Last() : "auto";
+        if (source is not ("auto" or "editor" or "files"))
+            return Fail("usage", "--source is auto, editor or files.", ExitUsage);
         var arguments = new JsonObject { ["action"] = positional[1] };
         foreach (var (name, values) in options)
         {
-            if (name is "project" or "pretty" or "wait")
+            if (name is "project" or "pretty" or "wait" or "source")
                 continue;
             // A repeated flag (--layers A --layers B) is a list.
             if (values.Count > 1 && name != "plan")
@@ -366,6 +370,27 @@ public static partial class McpServer
             if (name == "plan" && File.Exists(value))
                 value = File.ReadAllText(value);
             arguments[name.Replace('-', '_')] = ParseValue(value);
+        }
+        if (source == "files")
+            return EmitReply(LocalAnswer(tool, arguments, CliId, "files were asked for"));
+        if (source == "auto")
+        {
+            // The Editor answers when its bridge answers now; otherwise the core answers on the files at once, so parallel
+            // agents never queue on one Editor. An edit the Editor got and did not answer is never run again here.
+            var editorAnswer = BridgeAnswer(tool, arguments, CliClient, out var reached, ClaimSeconds);
+            if (editorAnswer != null)
+            {
+                var editorReply = JsonNode.Parse(editorAnswer)!;
+                if ((string?)editorReply["code"] == "editor_timeout")
+                    return EmitReply(LocalAnswer(tool, arguments, CliId, $"the Editor did not start the call in {ClaimSeconds} s"));
+                editorReply["source"] = "editor";
+                return EmitReply(editorReply);
+            }
+            if (reached && tool == "edit")
+                return Fail("editor_unreachable", "The Editor closed the connection after it got the edit, so the edit may have run. Check query work_status or the revision before you send it again.", ExitEditor);
+            return EmitReply(LocalAnswer(tool, arguments, CliId, UnityRunning()
+                ? "Unity runs for this project, but its bridge does not answer now (compile, domain reload or a dialog)"
+                : "no Unity Editor serves this project"));
         }
         var answer = BridgeAnswer(tool, arguments, CliClient, out var sent);
         // Without a bridge to ask, the saved switch tells at once that waiting cannot help.
@@ -393,8 +418,11 @@ public static partial class McpServer
             return Fail("editor_unreachable", message, ExitEditor);
         }
         var reply = JsonNode.Parse(answer)!;
-        return Emit(reply, (bool?)reply["success"] == true ? ExitOk : ExitFailed);
+        reply["source"] = "editor";
+        return EmitReply(reply);
     }
+
+    private static int EmitReply(JsonNode reply) => Emit(reply, (bool?)reply["success"] == true ? ExitOk : ExitFailed);
 
     private static int Doctor()
     {

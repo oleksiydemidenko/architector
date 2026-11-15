@@ -157,6 +157,11 @@ namespace Architector.Editor.Agents
             var tool = (string)request["tool"];
             var integrationId = IntegrationFor((string)request["client"]);
             var parameters = request["parameters"] as JObject ?? new JObject();
+            // The command line gives a short claim time: a request the main thread does not start in it is cancelled
+            // here and never runs, and the command line answers it from the files.
+            var claimMilliseconds = (int?)request["claim_seconds"] is { } claimSeconds && claimSeconds > 0
+                ? Math.Min(claimSeconds * 1000, RequestTimeoutMilliseconds)
+                : RequestTimeoutMilliseconds;
             var completion = new TaskCompletionSource<string>();
             var claimed = 0;
             Pending.Enqueue(() =>
@@ -164,7 +169,7 @@ namespace Architector.Editor.Agents
                 if (Interlocked.Exchange(ref claimed, 1) == 0)
                     completion.SetResult(Run(tool, parameters, integrationId));
             });
-            if (completion.Task.Wait(RequestTimeoutMilliseconds))
+            if (completion.Task.Wait(claimMilliseconds))
                 return completion.Task.Result;
             if (Interlocked.Exchange(ref claimed, 1) == 0)
                 return ArchitectorAgentResult.Fail("editor_timeout", new { message = "The Unity Editor did not start this request, and it was cancelled. It may be compiling or paused without Run In Background." }).ToJson();
