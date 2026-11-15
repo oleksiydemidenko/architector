@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using UnityEditor;
 
 namespace Architector.Editor
 {
@@ -188,10 +187,10 @@ namespace Architector.Editor
                     knownEntries = knownEntries.ToList()
                 });
             }
-            SessionState.SetString(TokenKey, workToken);
-            SessionState.SetString(LabelKey, label);
-            SessionState.SetInt(RevisionKey, startedRevision);
-            SessionState.SetString(EntriesKey, string.Join("\n", knownEntries));
+            ArchitectorHost.Current.Session.SetString(TokenKey, workToken);
+            ArchitectorHost.Current.Session.SetString(LabelKey, label);
+            ArchitectorHost.Current.Session.SetInt(RevisionKey, startedRevision);
+            ArchitectorHost.Current.Session.SetString(EntriesKey, string.Join("\n", knownEntries));
         }
 
         private void RestorePersistedState()
@@ -205,17 +204,17 @@ namespace Architector.Editor
                 label = string.IsNullOrWhiteSpace(marker.label) ? "AI Working" : marker.label.Trim();
                 startedRevision = marker.startedRevision;
                 knownEntries = marker.knownEntries?.ToArray() ?? Array.Empty<string>();
-                SessionState.SetString(TokenKey, workToken);
-                SessionState.SetString(LabelKey, label);
-                SessionState.SetInt(RevisionKey, startedRevision);
-                SessionState.SetString(EntriesKey, string.Join("\n", knownEntries));
+                ArchitectorHost.Current.Session.SetString(TokenKey, workToken);
+                ArchitectorHost.Current.Session.SetString(LabelKey, label);
+                ArchitectorHost.Current.Session.SetInt(RevisionKey, startedRevision);
+                ArchitectorHost.Current.Session.SetString(EntriesKey, string.Join("\n", knownEntries));
                 return;
             }
 
-            workToken = SessionState.GetString(TokenKey, string.Empty);
-            label = SessionState.GetString(LabelKey, string.Empty);
-            startedRevision = SessionState.GetInt(RevisionKey, -1);
-            knownEntries = SessionState.GetString(EntriesKey, string.Empty)
+            workToken = ArchitectorHost.Current.Session.GetString(TokenKey, string.Empty);
+            label = ArchitectorHost.Current.Session.GetString(LabelKey, string.Empty);
+            startedRevision = ArchitectorHost.Current.Session.GetInt(RevisionKey, -1);
+            knownEntries = ArchitectorHost.Current.Session.GetString(EntriesKey, string.Empty)
                 .Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
         }
 
@@ -225,10 +224,10 @@ namespace Architector.Editor
                 return;
             if (recoveryPath.Length > 0 && File.Exists(recoveryPath))
                 File.Delete(recoveryPath);
-            SessionState.EraseString(TokenKey);
-            SessionState.EraseString(LabelKey);
-            SessionState.EraseInt(RevisionKey);
-            SessionState.EraseString(EntriesKey);
+            ArchitectorHost.Current.Session.Erase(TokenKey);
+            ArchitectorHost.Current.Session.Erase(LabelKey);
+            ArchitectorHost.Current.Session.Erase(RevisionKey);
+            ArchitectorHost.Current.Session.Erase(EntriesKey);
         }
 
         [Serializable]

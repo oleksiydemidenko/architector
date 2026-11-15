@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The mechanics of Architector (model, storage codec, validation, approvals and baselines, plans, the agent query and
+       edit handlers, conformance), compiled from the package's Editor/ files without Unity. The Unity package is the
+       interface on top: windows, canvas, style, Undo and the Editor bridge stay out. C# 9 as in Unity. -->
+  <PropertyGroup>
+    <TargetFramework>net$([System.Version]::Parse('$(NETCoreSdkVersion)').Major).0</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <IsTrimmable>false</IsTrimmable>
+    <NoWarn>$(NoWarn);CS0649;CS0414;CS0169</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Editor/**/*.cs" Exclude="../../Editor/UI/**;../../Editor/Unity/**;../../Editor/Mcp/**;../../Editor/McpMurzak/**;../../Editor/Agents/ArchitectorAgentBridge.cs;../../Editor/Agents/ArchitectorIntegrationsWindow.cs;../../Editor/Agents/ArchitectorIntegrationsWindow.Catalog.cs;../../Editor/Agents/ArchitectorMcpInstaller.cs;../../Editor/Agents/ArchitectorServerMaintenance.cs;../../Editor/Core/ArchitectorPackageUpdates.cs;../../Editor/Core/ArchitectorReleaseAssets.cs;../../Editor/Core/ArchitectorIntegrationUpdates.cs;../../Editor/Core/ArchitectorServerCache.cs;../../Editor/Core/ArchitectorSession.cs;../../Editor/Core/ArchitectorPackagePaths.cs;../../Editor/Core/ArchitectorPackageUpdateProvider.cs;../../Editor/Agents/ArchitectorAgentApi.cs;../../Editor/Agents/ArchitectorAgentBridgeProbe.cs;../../Editor/Agents/ArchitectorAgentCliProbe.cs;../../Editor/Agents/ArchitectorIntegrationEntry.cs;../../Editor/Agents/ArchitectorIntegrationCatalog.cs;../../Editor/Persistence/ArchitectorAiGateway.cs" />
+    <Compile Include="UnityGeometry.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="architector-mcp" />
+    <InternalsVisibleTo Include="ArchitectorCore.Tests" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+</Project>

@@ -48,7 +48,7 @@ namespace Architector.Editor
             private set
             {
                 revision = value;
-                UnityEditor.SessionState.SetInt(RevisionSessionKey, value);
+                ArchitectorHost.Current.Session.SetInt(RevisionSessionKey, value);
                 WriteStoredRevision(value);
             }
         }
@@ -98,7 +98,7 @@ namespace Architector.Editor
             EnsureStorageExists();
             var files = ReadDiskFiles(out var stamps);
             Install(ArchitectorStorageCodec.Decode(files), ReadSettings(files), files, stamps);
-            revision = Math.Max(Math.Max(revision, UnityEditor.SessionState.GetInt(RevisionSessionKey, 0)), ReadStoredRevision());
+            revision = Math.Max(Math.Max(revision, ArchitectorHost.Current.Session.GetInt(RevisionSessionKey, 0)), ReadStoredRevision());
             Revision++;
         }
 
@@ -817,35 +817,6 @@ namespace Architector.Editor
                 hash *= 1099511628211UL;
             }
             return hash.ToString("x16");
-        }
-
-        public void ArrangeNodes(
-            string layerId,
-            IReadOnlyCollection<string> nodeIds = null,
-            IReadOnlyCollection<string> centers = null)
-        {
-            var view = LoadLayerView(layerId);
-            var arranged = nodeIds == null ? null : new HashSet<string>(nodeIds, StringComparer.Ordinal);
-            var portals = view.semantic.nodes.Where(IsPortal).Select(node => node.id).ToHashSet(StringComparer.Ordinal);
-            var nodes = view.layout.nodes
-                .Where(node => arranged == null || arranged.Contains(node.nodeId))
-                .Select(node => new ArchitectorArrangeNode(node.nodeId, node.x, node.y, node.width, node.height, portals.Contains(node.nodeId)))
-                .ToArray();
-            if (nodes.Length == 0)
-                return;
-            var edges = view.semantic.edges
-                .Select(edge => new ArchitectorArrangeEdge(edge.sourceNodeId, edge.targetNodeId, edge.kind))
-                .ToArray();
-            var positions = ArchitectorGraphArranger.Arrange(
-                nodes,
-                edges,
-                Settings.geometry.minimumNodeGap,
-                Settings.geometry.snapToGrid ? Settings.geometry.gridSize : 1f,
-                Settings.arrange.maxGroupRelationships,
-                centers,
-                Settings.optimization.relationshipMerging,
-                Settings.arrange.improvementSeconds);
-            MoveNodes(layerId, positions, "Arrange Nodes");
         }
 
         public int RelinkNode(

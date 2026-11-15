@@ -1,7 +1,11 @@
 using System;
 using System.IO;
 using System.Text;
-using UnityEngine;
+#if UNITY_EDITOR
+using JsonText = UnityEngine.JsonUtility;
+#else
+using JsonText = Architector.Editor.ArchitectorJsonText;
+#endif
 
 namespace Architector.Editor
 {
@@ -14,7 +18,7 @@ namespace Architector.Editor
             try
             {
                 var json = File.ReadAllText(path, Encoding.UTF8);
-                var value = JsonUtility.FromJson<T>(json);
+                var value = JsonText.FromJson<T>(json);
                 if (value == null)
                     throw new ArchitectorDataException($"Document '{path}' is empty or invalid.");
                 return value;
@@ -31,8 +35,15 @@ namespace Architector.Editor
 
         public static string Serialize<T>(T value)
         {
-            return JsonUtility.ToJson(value, true).Replace("\r\n", "\n") + "\n";
+            return ToText(value).Replace("\r\n", "\n") + "\n";
         }
+
+        // Unity writes with JsonUtility; the core without Unity writes the same text with ArchitectorJsonText.
+#if UNITY_EDITOR
+        private static string ToText<T>(T value) => JsonText.ToJson(value, true);
+#else
+        private static string ToText<T>(T value) => JsonText.ToJson(value);
+#endif
 
         public static T Deserialize<T>(string json, string description = "JSON document")
         {
@@ -41,7 +52,7 @@ namespace Architector.Editor
 
             try
             {
-                var value = JsonUtility.FromJson<T>(json);
+                var value = JsonText.FromJson<T>(json);
                 if (value == null)
                     throw new ArchitectorDataException($"{description} is invalid.");
                 return value;
@@ -58,7 +69,7 @@ namespace Architector.Editor
 
         public static T Clone<T>(T value)
         {
-            return JsonUtility.FromJson<T>(Serialize(value));
+            return JsonText.FromJson<T>(Serialize(value));
         }
 
         public static void WriteAtomic<T>(string path, T value)

@@ -4,8 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
-using UnityEditor;
-using UnityEngine;
 
 namespace Architector.Editor
 {
@@ -117,10 +115,10 @@ namespace Architector.Editor
         public static event Action Changed;
 
         public static ArchitectorAgentPreferences Current =>
-            current ??= new ArchitectorAgentPreferences(Path.GetFullPath(Path.Combine(Application.dataPath, "..")));
+            current ??= new ArchitectorAgentPreferences(ArchitectorHost.Current.ProjectRoot);
 
         public ArchitectorAgentWorkflowMode Mode =>
-            ArchitectorAgentWorkflowModes.Find(EditorPrefs.GetString(keyPrefix + "WorkflowMode", ArchitectorAgentWorkflowModes.Safe));
+            ArchitectorAgentWorkflowModes.Find(ArchitectorHost.Current.Preferences.GetString(keyPrefix + "WorkflowMode", ArchitectorAgentWorkflowModes.Safe));
 
         public string WorkflowMode
         {
@@ -130,27 +128,27 @@ namespace Architector.Editor
                 var mode = ArchitectorAgentWorkflowModes.Find(value).Id;
                 if (string.Equals(mode, WorkflowMode, StringComparison.Ordinal))
                     return;
-                EditorPrefs.SetString(keyPrefix + "WorkflowMode", mode);
+                ArchitectorHost.Current.Preferences.SetString(keyPrefix + "WorkflowMode", mode);
                 Changed?.Invoke();
             }
         }
 
         public bool LockWindowsDuringAgentWork
         {
-            get => EditorPrefs.GetBool(keyPrefix + "LockWindowsDuringAgentWork", true);
+            get => ArchitectorHost.Current.Preferences.GetBool(keyPrefix + "LockWindowsDuringAgentWork", true);
             set
             {
                 if (value == LockWindowsDuringAgentWork)
                     return;
-                EditorPrefs.SetBool(keyPrefix + "LockWindowsDuringAgentWork", value);
+                ArchitectorHost.Current.Preferences.SetBool(keyPrefix + "LockWindowsDuringAgentWork", value);
                 Changed?.Invoke();
             }
         }
 
         public void Clear()
         {
-            EditorPrefs.DeleteKey(keyPrefix + "WorkflowMode");
-            EditorPrefs.DeleteKey(keyPrefix + "LockWindowsDuringAgentWork");
+            ArchitectorHost.Current.Preferences.Erase(keyPrefix + "WorkflowMode");
+            ArchitectorHost.Current.Preferences.Erase(keyPrefix + "LockWindowsDuringAgentWork");
             Changed?.Invoke();
         }
     }

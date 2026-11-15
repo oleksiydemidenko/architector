@@ -177,7 +177,7 @@ namespace Architector.Editor.Agents
                         "linked_node_outside_scope warns when a linked node sits outside the layer whose code scope owns its type; architector_route and the code facts place the type by the scope owner.",
                         "Group and layer names are unique among siblings; the path identifies an entry.",
                         "A layer with an approval baseline shows only Portals to other approved layers; layer_graph marks the others visible_in_layer=false. Hidden Portals remain canonical and validated.",
-                        "Layer code scope (layerScopes: folders or single files, and namespaces; the most specific entry wins) maps code to layers for the dependency evidence tool; it does not affect approval. Run: dotnet run --project \"" + ArchitectorPackagePaths.DependencyEvidenceProject + "\" -- <repository root>.",
+                        "Layer code scope (layerScopes: folders or single files, and namespaces; the most specific entry wins) maps code to layers for the dependency evidence tool; it does not affect approval. Run: dotnet run --project \"" + DependencyEvidenceProject + "\" -- <repository root>.",
                         "A locked group (locked=true) rejects every change to its groups, layers, layouts and approvals, and new dependencies from inside it to outside. Portals and relationships into it are allowed. There is no unlock action: never try to bypass a lock or find its password; propose the change to the user.",
                         "type_search ranks runtime assemblies before Editor and Tests assemblies and returns key, name, kind, first source and existing occurrences.",
                         "dry_run_plan returns plan_token; apply_plan with plan={\"plan_token\": \"...\"} applies the same plan without resending it while the revision is unchanged.",
@@ -353,6 +353,13 @@ namespace Architector.Editor.Agents
                 steps = path.Select(edge => EdgeView(repository, edge)).ToArray()
             });
         }
+
+        // The package path is known inside Unity; the command line names the package folder.
+#if UNITY_EDITOR
+        private static string DependencyEvidenceProject => ArchitectorPackagePaths.DependencyEvidenceProject;
+#else
+        private static string DependencyEvidenceProject => "<Architector package>/Tools~/DependencyEvidence";
+#endif
 
         private static object SetupCheck(ArchitectorRepository repository, ArchitectorTypeIndex typeIndex)
         {

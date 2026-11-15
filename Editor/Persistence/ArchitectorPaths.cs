@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using UnityEngine;
 
 namespace Architector.Editor
 {
@@ -50,8 +49,7 @@ namespace Architector.Editor
 
         public static ArchitectorPaths ForCurrentProject()
         {
-            var root = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-            return new ArchitectorPaths(root);
+            return new ArchitectorPaths(ArchitectorHost.Current.ProjectRoot);
         }
 
         public static string GroupPath(string groupId) => $"{GroupsDirectoryName}/{groupId}{GroupFileSuffix}";

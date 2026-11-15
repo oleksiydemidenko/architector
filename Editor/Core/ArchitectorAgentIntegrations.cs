@@ -1,8 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+#if UNITY_EDITOR
 using UnityEditor;
-using UnityEditor.PackageManager;
+#endif
 
 namespace Architector.Editor
 {
@@ -107,16 +108,20 @@ namespace Architector.Editor
         private static IReadOnlyList<ArchitectorAgentIntegrationDescriptor> Discover()
         {
             var known = new List<ArchitectorAgentIntegrationDescriptor> { CoplayUnityMcp, IvanMurzakUnityMcp };
+#if UNITY_EDITOR
             foreach (var probe in Probes())
             {
                 var descriptor = probe.Descriptor;
                 if (descriptor != null && known.All(candidate => candidate.id != descriptor.id))
                     known.Add(descriptor);
             }
+#endif
             return known.OrderByDescending(descriptor => descriptor.builtIn)
                 .ThenBy(descriptor => descriptor.displayName, StringComparer.Ordinal).ToList();
         }
 
+#if UNITY_EDITOR
+        // Packages, adapters and their setup are known only inside the Unity Editor.
         public static ArchitectorAgentIntegrationProbeResult Probe(
             ArchitectorAgentIntegrationDescriptor descriptor,
             bool enabled)
@@ -168,5 +173,6 @@ namespace Architector.Editor
                 .Where(type => !type.IsAbstract && !type.IsInterface)
                 .Select(type => (IArchitectorAgentIntegrationProbe)Activator.CreateInstance(type));
         }
+#endif
     }
 }

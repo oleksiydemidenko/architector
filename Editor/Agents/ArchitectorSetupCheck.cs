@@ -1,7 +1,9 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+#if UNITY_EDITOR
 using UnityEditor;
+#endif
 
 namespace Architector.Editor.Agents
 {
@@ -25,10 +27,10 @@ namespace Architector.Editor.Agents
         {
             var roots = repository.Settings.sourceIndex.includedRoots;
             var missingRoots = roots
-                .Where(root => !Directory.Exists(Path.Combine(ArchitectorMcpInstaller.ProjectRoot, root)))
+                .Where(root => !Directory.Exists(Path.Combine(ArchitectorHost.Current.ProjectRoot, root)))
                 .ToArray();
             var typeCount = typeIndex.Types.Count;
-            return new[]
+            var items = new List<ArchitectorSetupItem>
             {
                 new ArchitectorSetupItem(
                     "Source Roots",
@@ -41,7 +43,12 @@ namespace Architector.Editor.Agents
                 new ArchitectorSetupItem(
                     "Indexed Types",
                     typeCount > 0,
-                    typeCount > 0 ? typeCount.ToString() : "No types found. Check the source roots in Settings."),
+                    typeCount > 0 ? typeCount.ToString() : "No types found. Check the source roots in Settings.")
+            };
+#if UNITY_EDITOR
+            // The server binary, the bridge and the player setting are the Unity Editor's; the command line has none.
+            items.AddRange(new[]
+            {
                 new ArchitectorSetupItem(
                     "MCP Server and CLI",
                     ArchitectorMcpInstaller.IsInstalled,
@@ -56,7 +63,9 @@ namespace Architector.Editor.Agents
                     PlayerSettings.runInBackground
                         ? "On."
                         : "Off. The Editor stops answering agents while its window has no focus.")
-            };
+            });
+#endif
+            return items;
         }
     }
 }

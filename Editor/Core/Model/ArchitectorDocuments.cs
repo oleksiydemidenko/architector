@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+#if UNITY_EDITOR
 using UnityEngine;
+#endif
 
 namespace Architector.Editor
 {
@@ -139,8 +141,10 @@ namespace Architector.Editor
     [Serializable]
     public sealed class ArchitectorArrangeSettings
     {
+        public const float DefaultImprovementSeconds = 5f;
+
         public int maxGroupRelationships = 16;
-        public float improvementSeconds = ArchitectorGraphArranger.DefaultImprovementSeconds;
+        public float improvementSeconds = DefaultImprovementSeconds;
     }
 
     [Serializable]
@@ -250,6 +254,7 @@ namespace Architector.Editor
             this.a = a;
         }
 
+#if UNITY_EDITOR
         public Color ToColor() => new(r, g, b, a);
 
         public void Set(Color color)
@@ -259,6 +264,7 @@ namespace Architector.Editor
             b = color.b;
             a = color.a;
         }
+#endif
     }
 
     [Serializable]

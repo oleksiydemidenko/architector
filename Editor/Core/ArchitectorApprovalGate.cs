@@ -1,6 +1,4 @@
 using System;
-using UnityEditor;
-using UnityEngine;
 
 namespace Architector.Editor
 {
@@ -10,8 +8,9 @@ namespace Architector.Editor
 
         private static bool AskUser(string question)
         {
-            return !Application.isBatchMode
-                   && EditorUtility.DisplayDialog("Agent Request", question, "Allow", "Refuse");
+            // Batch mode and the command line have nobody to ask: the request is refused.
+            return ArchitectorHost.Current.CanAskPerson
+                   && ArchitectorHost.Current.AskPerson("Agent Request", question, "Allow", "Refuse");
         }
     }
 }

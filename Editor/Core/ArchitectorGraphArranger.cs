@@ -50,7 +50,7 @@ namespace Architector.Editor
         private const int RoutePatience = 20;
         private const float RouteCrossingCost = 64f;
         private const float RouteBendCost = 64f;
-        public const float DefaultImprovementSeconds = 5f;
+        public const float DefaultImprovementSeconds = ArchitectorArrangeSettings.DefaultImprovementSeconds;
 
         public static Dictionary<string, ArchitectorPoint> Arrange(
             IReadOnlyList<ArchitectorArrangeNode> nodes,
