@@ -166,13 +166,6 @@ namespace Architector.Editor
                 {
                     if (box.Expanded)
                     {
-                        using (new EditorGUILayout.HorizontalScope())
-                        {
-                            GUILayout.FlexibleSpace();
-                            if (GUILayout.Button("Add", EditorStyles.miniButton, GUILayout.Width(50f)))
-                                ShowAddMemberMenu();
-                        }
-
                         members = ArchitectorMemberOrder.SortStable(members);
                         for (var index = 0; index < members.Count; index++)
                         {
@@ -191,6 +184,8 @@ namespace Architector.Editor
                                 }
                             }
                         }
+                        if (ListAddButton("Add a member"))
+                            ShowAddMemberMenu();
                     }
                 }
                 DrawRelationships(layerId, node, repository, revealNode);
@@ -463,27 +458,6 @@ namespace Architector.Editor
             {
                 if (box.Expanded)
                 {
-                    using (new EditorGUILayout.HorizontalScope())
-                    {
-                        GUILayout.FlexibleSpace();
-                        using (new EditorGUI.DisabledScope(resolution != ArchitectorTypeResolution.Resolved))
-                        {
-                            if (GUILayout.Button("Add", EditorStyles.miniButton, GUILayout.Width(50f)))
-                            {
-                                var selectedKeys = new HashSet<string>(node.members.Select(member => member.symbolKey), StringComparer.Ordinal);
-                                var available = typeIndex.GetMembers(node.type)
-                                    .Where(member => !selectedKeys.Contains(member.SymbolKey))
-                                    .ToArray();
-                                var screenPosition = GUIUtility.GUIToScreenPoint(Event.current.mousePosition);
-                                ArchitectorMemberPickerWindow.Show(
-                                    screenPosition,
-                                    available,
-                                    repository.Settings.optimization,
-                                    indexedMember => execute(() => repository.AddLinkedMember(layerId, node.id, indexedMember)),
-                                    indexedMembers => execute(() => repository.AddLinkedMembers(layerId, node.id, indexedMembers)));
-                            }
-                        }
-                    }
                     foreach (var member in ArchitectorMemberOrder.SortStable(node.members))
                     {
                         var memberResolution = typeIndex.ResolveMember(node.type, member);
@@ -513,6 +487,23 @@ namespace Architector.Editor
                             scroll.y = Mathf.Max(0f, memberRect.y - 28f);
                             pendingFocusNodeId = string.Empty;
                             pendingFocusMemberId = string.Empty;
+                        }
+                    }
+                    using (new EditorGUI.DisabledScope(resolution != ArchitectorTypeResolution.Resolved))
+                    {
+                        if (ListAddButton("Add members of the linked type"))
+                        {
+                            var selectedKeys = new HashSet<string>(node.members.Select(member => member.symbolKey), StringComparer.Ordinal);
+                            var available = typeIndex.GetMembers(node.type)
+                                .Where(member => !selectedKeys.Contains(member.SymbolKey))
+                                .ToArray();
+                            var screenPosition = GUIUtility.GUIToScreenPoint(Event.current.mousePosition);
+                            ArchitectorMemberPickerWindow.Show(
+                                screenPosition,
+                                available,
+                                repository.Settings.optimization,
+                                indexedMember => execute(() => repository.AddLinkedMember(layerId, node.id, indexedMember)),
+                                indexedMembers => execute(() => repository.AddLinkedMembers(layerId, node.id, indexedMembers)));
                         }
                     }
                 }
@@ -617,9 +608,8 @@ namespace Architector.Editor
                     var color = KindColor(kind, palette);
                     style.normal.textColor = style.onNormal.textColor = style.hover.textColor = style.onHover.textColor
                         = style.active.textColor = style.onActive.textColor = style.focused.textColor = style.onFocused.textColor = color;
-                    var count = rows.Count(row => string.Equals(row.Kind, kind, StringComparison.Ordinal));
                     var on = shown.Contains(kind);
-                    var now = GUILayout.Toggle(on, new GUIContent($"{ArchitectorEdgeKinds.DisplayName(kind)} ({count})", $"Show {ArchitectorEdgeKinds.DisplayName(kind)} relationships"), style);
+                    var now = GUILayout.Toggle(on, new GUIContent(ArchitectorEdgeKinds.DisplayName(kind), $"Show {ArchitectorEdgeKinds.DisplayName(kind)} relationships"), style);
                     if (now == on)
                         continue;
                     if (now)
@@ -741,6 +731,21 @@ namespace Architector.Editor
                     "Signature changed since the member was linked."),
                 _ => null
             };
+        }
+
+        private static GUIStyle listFooterStyle;
+        private static GUIStyle listFooterButtonStyle;
+
+        private static bool ListAddButton(string tooltip)
+        {
+            listFooterStyle ??= new GUIStyle("RL Footer");
+            listFooterButtonStyle ??= new GUIStyle("RL FooterButton");
+            var rect = GUILayoutUtility.GetRect(4f, 20f, GUILayout.ExpandWidth(true));
+            var footer = new Rect(rect.xMax - 33f, rect.y, 33f, rect.height);
+            if (Event.current.type == EventType.Repaint)
+                listFooterStyle.Draw(footer, false, false, false, false);
+            var button = new Rect(footer.x + 4f, footer.y, 25f, 16f);
+            return GUI.Button(button, EditorGUIUtility.TrIconContent("Toolbar Plus", tooltip), listFooterButtonStyle);
         }
 
         private static bool RemoveButton()
