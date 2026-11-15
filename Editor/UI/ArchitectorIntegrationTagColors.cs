@@ -1,12 +1,34 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
 
-namespace Architector.Editor.Agents
+namespace Architector.Editor
 {
-    internal static class ArchitectorIntegrationTagColors
+    // Tag colours of the Integrations window, shared with Settings > AI > Connections.
+    public static class ArchitectorIntegrationTagColors
     {
+        private static readonly Regex TransportWords = new(@"\b(MCP|CLI)\b", RegexOptions.CultureInvariant);
+        private static GUIStyle richLabel;
+
+        public static GUIStyle RichLabel => richLabel ??= new GUIStyle(EditorStyles.label) { richText = true };
+
+        // A name for a rich-text label with every "MCP" and "CLI" in its tag colour; the rest keeps the label colour.
+        public static string NameText(string name)
+        {
+            return TransportWords.Replace(name ?? string.Empty, match => Text(match.Value));
+        }
+
+        // "on" in green, "off" in red, readable in both themes.
+        public static string SwitchText(bool on)
+        {
+            var color = on
+                ? Theme(new Color(0.42f, 0.86f, 0.46f), new Color(0.00f, 0.39f, 0.09f))
+                : Theme(new Color(1.00f, 0.45f, 0.42f), new Color(0.66f, 0.06f, 0.04f));
+            return $"<color=#{ColorUtility.ToHtmlStringRGB(color)}>{(on ? "on" : "off")}</color>";
+        }
+
         private static readonly Dictionary<string, GUIStyle> Styles = new(StringComparer.OrdinalIgnoreCase);
 
         private static readonly (Color dark, Color light)[] Spare =
@@ -24,7 +46,7 @@ namespace Architector.Editor.Agents
             if (string.Equals(tag, "MCP", StringComparison.OrdinalIgnoreCase))
                 return Theme(new Color(0.40f, 0.74f, 1.00f), new Color(0.00f, 0.36f, 0.68f));
             if (string.Equals(tag, "CLI", StringComparison.OrdinalIgnoreCase))
-                return Theme(new Color(1.00f, 0.84f, 0.34f), new Color(0.58f, 0.42f, 0.00f));
+                return Theme(new Color(1.00f, 0.84f, 0.34f), new Color(0.44f, 0.31f, 0.00f));
             var hash = 2166136261u;
             foreach (var character in tag.ToUpperInvariant())
                 hash = (hash ^ character) * 16777619u;

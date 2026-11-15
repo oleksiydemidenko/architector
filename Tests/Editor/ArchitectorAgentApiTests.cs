@@ -283,6 +283,20 @@ namespace Architector.Editor.Tests
                 Does.Contain("'Architector MCP server'").And.Contain("Settings > AI > Connections"));
         }
 
+        [Test]
+        public void ConnectionNamesColourOnlyTheTransportWords()
+        {
+            var mcp = ArchitectorIntegrationTagColors.Text("MCP");
+            var cli = ArchitectorIntegrationTagColors.Text("CLI");
+
+            Assert.That(ArchitectorIntegrationTagColors.NameText("Architector MCP server"), Is.EqualTo("Architector " + mcp + " server"));
+            Assert.That(ArchitectorIntegrationTagColors.NameText("Architector CLI"), Is.EqualTo("Architector " + cli));
+            Assert.That(ArchitectorIntegrationTagColors.NameText("MCP for Unity by Coplay"), Is.EqualTo(mcp + " for Unity by Coplay"));
+            Assert.That(ArchitectorIntegrationTagColors.NameText("Unity MCPForUnity"), Is.EqualTo("Unity MCPForUnity"));
+            Assert.That(ArchitectorIntegrationTagColors.SwitchText(true), Does.EndWith(">on</color>"));
+            Assert.That(ArchitectorIntegrationTagColors.SwitchText(false), Does.EndWith(">off</color>"));
+        }
+
         private void SetIntegration(string id, bool enabled)
         {
             repository.UpdateSettings("Switch Integration", settings =>

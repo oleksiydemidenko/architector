@@ -9,6 +9,7 @@
 - **The command line waits for the Editor.** While Unity runs for the project (it holds `Temp/UnityLockfile`) but its bridge does not answer (compile, domain reload), `query` and `edit` retry for up to 30 s, then exit with code 7. `--wait <seconds>` changes the time, `--wait 0` turns it off. A query may be sent again; an edit that reached the Editor is never sent twice. With Architector CLI off in the saved settings and no bridge, the command line says so at once.
 - **`status`** adds `unity_running`, `editor_serves`, the saved switches under `integrations`, and `editor_wait`; `doctor` adds `cli_integration`; `help` says how query and edit wait.
 - **Settings:** the foldout **AI Integration** is now **AI**. The warning of a connection row says the Editor bridge is not running. Setup Check names the binary **MCP Server and CLI**.
+- **Colours:** in **Settings > AI > Connections** the words MCP and CLI of a connection name are drawn in their tag colours from Integrations. In **Integrations** the word on of the Integration field is green and off is red; the reason after it keeps the label colour. The light-theme colours of the CLI tag and of on and off are darker for contrast.
 
 ## 0.3.12
 

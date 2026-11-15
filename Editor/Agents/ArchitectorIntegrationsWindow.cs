@@ -242,7 +242,10 @@ namespace Architector.Editor.Agents
         private void DrawIntegrationState(string integrationId)
         {
             var enabled = repository.IsAgentIntegrationEnabled(integrationId);
-            EditorGUILayout.LabelField("Integration", enabled ? "on" : "off: turn it on in Settings > AI > Connections");
+            // Only the word on or off is coloured; the colon and the reason keep the label colour.
+            EditorGUILayout.LabelField("Integration",
+                ArchitectorIntegrationTagColors.SwitchText(enabled) + (enabled ? string.Empty : ": turn it on in Settings > AI > Connections"),
+                ArchitectorIntegrationTagColors.RichLabel);
             EditorGUILayout.LabelField("Bridge", ArchitectorAgentBridge.Port > 0 ? $"listening on port {ArchitectorAgentBridge.Port}" : "not running");
         }
 

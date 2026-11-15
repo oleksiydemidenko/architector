@@ -422,7 +422,8 @@ namespace Architector.Editor
 
                     var version = string.IsNullOrEmpty(status.PackageVersion) ? string.Empty : $" · v{status.PackageVersion}";
                     var port = status.Port > 0 ? $" · port:{status.Port}" : string.Empty;
-                    GUI.Label(labelRect, new GUIContent($"{descriptor.displayName}{version}{port}", descriptor.displayName));
+                    GUI.Label(labelRect, new GUIContent($"{ArchitectorIntegrationTagColors.NameText(descriptor.displayName)}{version}{port}", descriptor.displayName),
+                        ArchitectorIntegrationTagColors.RichLabel);
                     if (serverStopped)
                     {
                         GUI.contentColor = IntegrationStatusColor(status.State);
