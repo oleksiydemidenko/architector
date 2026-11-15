@@ -105,6 +105,43 @@ namespace Architector.Editor
             RequireToken(token, true);
         }
 
+        // Another process, the command line, began or ended agent work in this project: follow its recovery marker.
+        // True when the session changed.
+        public bool RefreshFromRecoveryMarker()
+        {
+            if (!persistAcrossDomainReload || recoveryPath.Length == 0)
+                return false;
+            if (!File.Exists(recoveryPath))
+            {
+                if (!IsActive)
+                    return false;
+                ClearSession();
+                return true;
+            }
+            RecoveryMarker marker;
+            try
+            {
+                marker = ArchitectorJson.Read<RecoveryMarker>(recoveryPath);
+            }
+            catch (ArchitectorDataException)
+            {
+                return false;
+            }
+            if (marker.schemaVersion != 1 || string.IsNullOrWhiteSpace(marker.workToken)
+                || string.Equals(marker.workToken.Trim(), workToken, StringComparison.Ordinal))
+                return false;
+            workToken = marker.workToken.Trim();
+            label = string.IsNullOrWhiteSpace(marker.label) ? "AI Working" : marker.label.Trim();
+            startedRevision = marker.startedRevision;
+            knownEntries = marker.knownEntries?.ToArray() ?? Array.Empty<string>();
+            workspacesUnlockedByUser = false;
+            settingsUnlockedByUser = false;
+            awaitingAgentResume = false;
+            Persist();
+            Changed?.Invoke();
+            return true;
+        }
+
         public void AbandonInterruptedSessionByUser()
         {
             if (IsAwaitingAgentResume)

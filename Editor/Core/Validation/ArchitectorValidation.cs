@@ -655,7 +655,7 @@ namespace Architector.Editor
         }
     }
 
-    public sealed class ArchitectorDataException : Exception
+    public class ArchitectorDataException : Exception
     {
         public ArchitectorDataException(string message) : base(message)
         {

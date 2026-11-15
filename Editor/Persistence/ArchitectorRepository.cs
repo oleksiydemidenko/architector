@@ -29,9 +29,16 @@ namespace Architector.Editor
         private int dependencyCyclesRevision = -1;
 
         public ArchitectorRepository(ArchitectorPaths paths)
+            : this(paths, true)
+        {
+        }
+
+        // newSession false: a command line process reads the repository as it is, at the stored revision, so an
+        // expected_revision taken from one call is still current in the next while nobody writes.
+        public ArchitectorRepository(ArchitectorPaths paths, bool newSession)
         {
             Paths = paths ?? throw new ArgumentNullException(nameof(paths));
-            Load();
+            Load(newSession);
         }
 
         public event Action Changed;
@@ -93,13 +100,23 @@ namespace Architector.Editor
         public string NextUndoName => CanUndo ? undo.Peek().name : string.Empty;
         public string NextRedoName => CanRedo ? redo.Peek().name : string.Empty;
 
-        public void Load()
+        public void Load() => Load(true);
+
+        private void Load(bool newSession)
         {
             EnsureStorageExists();
             var files = ReadDiskFiles(out var stamps);
             Install(ArchitectorStorageCodec.Decode(files), ReadSettings(files), files, stamps);
             revision = Math.Max(Math.Max(revision, ArchitectorHost.Current.Session.GetInt(RevisionSessionKey, 0)), ReadStoredRevision());
-            Revision++;
+            if (newSession)
+                Revision++;
+        }
+
+        // After a change another process wrote: the count that process stored, or one more than this one.
+        private void AdvanceRevisionForExternalChange()
+        {
+            var stored = ReadStoredRevision();
+            Revision = stored > revision ? stored : revision + 1;
         }
 
         public ArchitectorCanonicalBatchResult DryRunCanonicalBatch(ArchitectorCanonicalBatch batch)
@@ -129,10 +146,13 @@ namespace Architector.Editor
             Install(decoded, settings, files, stamps);
             undo.Clear();
             redo.Clear();
-            Revision++;
+            AdvanceRevisionForExternalChange();
             Changed?.Invoke();
             return new ArchitectorCanonicalBatchResult(0, files.Count, decoded.Layers.Count, portalPairs);
         }
+
+        // The revision another process stored, for example the command line after an edit without the Editor.
+        public int StoredRevision => ReadStoredRevision();
 
         public bool RefreshExternalChanges()
         {
@@ -199,7 +219,7 @@ namespace Architector.Editor
             Install(decoded, settings, files, stamps);
             undo.Clear();
             redo.Clear();
-            Revision++;
+            AdvanceRevisionForExternalChange();
             Changed?.Invoke();
             ExternalChangesReloaded?.Invoke(summary);
             return true;
@@ -1722,6 +1742,11 @@ namespace Architector.Editor
         {
             if (!CanUndo)
                 return;
+            ArchitectorWriteLock.Run(Paths, UndoLocked);
+        }
+
+        private void UndoLocked()
+        {
             EnsureDiskMatchesSession();
             var record = undo.Pop();
             ApplySnapshots(record.before);
@@ -1733,6 +1758,11 @@ namespace Architector.Editor
         {
             if (!CanRedo)
                 return;
+            ArchitectorWriteLock.Run(Paths, RedoLocked);
+        }
+
+        private void RedoLocked()
+        {
             EnsureDiskMatchesSession();
             var record = redo.Pop();
             ApplySnapshots(record.after);
@@ -1792,6 +1822,11 @@ namespace Architector.Editor
         }
 
         private void ExecuteLayoutChange(string name, ArchitectorLayerRecord layer, Action<ArchitectorLayerLayoutDocument> mutate)
+        {
+            ArchitectorWriteLock.Run(Paths, () => ExecuteLayoutChangeLocked(name, layer, mutate));
+        }
+
+        private void ExecuteLayoutChangeLocked(string name, ArchitectorLayerRecord layer, Action<ArchitectorLayerLayoutDocument> mutate)
         {
             EnsureDiskMatchesSession();
             var current = ReadLayer(layer.id);
@@ -1959,7 +1994,10 @@ namespace Architector.Editor
             commitPhases.EnsureStarted();
             try
             {
-                return CommitTimed(name, nextProject, nextLayers, nextSettings, dryRun, recoveryDiskFiles, notifyWhenUnchanged, reportApprovalImpacts, touchedLayers);
+                return dryRun
+                    ? CommitTimed(name, nextProject, nextLayers, nextSettings, true, recoveryDiskFiles, notifyWhenUnchanged, reportApprovalImpacts, touchedLayers)
+                    : ArchitectorWriteLock.Run(Paths, () => CommitTimed(name, nextProject, nextLayers, nextSettings, false, recoveryDiskFiles,
+                        notifyWhenUnchanged, reportApprovalImpacts, touchedLayers));
             }
             finally
             {
