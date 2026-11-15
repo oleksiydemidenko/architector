@@ -4,8 +4,8 @@ namespace Architector.Editor.Agents
     {
         public ArchitectorAgentIntegrationDescriptor Descriptor { get; } = new()
         {
-            id = ArchitectorAgentBridge.IntegrationId,
-            displayName = "Architector MCP server",
+            id = ArchitectorAgentIntegrationRegistry.McpServerId,
+            displayName = ArchitectorAgentIntegrationRegistry.McpServerName,
             packageName = "com.oleksiydemidenko.architector",
             documentationUrl = "https://github.com/oleksiydemidenko/architector/blob/main/Documentation~/AgentSetup.md",
             builtIn = true
@@ -22,7 +22,7 @@ namespace Architector.Editor.Agents
                 : new ArchitectorAgentIntegrationProbeResult(
                     ArchitectorAgentIntegrationStates.Connected,
                     packageVersion,
-                    "The local bridge is not running.");
+                    "The Editor bridge is not running.");
         }
 
         public void OpenSetup()

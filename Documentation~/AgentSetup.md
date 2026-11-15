@@ -4,6 +4,8 @@
 
 **File access needs an agent with a shell.** Nothing to install beyond the .NET SDK. The agent runs `context_route`.
 
+**Architector CLI is for agents with a shell.** It is the same binary as the server, run with a command: `architector-mcp query capabilities`, `architector-mcp edit dry_run_plan --plan plan.json`, `architector-mcp help`. No MCP setup is needed. Its `query` and `edit` reach the Editor while the integration **Architector CLI** is on; they wait up to 30 s for an Editor that compiles or reloads (`--wait <seconds>`, `0` turns it off).
+
 **The Architector MCP server is for MCP clients.** It is one program for Windows, macOS or Linux. It needs no .NET SDK and no other Unity MCP package.
 
 1. Open **Window > Architector > Integrations** and press **Install Server**. The server goes to `~/.architector/mcp/<version>/`.
@@ -20,14 +22,14 @@
 
 You can also download the program for your system from the [releases page](https://github.com/oleksiydemidenko/architector/releases). The server finds the project from its working directory, from `--project <path>` or from the `ARCHITECTOR_PROJECT` variable. So one global entry in a client works for every Unity project you open there, if the client starts servers in the project folder.
 
-The server runs on the machine with the project. It talks to the Editor through a bridge that listens on the loopback interface only and accepts a token that the Editor writes to `Library/Architector/agent-bridge.json` for each session. Turn it off in **Window > Architector > Settings > AI Integration**.
+The server runs on the machine with the project. It talks to the Editor through a bridge that listens on the loopback interface only and accepts a token that the Editor writes to `Library/Architector/agent-bridge.json` for each session. The bridge runs while **Architector CLI** or **Architector MCP server** is on and answers each only while its own integration is on. Turn them on or off in **Window > Architector > Settings > AI > Connections**.
 
 **If you already use a Unity MCP server,** Architector can add its tools there instead:
 
 - [MCP for Unity by Coplay](https://github.com/CoplayDev/unity-mcp): tools `architector_query` and `architector_edit`.
 - [Unity MCP by Ivan Murzak](https://github.com/IvanMurzak/Unity-MCP) 1.6.0 or later: tools `architector-query` and `architector-edit`. Both take one `parameters` string with a JSON object, for example `{"action":"project_summary"}`. This plugin starts in cloud mode and logs an authorization error until you sign in or switch it to a local server.
 
-Install the package and press **Add Connection** for it in **Window > Architector > Integrations**. Check the state in **Window > Architector > Settings > AI Integration**.
+Install the package and press **Add Connection** for it in **Window > Architector > Integrations**. Check the state in **Window > Architector > Settings > AI > Connections**.
 
 Keep **Run In Background** on in Player settings, or the Editor stops answering while its window has no focus.
 
@@ -53,7 +55,7 @@ Arrange settings are under **Settings > Workspace Geometry > Arrange**.
 
 ## Integration Catalog
 
-**Integrations** keeps Setup Check at the top and lists extensions and MCP transports below it. Lazy Mode comes before the Architector server. Entries expand to show their existing installation, activation and connection controls. Search names or tags, combine terms such as `MCP Coplay`, or use `tag:Extension` and `#MCP`. The tag buttons combine with text search. Lists longer than six entries have page controls and support PageUp/PageDown when you are not editing text. Searching resets to the first page and preserves each entry's expanded state.
+**Integrations** keeps Setup Check at the top and lists extensions and MCP transports below it. Lazy Mode comes before the Architector server. Architector CLI (tag `CLI`) and Architector MCP server (tag `MCP`) are separate entries. Entries expand to show their existing installation, activation and connection controls. Search names or tags, combine terms such as `MCP Coplay`, or use `tag:Extension` and `#MCP`. The tag buttons combine with text search. Lists longer than six entries have page controls and support PageUp/PageDown when you are not editing text. Searching resets to the first page and preserves each entry's expanded state.
 
 ## 2. Tell The Agent
 

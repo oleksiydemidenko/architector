@@ -52,15 +52,17 @@ public static partial class McpServer
         new("facts dump", "facts dump <layer>", "A layer's nodes and relationships with ids, without layout, paged.", false, new[] { "offset", "limit", "output" }),
         new("facts lookup", "facts lookup <Layer/Path>[::Node Title[::Member]]...", "Layer, node and member ids by name.", false, Array.Empty<string>()),
         new("query", "query <action> [--<parameter> <value>]...",
-            "Any architector_query action through the open Unity Editor, for example: query layer_graph --target Core/Input --detail summary.",
-            true, new[] { "any architector_query parameter" }),
+            "Any architector_query action through the open Unity Editor, for example: query layer_graph --target Core/Input --detail summary. "
+            + "The Editor answers while the integration Architector CLI is on. While Unity runs but its bridge does not answer (compile, domain reload), it retries for up to 30 s (--wait <seconds>, 0 turns it off).",
+            true, new[] { "wait", "any architector_query parameter" }),
         new("edit", "edit <action> [--plan plan.json] [--<parameter> <value>]...",
             "Any architector_edit action through the open Unity Editor, for example: edit dry_run_plan --plan plan.json. --plan takes a file or JSON text. "
             + "approve_layers needs --approve_changes true for layers changed since their last approval. implements and extends are labels on a dependency relationship (kind dependency, label implements), not relationship kinds. "
             + "dry_run_plan lists permissions_lost: layer pairs the plan leaves without any dependency, with their code_references. set_standalone --target <layer> --node <node> --reason <why> marks a linked node that has no relationship on purpose. "
-            + "A list parameter takes a repeated flag (--layers A --layers B) or a comma list (--layers A,B). A node responsibility has at most 240 characters.",
-            true, new[] { "plan", "approve_changes", "work_token", "expected_revision", "any architector_edit parameter" }),
-        new("status", "status", "The project, its Architector data and whether the Unity Editor is reachable.", false, Array.Empty<string>()),
+            + "A list parameter takes a repeated flag (--layers A --layers B) or a comma list (--layers A,B). A node responsibility has at most 240 characters. "
+            + "Waits for a compiling or reloading Editor like query (--wait); an edit is never sent twice.",
+            true, new[] { "plan", "approve_changes", "work_token", "expected_revision", "wait", "any architector_edit parameter" }),
+        new("status", "status", "The project, its Architector data, whether Unity runs and its bridge is reachable, which clients the bridge serves (editor_serves), the saved switches of Architector CLI and Architector MCP server, and how query and edit wait for the Editor (editor_wait).", false, Array.Empty<string>()),
         new("doctor", "doctor", "Checks everything the tools need and says what to fix: project, data, code index, Editor, package, agent skills.", false, Array.Empty<string>()),
         new("commands", "commands", "Every command as JSON, for tools.", false, Array.Empty<string>()),
         new("skill install", "skill install <claude|codex|all> [--force] [--hooks]",
@@ -334,14 +336,25 @@ public static partial class McpServer
         return ExitOk;
     }
 
+    // query and edit wait this long for a Unity Editor that runs for the project but whose bridge does not answer yet
+    // (compile, domain reload); --wait <seconds> changes it, 0 turns it off.
+    private const int DefaultEditorWaitSeconds = 30;
+    private const int EditorPollMilliseconds = 500;
+
+    private const string CliNotRunning = "The Unity Editor is not running for this project. Open the project in Unity and try again. facts, route, digest, slice, check and status work without it.";
+    private const string CliOff = "The integration 'Architector CLI' is off for this project. Turn it on in Window > Architector > Settings > AI > Connections.";
+
     private static int CliBridge(string tool, List<string> positional, Dictionary<string, List<string>> options)
     {
         if (positional.Count < 2)
-            return Fail("usage", $"Usage: architector-mcp {tool} <action> [--<parameter> <value>]...", ExitUsage);
+            return Fail("usage", $"Usage: architector-mcp {tool} <action> [--<parameter> <value>]... [--wait <seconds>]", ExitUsage);
+        var wait = DefaultEditorWaitSeconds;
+        if (options.TryGetValue("wait", out var waitValues) && (!int.TryParse(waitValues.Last(), out wait) || wait < 0))
+            return Fail("usage", "--wait takes whole seconds, 0 or more.", ExitUsage);
         var arguments = new JsonObject { ["action"] = positional[1] };
         foreach (var (name, values) in options)
         {
-            if (name is "project" or "pretty")
+            if (name is "project" or "pretty" or "wait")
                 continue;
             // A repeated flag (--layers A --layers B) is a list.
             if (values.Count > 1 && name != "plan")
@@ -354,9 +367,31 @@ public static partial class McpServer
                 value = File.ReadAllText(value);
             arguments[name.Replace('-', '_')] = ParseValue(value);
         }
-        var answer = BridgeAnswer(tool, arguments);
+        var answer = BridgeAnswer(tool, arguments, CliClient, out var sent);
+        // Without a bridge to ask, the saved switch tells at once that waiting cannot help.
+        if (answer == null && !sent && !IntegrationOn(CliId))
+            return Fail("integration_disabled", CliOff, ExitFailed);
+        // A query is safe to send again; an edit only when it never reached the Editor.
+        bool MayRetry() => !sent || tool == "query";
+        if (answer == null && MayRetry() && wait > 0 && UnityRunning())
+        {
+            Console.Error.WriteLine($"architector-mcp: Unity runs for this project, but its bridge does not answer yet (compile or domain reload). Waiting up to {wait} s.");
+            var deadline = DateTime.UtcNow.AddSeconds(wait);
+            while (answer == null && MayRetry() && DateTime.UtcNow < deadline && UnityRunning())
+            {
+                Thread.Sleep(EditorPollMilliseconds);
+                answer = BridgeAnswer(tool, arguments, CliClient, out sent);
+            }
+        }
         if (answer == null)
-            return Fail("editor_unreachable", NotRunning, ExitEditor);
+        {
+            var message = !MayRetry()
+                ? "The Editor closed the connection after it got the edit, so the edit may have run. Check query work_status or the revision before you send it again."
+                : UnityRunning()
+                    ? $"Unity runs for this project, but its bridge did not answer within {wait} s. It may still compile or reload, or wait for a dialog; try again, or pass a longer --wait <seconds>."
+                    : CliNotRunning;
+            return Fail("editor_unreachable", message, ExitEditor);
+        }
         var reply = JsonNode.Parse(answer)!;
         return Emit(reply, (bool?)reply["success"] == true ? ExitOk : ExitFailed);
     }
@@ -399,7 +434,13 @@ public static partial class McpServer
                         : "No Assembly-CSharp.csproj: code facts cannot see engine and package base classes, so dead MonoBehaviours stay not_tracked and some references are missed. Generate the project files once (Unity: Preferences > External Tools > Regenerate project files, or Assets > Open C# Project with an IDE selected); they stay local and out of version control.",
                     false);
             }
-            Check("editor", EditorReachable(), EditorReachable() ? "Reachable; query and edit work." : "Not reachable: open the project in Unity for query and edit. facts, status and doctor work without it.", false);
+            if (HasData())
+                Check("cli_integration", IntegrationOn(CliId), IntegrationOn(CliId)
+                    ? "Architector CLI is on: the Editor answers query and edit of the command line."
+                    : CliOff, false);
+            Check("editor", EditorReachable(), EditorReachable() ? "Reachable; query and edit work." : UnityRunning()
+                ? "Unity runs, but its bridge does not answer: it compiles or reloads, or both built-in integrations are off. query and edit wait for it."
+                : "Not reachable: open the project in Unity for query and edit. facts, status and doctor work without it.", false);
             var package = FindPackage(root);
             Check("package", package != null, package == null ? "The Architector package was not found in Packages, Library/PackageCache or the manifest." : $"{package.Value.Version} at {package.Value.Path}", false);
             Check("hooks", true, HooksInstalled(root)
@@ -549,8 +590,9 @@ public static partial class McpServer
         }
         text.AppendLine();
         text.AppendLine("Global: --project <path> (default: the Unity project containing the current folder), --pretty (indented JSON).");
+        text.AppendLine($"query and edit: the Editor answers the command line while the integration Architector CLI is on (Window > Architector > Settings > AI > Connections). While Unity runs for the project but its bridge does not answer (compile, domain reload), they retry for up to {DefaultEditorWaitSeconds} s, then exit 7; --wait <seconds> changes it, 0 turns it off. An edit that reached the Editor is never sent twice.");
         text.AppendLine("Paged replies take --offset and --limit and report next_offset; --output file writes the full answer under Library/Architector/facts.");
-        text.AppendLine("Every reply is JSON with success, except route and digest, which print the text of their MCP tools, and check, which prints findings only (--json gives JSON). Exit codes: 0 success, 1 internal error, 2 usage, 3 check findings, 4 setup missing, 6 success=false, 7 Unity Editor not reachable (retry when it is open).");
+        text.AppendLine("Every reply is JSON with success, except route and digest, which print the text of their MCP tools, and check, which prints findings only (--json gives JSON). Exit codes: 0 success, 1 internal error, 2 usage, 3 check findings, 4 setup missing, 6 success=false (also integration_disabled), 7 Unity Editor not reachable (after the wait; retry when it is open).");
         text.AppendLine("Every call is logged to Library/Architector/calls.jsonl (time, caller, action, arguments, reply size, duration); ARCHITECTOR_CALL_LOG=0 turns that off.");
         Console.Out.Write(text.ToString());
         return ExitOk;

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+**Agent access:**
+
+- **Architector CLI is its own integration.** The command line of the binary (`architector-mcp query|edit|status ...`) has the built-in integration `architector-cli`, next to `architector-mcp` (now named only Architector MCP server). Each has its own Enable/Disable row in **Settings > AI > Connections** and its own entry in **Integrations** (tag `CLI`, its own colour; tag `MCP`). Both are on by default.
+- **One bridge, two clients.** The Editor bridge runs while either integration is on, and starts or stops at once when a switch changes. The command line sends `client: cli`, the MCP server `client: mcp`; a request without a client (an older binary) counts as the MCP server. Each client is answered only while its own integration is on; the refusal `integration_disabled` names the integration and where to turn it on. `Library/Architector/agent-bridge.json` lists the served clients.
+- **The command line waits for the Editor.** While Unity runs for the project (it holds `Temp/UnityLockfile`) but its bridge does not answer (compile, domain reload), `query` and `edit` retry for up to 30 s, then exit with code 7. `--wait <seconds>` changes the time, `--wait 0` turns it off. A query may be sent again; an edit that reached the Editor is never sent twice. With Architector CLI off in the saved settings and no bridge, the command line says so at once.
+- **`status`** adds `unity_running`, `editor_serves`, the saved switches under `integrations`, and `editor_wait`; `doctor` adds `cli_integration`; `help` says how query and edit wait.
+- **Settings:** the foldout **AI Integration** is now **AI**. The warning of a connection row says the Editor bridge is not running. Setup Check names the binary **MCP Server and CLI**.
+
 ## 0.3.12
 
 Facts about a Unity project that the agent cannot see in C#, delivered short, at the moment of need, and checks right after an edit. Both caches (`code-index-*.bin` and `wiring-index.json`) change format and rebuild by themselves on the first call. 0.3.11 was not released; its changes ship with this version.

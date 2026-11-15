@@ -211,6 +211,7 @@ namespace Architector.Editor.Agents
             }
         }
 
+        public static string CliCommand => $"\"{BinaryPath}\" query capabilities --project \"{ProjectRoot}\"";
         public static string ClaudeCommand => $"claude mcp add --scope local architector -- \"{BinaryPath}\" --project \"{ProjectRoot}\"";
 
         public static string CodexConfig =>

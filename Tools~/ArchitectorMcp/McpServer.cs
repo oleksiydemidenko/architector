@@ -243,8 +243,17 @@ public static partial class McpServer
             ["has_architecture"] = root != null && HasData(),
             ["has_digest"] = root != null && File.Exists(Path.Combine(DataRoot, "Architecture.digest.md")),
             ["editor_connected"] = root != null && EditorReachable(),
+            ["unity_running"] = root != null && UnityRunning(),
+            ["editor_serves"] = root == null ? null : BridgeClients(),
+            ["integrations"] = root == null || !HasData() ? null : new JsonObject
+            {
+                [CliId] = IntegrationOn(CliId),
+                [McpServerId] = IntegrationOn(McpServerId)
+            },
             ["cli"] = Environment.ProcessPath?.Replace(Path.DirectorySeparatorChar, '/'),
-            ["cli_help"] = "Agents with a shell can run this binary as a command line (help lists the commands); replies are the same JSON."
+            ["cli_help"] = "Agents with a shell can run this binary as a command line (help lists the commands); replies are the same JSON. "
+                + "The Editor answers the command line while the integration Architector CLI is on, the MCP server while Architector MCP server is on (Window > Architector > Settings > AI > Connections).",
+            ["editor_wait"] = $"Command line query and edit wait up to {DefaultEditorWaitSeconds} s (--wait <seconds>, 0 turns it off) while Unity runs for the project but its bridge does not answer (compile, domain reload); then exit code 7."
         };
         return status.ToJsonString();
     }
@@ -258,7 +267,7 @@ public static partial class McpServer
             using var client = new TcpClient("127.0.0.1", (int)JsonNode.Parse(File.ReadAllText(BridgeState))!["port"]!);
             return client.Connected;
         }
-        catch (SocketException)
+        catch (Exception exception) when (exception is SocketException or IOException or System.Text.Json.JsonException or InvalidOperationException or NullReferenceException)
         {
             return false;
         }
@@ -311,15 +320,24 @@ public static partial class McpServer
 
     private static JsonNode Bridge(string tool, JsonNode? arguments)
     {
-        var answer = BridgeAnswer(tool, arguments);
+        var answer = BridgeAnswer(tool, arguments, McpClient, out _);
         if (answer == null)
             return Text(NotRunning, true);
         return Text(answer, !((bool?)JsonNode.Parse(answer)!["success"] ?? false));
     }
 
-    // The Editor's raw reply, or null when no Editor serves this project.
-    private static string? BridgeAnswer(string tool, JsonNode? arguments)
+    // The bridge answers each client only while its own integration is on: "mcp" needs Architector MCP server,
+    // "cli" needs Architector CLI (Window > Architector > Settings > AI > Connections).
+    private const string McpClient = "mcp";
+    private const string CliClient = "cli";
+    private const string McpServerId = "architector-mcp";
+    private const string CliId = "architector-cli";
+
+    // The Editor's raw reply, or null when no Editor serves this project. sent is false when the request never
+    // reached the Editor (no state file, connection refused), so a retry cannot run it twice.
+    private static string? BridgeAnswer(string tool, JsonNode? arguments, string clientName, out bool sent)
     {
+        sent = false;
         if (!File.Exists(BridgeState))
             return null;
         try
@@ -329,11 +347,61 @@ public static partial class McpServer
             using var stream = client.GetStream();
             using var writer = new StreamWriter(stream, Utf8) { AutoFlush = true, NewLine = "\n" };
             using var reader = new StreamReader(stream, Utf8);
-            writer.WriteLine(new JsonObject { ["token"] = (string?)bridge["token"], ["tool"] = tool, ["parameters"] = arguments?.DeepClone() ?? new JsonObject() }.ToJsonString());
+            sent = true;
+            writer.WriteLine(new JsonObject { ["token"] = (string?)bridge["token"], ["client"] = clientName, ["tool"] = tool, ["parameters"] = arguments?.DeepClone() ?? new JsonObject() }.ToJsonString());
             var reply = reader.ReadLine();
             return tool == "edit" ? WithCodeReferences(reply) : reply;
         }
-        catch (Exception exception) when (exception is SocketException or IOException)
+        catch (Exception exception) when (exception is SocketException or IOException or System.Text.Json.JsonException or InvalidOperationException or NullReferenceException)
+        {
+            // A state file the Editor is still writing, a stopped listener or a closed connection: no Editor answer.
+            return null;
+        }
+    }
+
+    // Unity holds Temp/UnityLockfile open while it has the project open, also while it compiles or reloads.
+    private static bool UnityRunning()
+    {
+        var lockFile = Path.Combine(root!, "Temp", "UnityLockfile");
+        if (!File.Exists(lockFile))
+            return false;
+        try
+        {
+            using (new FileStream(lockFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                return false;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return true;
+        }
+    }
+
+    // A built-in integration switch as saved in Architector/architector.settings.json; a missing record means on.
+    private static bool IntegrationOn(string integrationId)
+    {
+        var settings = Path.Combine(DataRoot, "architector.settings.json");
+        if (!File.Exists(settings))
+            return true;
+        try
+        {
+            var records = JsonNode.Parse(File.ReadAllText(settings))?["agent"]?["integrations"] as JsonArray;
+            var record = records?.FirstOrDefault(item => (string?)item?["id"] == integrationId);
+            return (bool?)record?["enabled"] ?? true;
+        }
+        catch (Exception exception) when (exception is System.Text.Json.JsonException or IOException or InvalidOperationException or FormatException)
+        {
+            return true;
+        }
+    }
+
+    // The clients the running bridge serves, from its state file; an older Editor writes none.
+    private static JsonArray? BridgeClients()
+    {
+        try
+        {
+            return File.Exists(BridgeState) ? JsonNode.Parse(File.ReadAllText(BridgeState))?["clients"]?.DeepClone() as JsonArray : null;
+        }
+        catch (Exception exception) when (exception is System.Text.Json.JsonException or IOException)
         {
             return null;
         }

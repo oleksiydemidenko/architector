@@ -26,11 +26,21 @@ namespace Architector.Editor.Agents
                     () => DrawOptionalMode(mode), updates: ArchitectorPackageUpdateProvider.Instance));
             foreach (var descriptor in ArchitectorAgentIntegrationRegistry.Descriptors)
                 catalog.Add(new ArchitectorIntegrationEntry(descriptor.id, descriptor.displayName, descriptor.tags,
-                    () => { if (descriptor.builtIn) DrawServer(); else DrawBridge(descriptor); }, descriptor.builtIn ? 0 : 10,
+                    () => DrawDescriptor(descriptor), descriptor.builtIn ? 0 : 10,
                     descriptor.builtIn ? ArchitectorPackageUpdateProvider.Instance : descriptor.updates));
             catalog.AddRange(ArchitectorIntegrationCatalog.Entries);
             integrationTags = catalog.SelectMany(entry => entry.Tags).Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(tag => tag, StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+
+        private void DrawDescriptor(ArchitectorAgentIntegrationDescriptor descriptor)
+        {
+            if (descriptor.id == ArchitectorAgentIntegrationRegistry.CliId)
+                DrawCli();
+            else if (descriptor.builtIn)
+                DrawServer();
+            else
+                DrawBridge(descriptor);
         }
 
         private void DrawIntegrationList()

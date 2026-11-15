@@ -209,17 +209,10 @@ namespace Architector.Editor.Agents
 
         private void DrawServer()
         {
-            EditorGUILayout.LabelField("Bridge", ArchitectorAgentBridge.Port > 0 ? $"listening on port {ArchitectorAgentBridge.Port}" : "not running");
+            EditorGUILayout.LabelField("An MCP client (Claude Code, Codex, Cursor) starts the Architector binary as its MCP server. Its query and edit tools reach the Editor through the bridge while this integration is on.", EditorStyles.wordWrappedLabel);
+            DrawIntegrationState(ArchitectorAgentIntegrationRegistry.McpServerId);
             EditorGUILayout.LabelField("Server", ArchitectorMcpInstaller.IsInstalled ? $"version {ArchitectorMcpInstaller.Version} installed" : "not installed");
-            using (new EditorGUI.DisabledScope(installing || ArchitectorPackageUpdates.IsInstalling || packageRequest != null))
-            {
-                var label = installing ? "Downloading..." : ArchitectorMcpInstaller.IsInstalled ? "Reinstall Server" : "Install Server";
-                if (GUILayout.Button(label, GUILayout.Height(26f)))
-                    Install();
-            }
-            if (!string.IsNullOrEmpty(installError))
-                EditorGUILayout.HelpBox($"{installError}\n{ArchitectorMcpInstaller.DownloadUrl}", MessageType.Error);
-            if (!ArchitectorMcpInstaller.IsInstalled)
+            if (!DrawBinaryInstall("Server"))
                 return;
 
             EditorGUILayout.Space(6f);
@@ -234,6 +227,37 @@ namespace Architector.Editor.Agents
             Snippet("Claude Code: run in a terminal", ArchitectorMcpInstaller.ClaudeCommand);
             Snippet("Codex: add to config.toml", ArchitectorMcpInstaller.CodexConfig);
             Snippet("Cursor and other clients: add to their MCP JSON file", ArchitectorMcpInstaller.JsonConfig);
+        }
+
+        private void DrawCli()
+        {
+            EditorGUILayout.LabelField("Agents with a shell run the same Architector binary as a command line, with no MCP setup. query and edit reach the Editor through the bridge while this integration is on and wait up to 30 seconds while the Editor compiles or reloads. facts, route, digest, slice, check and status work without Unity.", EditorStyles.wordWrappedLabel);
+            DrawIntegrationState(ArchitectorAgentIntegrationRegistry.CliId);
+            EditorGUILayout.LabelField("Command line", ArchitectorMcpInstaller.IsInstalled ? $"version {ArchitectorMcpInstaller.Version} installed" : "not installed");
+            if (!DrawBinaryInstall("Binary"))
+                return;
+            Snippet("Run in a terminal (help lists every command)", ArchitectorMcpInstaller.CliCommand);
+        }
+
+        private void DrawIntegrationState(string integrationId)
+        {
+            var enabled = repository.IsAgentIntegrationEnabled(integrationId);
+            EditorGUILayout.LabelField("Integration", enabled ? "on" : "off: turn it on in Settings > AI > Connections");
+            EditorGUILayout.LabelField("Bridge", ArchitectorAgentBridge.Port > 0 ? $"listening on port {ArchitectorAgentBridge.Port}" : "not running");
+        }
+
+        // The install button of the binary both built-in integrations run; true when the binary is installed.
+        private bool DrawBinaryInstall(string noun)
+        {
+            using (new EditorGUI.DisabledScope(installing || ArchitectorPackageUpdates.IsInstalling || packageRequest != null))
+            {
+                var label = installing ? "Downloading..." : ArchitectorMcpInstaller.IsInstalled ? $"Reinstall {noun}" : $"Install {noun}";
+                if (GUILayout.Button(label, GUILayout.Height(26f)))
+                    Install();
+            }
+            if (!string.IsNullOrEmpty(installError))
+                EditorGUILayout.HelpBox($"{installError}\n{ArchitectorMcpInstaller.DownloadUrl}", MessageType.Error);
+            return ArchitectorMcpInstaller.IsInstalled;
         }
 
         private void DrawClient(ArchitectorMcpClient client)

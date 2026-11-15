@@ -55,7 +55,27 @@ namespace Architector.Editor
 
     public static class ArchitectorAgentIntegrationRegistry
     {
-        public const string BuiltInId = "architector-mcp";
+        // The two built-in integrations share the package binary and the Editor bridge; each one has its own switch.
+        public const string McpServerId = "architector-mcp";
+        public const string McpServerName = "Architector MCP server";
+        public const string CliId = "architector-cli";
+        public const string CliName = "Architector CLI";
+
+        public static bool IsBuiltIn(string integrationId)
+        {
+            return string.Equals(integrationId, McpServerId, StringComparison.Ordinal)
+                   || string.Equals(integrationId, CliId, StringComparison.Ordinal);
+        }
+
+        public static string DisplayName(string integrationId)
+        {
+            if (string.Equals(integrationId, McpServerId, StringComparison.Ordinal))
+                return McpServerName;
+            if (string.Equals(integrationId, CliId, StringComparison.Ordinal))
+                return CliName;
+            return Descriptors.FirstOrDefault(descriptor => string.Equals(descriptor.id, integrationId, StringComparison.Ordinal))?.displayName
+                   ?? integrationId;
+        }
 
         public static readonly ArchitectorAgentIntegrationDescriptor CoplayUnityMcp = new()
         {
@@ -93,7 +113,8 @@ namespace Architector.Editor
                 if (descriptor != null && known.All(candidate => candidate.id != descriptor.id))
                     known.Add(descriptor);
             }
-            return known.OrderByDescending(descriptor => descriptor.builtIn).ToList();
+            return known.OrderByDescending(descriptor => descriptor.builtIn)
+                .ThenBy(descriptor => descriptor.displayName, StringComparer.Ordinal).ToList();
         }
 
         public static ArchitectorAgentIntegrationProbeResult Probe(

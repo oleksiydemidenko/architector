@@ -226,6 +226,73 @@ namespace Architector.Editor.Tests
         }
 
         [Test]
+        public void CommandLineAndMcpServerAreSeparateBuiltInIntegrationsOnByDefault()
+        {
+            var cli = ArchitectorAgentIntegrationRegistry.Descriptors.Single(item => item.id == ArchitectorAgentIntegrationRegistry.CliId);
+            var mcp = ArchitectorAgentIntegrationRegistry.Descriptors.Single(item => item.id == ArchitectorAgentIntegrationRegistry.McpServerId);
+
+            Assert.That(cli.id, Is.EqualTo("architector-cli"));
+            Assert.That(cli.displayName, Is.EqualTo("Architector CLI"));
+            Assert.That(cli.tags, Is.EqualTo(new[] { "CLI" }));
+            Assert.That(mcp.displayName, Is.EqualTo("Architector MCP server"));
+            Assert.That(mcp.tags, Is.EqualTo(new[] { "MCP" }));
+            Assert.That(cli.builtIn && mcp.builtIn, Is.True);
+            Assert.That(ArchitectorAgentIntegrationRegistry.IsAdded(new ArchitectorAgentSettings(), cli), Is.True);
+            Assert.That(repository.IsAgentIntegrationEnabled(ArchitectorAgentIntegrationRegistry.CliId), Is.True);
+            Assert.That(repository.IsAgentIntegrationEnabled(ArchitectorAgentIntegrationRegistry.McpServerId), Is.True);
+            Assert.That(repository.IsAgentIntegrationEnabled(ArchitectorAgentIntegrationRegistry.CoplayUnityMcp.id), Is.False);
+        }
+
+        [Test]
+        public void BridgeRunsWhileEitherBuiltInIntegrationIsOn()
+        {
+            Assert.That(ArchitectorAgentBridge.ServedClients(repository), Is.EqualTo(new[] { "cli", "mcp" }));
+
+            SetIntegration(ArchitectorAgentIntegrationRegistry.McpServerId, false);
+            Assert.That(ArchitectorAgentBridge.ServedClients(repository), Is.EqualTo(new[] { "cli" }));
+            Assert.That(ArchitectorAgentBridge.ShouldRun(repository), Is.True);
+
+            SetIntegration(ArchitectorAgentIntegrationRegistry.CliId, false);
+            Assert.That(ArchitectorAgentBridge.ServedClients(repository), Is.Empty);
+            Assert.That(ArchitectorAgentBridge.ShouldRun(repository), Is.False);
+
+            SetIntegration(ArchitectorAgentIntegrationRegistry.McpServerId, true);
+            Assert.That(ArchitectorAgentBridge.ServedClients(repository), Is.EqualTo(new[] { "mcp" }));
+        }
+
+        [Test]
+        public void BridgeAnswersEachClientThroughItsOwnIntegration()
+        {
+            Assert.That(ArchitectorAgentBridge.IntegrationFor("cli"), Is.EqualTo(ArchitectorAgentIntegrationRegistry.CliId));
+            Assert.That(ArchitectorAgentBridge.IntegrationFor("mcp"), Is.EqualTo(ArchitectorAgentIntegrationRegistry.McpServerId));
+            // An older binary sends no client; it was always the MCP server's request.
+            Assert.That(ArchitectorAgentBridge.IntegrationFor(null), Is.EqualTo(ArchitectorAgentIntegrationRegistry.McpServerId));
+        }
+
+        [Test]
+        public void ARefusalNamesTheIntegrationToTurnOn()
+        {
+            SetIntegration(ArchitectorAgentIntegrationRegistry.McpServerId, false);
+
+            Assert.That(ArchitectorAgentApi.Refusal(repository, ArchitectorAgentIntegrationRegistry.CliId), Is.Null);
+            var json = JObject.Parse(ArchitectorAgentApi.Refusal(repository, ArchitectorAgentIntegrationRegistry.McpServerId).ToJson());
+            Assert.That(json["success"]?.Value<bool>(), Is.False);
+            Assert.That(json["code"]?.Value<string>(), Is.EqualTo("integration_disabled"));
+            Assert.That(json["data"]?["integration"]?.Value<string>(), Is.EqualTo("architector-mcp"));
+            Assert.That(json["data"]?["message"]?.Value<string>(),
+                Does.Contain("'Architector MCP server'").And.Contain("Settings > AI > Connections"));
+        }
+
+        private void SetIntegration(string id, bool enabled)
+        {
+            repository.UpdateSettings("Switch Integration", settings =>
+            {
+                settings.agent.integrations.RemoveAll(record => record.id == id);
+                settings.agent.integrations.Add(new ArchitectorAgentIntegrationRecord { id = id, enabled = enabled });
+            });
+        }
+
+        [Test]
         public void EditKeepsRevisionCheckAndReportsItsCode()
         {
             var result = ArchitectorAgentEdit.Handle(

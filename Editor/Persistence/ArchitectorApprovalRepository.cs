@@ -328,7 +328,7 @@ namespace Architector.Editor
         {
             var record = Settings.agent?.integrations?.FirstOrDefault(candidate =>
                 string.Equals(candidate.id, integrationId, StringComparison.Ordinal));
-            return record?.enabled ?? string.Equals(integrationId, ArchitectorAgentIntegrationRegistry.BuiltInId, StringComparison.Ordinal);
+            return record?.enabled ?? ArchitectorAgentIntegrationRegistry.IsBuiltIn(integrationId);
         }
 
         private Dictionary<string, ArchitectorLayerDocuments> LoadAllLayers()

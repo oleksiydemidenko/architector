@@ -4,9 +4,12 @@ Usage: python smoke_test.py <server binary>
 """
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 server = os.path.abspath(sys.argv[1])
 project = tempfile.mkdtemp()
@@ -81,4 +84,80 @@ code, text = cli("route")
 assert code == 2 and json.loads(text)["code"] == "usage", text
 code, text = cli("commands")
 assert {"route", "digest"} <= {item["command"] for item in json.loads(text)["commands"]}, text
+
+
+# query and edit through a stand-in Editor bridge: the client names itself, the command line waits for a running Unity.
+def timed(*arguments):
+    started = time.monotonic()
+    result = subprocess.run([server, *arguments, "--project", project], capture_output=True, text=True, encoding="utf-8")
+    return result.returncode, result.stdout.strip(), result.stderr, time.monotonic() - started
+
+
+requests = []
+listener = socket.socket()
+listener.bind(("127.0.0.1", 0))
+listener.listen()
+
+
+def serve():
+    while True:
+        connection, _ = listener.accept()
+        with connection, connection.makefile("rw", encoding="utf-8", newline="\n") as stream:
+            line = stream.readline()
+            # status only checks that the bridge accepts a connection.
+            if not line.strip():
+                continue
+            request = json.loads(line)
+            requests.append(request)
+            stream.write(json.dumps({"success": True, "data": {"client": request.get("client")}}) + "\n")
+            stream.flush()
+
+
+threading.Thread(target=serve, daemon=True).start()
+state = os.path.join(project, "Library", "Architector", "agent-bridge.json")
+os.makedirs(os.path.dirname(state), exist_ok=True)
+settings = os.path.join(project, "Architector", "architector.settings.json")
+
+
+def publish_bridge(clients):
+    with open(state, "w", encoding="utf-8") as file:
+        json.dump({"port": listener.getsockname()[1], "token": "t", "clients": clients}, file)
+
+
+code, text, _, seconds = timed("query", "capabilities")
+assert code == 7 and json.loads(text)["code"] == "editor_unreachable" and "not running" in text and seconds < 10, text
+code, text, _, _ = timed("query", "capabilities", "--wait", "soon")
+assert code == 2 and json.loads(text)["code"] == "usage", text
+with open(settings, "w", encoding="utf-8") as file:
+    json.dump({"agent": {"integrations": [{"id": "architector-cli", "enabled": False}]}}, file)
+code, text, _, _ = timed("query", "capabilities")
+assert code == 6 and json.loads(text)["code"] == "integration_disabled" and "Architector CLI" in text, text
+os.remove(settings)
+
+# Unity holds Temp/UnityLockfile while it runs; a held lock with no bridge means a compile or a domain reload.
+os.makedirs(os.path.join(project, "Temp"), exist_ok=True)
+lock = open(os.path.join(project, "Temp", "UnityLockfile"), "w")
+if os.name != "nt":
+    import fcntl
+    fcntl.flock(lock, fcntl.LOCK_EX)
+code, text, errors, seconds = timed("query", "capabilities", "--wait", "1")
+assert code == 7 and "did not answer within 1 s" in text and "Waiting up to 1 s" in errors and seconds >= 1, (text, errors)
+threading.Timer(1.5, publish_bridge, args=(["cli", "mcp"],)).start()
+code, text, errors, seconds = timed("query", "capabilities", "--wait", "20")
+assert code == 0 and json.loads(text)["data"]["client"] == "cli" and seconds >= 1.5, (text, errors)
+assert requests[-1]["client"] == "cli" and requests[-1]["token"] == "t" and requests[-1]["parameters"]["action"] == "capabilities", requests
+assert "wait" not in requests[-1]["parameters"], requests
+code, text = cli("status")
+status = json.loads(text)
+assert status["unity_running"] and status["editor_connected"] and status["editor_serves"] == ["cli", "mcp"], text
+assert status["integrations"] == {"architector-cli": True, "architector-mcp": True} and "30 s" in status["editor_wait"], text
+
+# The MCP server names itself as the other client of the same bridge.
+process = subprocess.Popen([server, "--project", project], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8")
+assert call("initialize", {"protocolVersion": "2025-06-18"})["result"]["serverInfo"]["name"] == "architector"
+failed, text = tool("architector_query", {"action": "capabilities"})
+assert not failed and json.loads(text)["data"]["client"] == "mcp" and requests[-1]["client"] == "mcp", text
+process.stdin.close()
+assert process.wait(timeout=10) == 0
+lock.close()
 print("smoke test passed")

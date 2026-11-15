@@ -23,6 +23,8 @@ namespace Architector.Editor.Agents
                 return Theme(new Color(0.78f, 0.58f, 1.00f), new Color(0.45f, 0.22f, 0.72f));
             if (string.Equals(tag, "MCP", StringComparison.OrdinalIgnoreCase))
                 return Theme(new Color(0.40f, 0.74f, 1.00f), new Color(0.00f, 0.36f, 0.68f));
+            if (string.Equals(tag, "CLI", StringComparison.OrdinalIgnoreCase))
+                return Theme(new Color(1.00f, 0.84f, 0.34f), new Color(0.58f, 0.42f, 0.00f));
             var hash = 2166136261u;
             foreach (var character in tag.ToUpperInvariant())
                 hash = (hash ^ character) * 16777619u;

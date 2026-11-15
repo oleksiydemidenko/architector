@@ -22,7 +22,7 @@ namespace Architector.Editor
         [NonSerialized] private bool optimizationExpanded;
         private bool darkPaletteExpanded;
         private bool lightPaletteExpanded;
-        [NonSerialized] private bool aiIntegrationExpanded = true;
+        [NonSerialized] private bool aiExpanded = true;
         private const string WorkflowControlName = "ArchitectorAgentWorkflow";
         private double workflowHighlightUntil;
         private bool workflowFocusPending;
@@ -47,7 +47,7 @@ namespace Architector.Editor
         {
             Open();
             var window = GetWindow<ArchitectorSettingsWindow>();
-            window.aiIntegrationExpanded = true;
+            window.aiExpanded = true;
             window.workflowHighlightUntil = EditorApplication.timeSinceStartup + 2d;
             window.workflowFocusPending = true;
             window.Repaint();
@@ -133,7 +133,7 @@ namespace Architector.Editor
                     DrawRules(draft.rules);
                     DrawGeometry(draft.geometry, draft.arrange);
                     DrawPalette(draft.palette);
-                    DrawAiIntegration(draft.agent);
+                    DrawAi(draft.agent);
                     DrawOptimization(draft.optimization);
                     DrawUtilities();
                 }
@@ -342,9 +342,9 @@ namespace Architector.Editor
                 EditorUtility.RevealInFinder(repository.Paths.SettingsPath);
         }
 
-        private void DrawAiIntegration(ArchitectorAgentSettings agent)
+        private void DrawAi(ArchitectorAgentSettings agent)
         {
-            using var box = new ArchitectorFoldoutBox("AI Integration", ref aiIntegrationExpanded);
+            using var box = new ArchitectorFoldoutBox("AI", ref aiExpanded);
             if (!box.Expanded)
                 return;
 
@@ -409,7 +409,7 @@ namespace Architector.Editor
                     var setupRect = new Rect(toggleRect.x - setupWidth - 4f, content.y, setupWidth, content.height);
                     var checkRect = new Rect(setupRect.x - checkWidth - 4f, content.y, checkWidth, content.height);
                     var serverStopped = string.Equals(status.State, ArchitectorAgentIntegrationStates.Connected, StringComparison.Ordinal);
-                    var warningContent = new GUIContent("MCP server is not running", status.Details);
+                    var warningContent = new GUIContent("Editor bridge is not running", status.Details);
                     var warningWidth = serverStopped ? EditorStyles.miniLabel.CalcSize(warningContent).x : 0f;
                     var warningRect = new Rect(checkRect.x - warningWidth - (serverStopped ? 4f : 0f), content.y, warningWidth, content.height);
                     var dotRect = new Rect(content.x, content.y, 18f, content.height);
@@ -448,7 +448,7 @@ namespace Architector.Editor
                 }
 
                 EditorGUILayout.HelpBox(
-                    "The Architector server comes with the package. Every optional Unity MCP package is isolated in its own adapter and may be removed without changing canonical architecture data.",
+                    "The Architector binary comes with the package: Architector MCP server is the binary started by an MCP client, Architector CLI is the same binary run as a command line by agents with a shell. Both reach the Editor through one bridge, and each is answered only while it is on. Every optional Unity MCP package is isolated in its own adapter and may be removed without changing canonical architecture data.",
                     MessageType.None);
             }
         }

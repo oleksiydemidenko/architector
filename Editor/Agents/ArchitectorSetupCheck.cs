@@ -43,9 +43,9 @@ namespace Architector.Editor.Agents
                     typeCount > 0,
                     typeCount > 0 ? typeCount.ToString() : "No types found. Check the source roots in Settings."),
                 new ArchitectorSetupItem(
-                    "MCP Server",
+                    "MCP Server and CLI",
                     ArchitectorMcpInstaller.IsInstalled,
-                    ArchitectorMcpInstaller.IsInstalled ? $"Version {ArchitectorMcpInstaller.Version}." : "Not installed."),
+                    ArchitectorMcpInstaller.IsInstalled ? $"Version {ArchitectorMcpInstaller.Version}: one binary for both." : "Not installed."),
                 new ArchitectorSetupItem(
                     "Editor Bridge",
                     ArchitectorAgentBridge.Port > 0,

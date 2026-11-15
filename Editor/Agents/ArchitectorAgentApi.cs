@@ -9,17 +9,28 @@ namespace Architector.Editor.Agents
         public static ArchitectorAgentResult Query(JObject parameters, string integrationId)
         {
             var session = ArchitectorSession.Instance;
-            return session.Repository.IsAgentIntegrationEnabled(integrationId)
-                ? ArchitectorAgentQuery.Handle(session.Repository, session.AiWork, parameters, session.TypeIndex)
-                : ArchitectorAgentResult.Fail("integration_disabled");
+            return Refusal(session.Repository, integrationId)
+                   ?? ArchitectorAgentQuery.Handle(session.Repository, session.AiWork, parameters, session.TypeIndex);
         }
 
         public static ArchitectorAgentResult Edit(JObject parameters, string integrationId)
         {
             var session = ArchitectorSession.Instance;
-            return session.Repository.IsAgentIntegrationEnabled(integrationId)
-                ? ArchitectorAgentEdit.Handle(session.Repository, session.AiWork, parameters, session.TypeIndex)
-                : ArchitectorAgentResult.Fail("integration_disabled");
+            return Refusal(session.Repository, integrationId)
+                   ?? ArchitectorAgentEdit.Handle(session.Repository, session.AiWork, parameters, session.TypeIndex);
+        }
+
+        // Null while the integration is on; otherwise the refusal names the integration and where to turn it on.
+        public static ArchitectorAgentResult Refusal(ArchitectorRepository repository, string integrationId)
+        {
+            if (repository.IsAgentIntegrationEnabled(integrationId))
+                return null;
+            var name = ArchitectorAgentIntegrationRegistry.DisplayName(integrationId);
+            return ArchitectorAgentResult.Fail("integration_disabled", new
+            {
+                integration = integrationId,
+                message = $"The integration '{name}' is off for this project. Turn it on in Window > Architector > Settings > AI > Connections."
+            });
         }
 
         public static string QueryJson(string parameters, string integrationId)
