@@ -16,6 +16,7 @@
     <ProjectReference Include="../ArchitectorCore/ArchitectorCore.csproj" />
     <TrimmerRootAssembly Include="ArchitectorCore" />
     <TrimmerRootAssembly Include="Newtonsoft.Json" />
+    <InternalsVisibleTo Include="ArchitectorCore.Tests" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="../ContextRoute/Program.cs" />

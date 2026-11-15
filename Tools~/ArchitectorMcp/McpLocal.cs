@@ -32,15 +32,26 @@ public static partial class McpServer
         PrepareLocal();
         var paths = new ArchitectorPaths(root!);
         var parameters = JObject.Parse(arguments.ToJsonString());
+        JsonNode Reply(ArchitectorAgentResult answer)
+        {
+            var node = JsonNode.Parse(tool == "edit" ? WithCodeReferences(answer.ToJson()) ?? answer.ToJson() : answer.ToJson())!.AsObject();
+            node["source"] = "files";
+            node["source_reason"] = why;
+            return node;
+        }
+
+        // The saved switch counts as in the Editor; the command line never creates the Architector data.
+        if (!IntegrationOn(integrationId))
+            return Reply(ArchitectorAgentResult.Fail("integration_disabled", new
+            {
+                integration = integrationId,
+                message = $"The integration '{ArchitectorAgentIntegrationRegistry.DisplayName(integrationId)}' is off for this project. Turn it on in Window > Architector > Settings > AI > Connections."
+            }));
+        if (!File.Exists(paths.ProjectPath))
+            return Reply(ArchitectorAgentResult.Fail("no_data", new { message = NoData }));
         ArchitectorAgentResult Run()
         {
             var repository = new ArchitectorRepository(paths, newSession: false);
-            if (!repository.IsAgentIntegrationEnabled(integrationId))
-                return ArchitectorAgentResult.Fail("integration_disabled", new
-                {
-                    integration = integrationId,
-                    message = $"The integration '{ArchitectorAgentIntegrationRegistry.DisplayName(integrationId)}' is off for this project. Turn it on in Window > Architector > Settings > AI > Connections."
-                });
             var aiWork = new ArchitectorAiWorkCoordinator(true, recoveryPath: paths.AiWorkRecoveryPath, locksWindows: () => true);
             using var typeIndex = new ArchitectorTypeIndex(repository);
             return tool == "edit"
@@ -61,9 +72,6 @@ public static partial class McpServer
         {
             result = ArchitectorAgentResult.Fail("invalid_data", new { message = exception.Message });
         }
-        var reply = JsonNode.Parse(tool == "edit" ? WithCodeReferences(result.ToJson()) ?? result.ToJson() : result.ToJson())!.AsObject();
-        reply["source"] = "files";
-        reply["source_reason"] = why;
-        return reply;
+        return Reply(result);
     }
 }

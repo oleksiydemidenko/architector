@@ -253,7 +253,8 @@ public static partial class McpServer
             ["cli"] = Environment.ProcessPath?.Replace(Path.DirectorySeparatorChar, '/'),
             ["cli_help"] = "Agents with a shell can run this binary as a command line (help lists the commands); replies are the same JSON. "
                 + "The Editor answers the command line while the integration Architector CLI is on, the MCP server while Architector MCP server is on (Window > Architector > Settings > AI > Connections).",
-            ["editor_wait"] = $"Command line query and edit wait up to {DefaultEditorWaitSeconds} s (--wait <seconds>, 0 turns it off) while Unity runs for the project but its bridge does not answer (compile, domain reload); then exit code 7."
+            ["works_without_editor"] = "query and edit: when no Editor answers now, the Architector core answers at once on the Architector files (source files); approvals need a person in the Editor.",
+            ["editor_wait"] = $"With --source editor, command line query and edit wait up to {DefaultEditorWaitSeconds} s (--wait <seconds>, 0 turns it off) while Unity runs for the project but its bridge does not answer (compile, domain reload); then exit code 7."
         };
         return status.ToJsonString();
     }

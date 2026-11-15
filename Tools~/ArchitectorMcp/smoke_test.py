@@ -55,7 +55,8 @@ assert not failed and "a sample layer" in text, text
 failed, text = tool("architector_digest", {"layer": "missing"})
 assert failed and "No approved layer or group is called missing" in text, text
 failed, text = tool("architector_query", {"action": "project_summary"})
-assert failed and "not running" in text, text
+assert failed and json.loads(text)["source"] == "files" and json.loads(text)["code"] == "no_data", text
+assert not os.path.exists(os.path.join(project, "Architector", "architector.project.json")), "the command line never creates the data"
 assert call("no/such/method")["error"]["code"] == -32601
 process.stdin.write("not json\n")
 process.stdin.flush()
@@ -86,7 +87,8 @@ code, text = cli("commands")
 assert {"route", "digest"} <= {item["command"] for item in json.loads(text)["commands"]}, text
 
 
-# query and edit through a stand-in Editor bridge: the client names itself, the command line waits for a running Unity.
+# query and edit without an Editor run on the files; through a stand-in Editor bridge the client names itself and, with
+# --source editor, the command line waits for a running Unity.
 def timed(*arguments):
     started = time.monotonic()
     result = subprocess.run([server, *arguments, "--project", project], capture_output=True, text=True, encoding="utf-8")
@@ -125,6 +127,8 @@ def publish_bridge(clients):
 
 
 code, text, _, seconds = timed("query", "capabilities")
+assert code == 6 and json.loads(text)["code"] == "no_data" and "no Unity Editor" in json.loads(text)["source_reason"] and seconds < 10, text
+code, text, _, seconds = timed("query", "capabilities", "--source", "editor", "--wait", "0")
 assert code == 7 and json.loads(text)["code"] == "editor_unreachable" and "not running" in text and seconds < 10, text
 code, text, _, _ = timed("query", "capabilities", "--wait", "soon")
 assert code == 2 and json.loads(text)["code"] == "usage", text
@@ -140,13 +144,17 @@ lock = open(os.path.join(project, "Temp", "UnityLockfile"), "w")
 if os.name != "nt":
     import fcntl
     fcntl.flock(lock, fcntl.LOCK_EX)
-code, text, errors, seconds = timed("query", "capabilities", "--wait", "1")
+code, text, errors, seconds = timed("query", "capabilities")
+assert code == 6 and "does not answer now" in json.loads(text)["source_reason"] and seconds < 10, (text, errors)
+code, text, errors, seconds = timed("query", "capabilities", "--source", "editor", "--wait", "1")
 assert code == 7 and "did not answer within 1 s" in text and "Waiting up to 1 s" in errors and seconds >= 1, (text, errors)
 threading.Timer(1.5, publish_bridge, args=(["cli", "mcp"],)).start()
-code, text, errors, seconds = timed("query", "capabilities", "--wait", "20")
-assert code == 0 and json.loads(text)["data"]["client"] == "cli" and seconds >= 1.5, (text, errors)
+code, text, errors, seconds = timed("query", "capabilities", "--source", "editor", "--wait", "20")
+assert code == 0 and json.loads(text)["data"]["client"] == "cli" and json.loads(text)["source"] == "editor" and seconds >= 1.5, (text, errors)
 assert requests[-1]["client"] == "cli" and requests[-1]["token"] == "t" and requests[-1]["parameters"]["action"] == "capabilities", requests
-assert "wait" not in requests[-1]["parameters"], requests
+assert "wait" not in requests[-1]["parameters"] and "source" not in requests[-1]["parameters"] and "claim_seconds" not in requests[-1], requests
+code, text, errors, seconds = timed("query", "capabilities")
+assert code == 0 and json.loads(text)["source"] == "editor" and requests[-1]["claim_seconds"] == 5, (text, requests[-1])
 code, text = cli("status")
 status = json.loads(text)
 assert status["unity_running"] and status["editor_connected"] and status["editor_serves"] == ["cli", "mcp"], text

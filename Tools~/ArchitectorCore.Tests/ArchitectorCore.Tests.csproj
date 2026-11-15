@@ -8,6 +8,8 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../ArchitectorCore/ArchitectorCore.csproj" />
+    <!-- The command line's Roslyn type facts, compared with the reflection facts of the core. -->
+    <ProjectReference Include="../ArchitectorMcp/ArchitectorMcp.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageReference Include="NUnit" Version="4.2.2" />
     <PackageReference Include="NUnit3TestAdapter" Version="4.6.0" />

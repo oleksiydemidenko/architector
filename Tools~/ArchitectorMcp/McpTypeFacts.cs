@@ -287,8 +287,8 @@ internal sealed class McpTypeFacts : IArchitectorTypeFacts
                 case MethodKind.Constructor:
                     if (parentDepth > 0)
                         return false;
-                    // A struct has no parameterless constructor in metadata unless it declares one.
-                    return !(method.IsImplicitlyDeclared && type.TypeKind == TypeKind.Struct && method.Parameters.Length == 0);
+                    // A struct or an enum has no parameterless constructor in metadata unless it declares one.
+                    return !(method.IsImplicitlyDeclared && type.IsValueType && method.Parameters.Length == 0);
                 case MethodKind.Ordinary:
                 case MethodKind.UserDefinedOperator:
                 case MethodKind.Conversion:
@@ -401,7 +401,8 @@ internal sealed class McpTypeFacts : IArchitectorTypeFacts
                 return " static";
             if (method.ContainingType?.TypeKind == TypeKind.Interface)
                 return string.Empty;
-            if (method.IsOverride)
+            // A destructor is Finalize overriding Object.Finalize in metadata.
+            if (method.IsOverride || method.MethodKind == MethodKind.Destructor)
                 return method.IsAbstract ? " abstract override" : method.IsSealed ? " sealed override" : " override";
             if (method.IsAbstract)
                 return " abstract";
