@@ -16,6 +16,8 @@ public sealed class FactsModel
     public FactsExtractors Extractors { get; private set; } = new();
     public IReadOnlyList<FactsRuleSuggestion> RuleSuggestions { get; private set; } = Array.Empty<FactsRuleSuggestion>();
     public CodeIndex? Index { get; private set; }
+    // The startedBy rules' result, set when wiring statuses are computed with the project's assets.
+    public FactsRules.Result? RuleResult { get; set; }
     private FactsStateAccess? stateAccess;
     // Writers and readers of each type's state, built on first use.
     public FactsStateAccess StateAccess => stateAccess ??= FactsStateAccess.Build(this);

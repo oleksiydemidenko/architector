@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.3.12
+
+Facts about a Unity project that the agent cannot see in C#, delivered short, at the moment of need, and checks right after an edit. Both caches (`code-index-*.bin` and `wiring-index.json`) change format and rebuild by themselves on the first call. 0.3.11 was not released; its changes ship with this version.
+
+**Absence rules:**
+
+- **`startedBy` rules.** `Architector/code-facts.json` takes `"rules": {"startedBy": [...]}`: components deriving from (or implementing) `component`, in a prefab or scene that has a component deriving from `in`, must be in each of `lists`, written `<Lister>[/<ManagedClass>].<field>` (a list inside a `[SerializeReference]` value names its class). A component that derives from a list's lister is exempt from that list. `filledAtRuntime` (globs) names the files whose lists code fills; they are skipped and reported as skipped. Precision first: disabled components and components on inactive objects (themselves, a parent, or deactivated by a prefab override) are skipped, not reported. Each finding names the rule, the file, the object, the component and the missing lists. Rule edits do not rebuild the code index.
+- **What the rules see.** A prefab variant (a prefab whose root is a prefab instance) counts as "in" when its base is; a variant's own components are checked against its lists and the list entries its overrides add to the base's lists (the managed class of a rid is read from the prefab that declares it; targets in a variant of a variant are resolved through Unity's instance fileID rule). Components of nested prefab instances are checked in the nesting file, one level deep, unless their own prefab is "in" (then they are checked there); lists of the nesting file reach them through stripped documents. Not seen: lists filled in code without `filledAtRuntime`, nesting deeper than one level, list entries removed by a variant.
+- **`facts audit`** reports each finding as `rule_violation` (layer and node of the component's type) and a `rules` summary: files and components checked, findings, skipped with reasons, rule errors (a type the code does not have, a malformed list).
+- **`facts layer --type`**: `wiring.places` rows name the start lists apart (`Lister/ManagedClass._field` for a list inside a `[SerializeReference]` value; 0.3.11 merged two such lists into one), include the entries a prefab variant adds by override (0.3.11 showed variant handlers in no list), say `active: false` for a component on an inactive object, and `missing` for a rule finding. `wiring.started_by` counts findings and skipped places for a rule's component type. A stripped document (a component of a source prefab repeated in a variant or nesting prefab) is no longer counted as a place of its own.
+
+**check:**
+
+- **`architector-mcp check [<file>...]`** (MCP: `architector_query` action `check` with `files`) answers the rules for changed files only: a prefab or scene with its variants and the files that nest it, a C# file through the prefabs and scenes that place its script, `--git` for the files git sees as changed, no files for the whole project. One line per finding, nothing when clean; exit code 3 with findings, `--json` for JSON. It never waits for a code analysis: with a stale index it answers from the saved one and refreshes it in the background; on a fresh clone it says the index is building and starts `facts index` in the background. On a 1,600-script project: about 0.6 s from a new process, 0.2 s through a warm server.
+- **`facts index`** builds the code index now, or confirms it is current.
+
+**Optional Claude Code hooks:**
+
+- **`skill install claude --hooks`** adds two hooks to `.claude/settings.local.json` (personal, not committed): after an Edit or Write of a `.cs`, `.prefab`, `.unity` or `.asset` file, `check` for that file; when the agent stops, `check` for git's changed files. Both are silent when clean; findings go to the agent (exit code 2), and a second stop goes through. No hook on reads. `skill hooks` shows whether they are installed, `skill hooks remove` takes them out (other settings stay), `skill sync` points them at the current binary, `doctor` lists them.
+
+**Call log:**
+
+- **`Library/Architector/calls.jsonl`**: one line per MCP tool call and command-line run with time, session id (when the client or hook gives one, or `ARCHITECTOR_SESSION_ID`), caller (`mcp`, `cli`, `hook`), action, arguments, reply characters and a token estimate, and duration. Capped at 4 MB (the full file moves to `calls.1.jsonl`); `ARCHITECTOR_CALL_LOG=0` turns it off. Hook runs that had nothing to do are not logged.
+
+**slice:**
+
+- **`architector-mcp slice <type|file.cs>`** (MCP: `architector_query` action `slice` with `target`): who writes and reads a type and where that runs, in about 1,500 tokens. For a state type: its layer and node, the prefabs that hold it, then per holder the writers and readers with their placement (the prefab, the text field of the holder that names that prefab, such as the id of a prefab it loads, also when a variant sets it by override; the start lists) and their use sites: the lines inside the methods that ticks, callbacks, events or Unity run, each with how it runs (`Subscribe Post, set up in OnEnable`), not the line that fetches the value. Holders with the same writers and readers are printed once. For a component type (or a base class whose subclasses are placed): placement and start lists, how its methods run, lifecycle effects (writes in overrides such as `Deactivate`, `SetActive` and `enabled` toggles with every trigger) and what it writes with the other writers and readers. On the hand set of the 0.3.12 checks it covers 81% of the reachable key facts (0.3.11 route + digest + facts: 42%) at about 1,250 tokens for the largest subject.
+- The code index records what slice needs: use sites of other project types' members with the method that holds them, how methods are run (callbacks passed to a call or constructor with their enum arguments, events, overrides, Unity callbacks), calls between a type's own methods and `SetActive` / `enabled` toggles. The asset scan records text fields of components that may name another prefab.
+
+**Editor:**
+
+- **Node Inspector: Members and Relationships.** The contract members are in a **Members** foldout. A **Relationships** foldout lists the node's relationships, in its layer and across layers, grouped by kind (dependency and each of its labels, such as implements and extends, and the other kinds), outgoing and incoming apart, each with a count, sorted by the other node's title; a row shows that node in its type color and its layer. Clicking a row selects and frames the node, opening its layer first when it is in another one. Both foldouts use the Inspector's existing box style.
+
 ## 0.3.11
 
 Additions found while agents answered architecture questions with Architector 0.3.10 on a 60-layer graph, and while the graph was read in the Editor.

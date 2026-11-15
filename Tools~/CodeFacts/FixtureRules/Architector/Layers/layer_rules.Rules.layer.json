@@ -1,0 +1,16 @@
+{
+    "schemaVersion": 1,
+    "layerId": "layer_rules",
+    "name": "Rules",
+    "purpose": "Absence rule and slice fixture.",
+    "parentGroupId": "",
+    "orderKey": "a",
+    "scope": {
+        "folders": [
+            "Assets/Rules"
+        ],
+        "namespaces": []
+    },
+    "nodes": [],
+    "edges": []
+}

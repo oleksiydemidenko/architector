@@ -2065,6 +2065,19 @@ namespace Architector.Editor
             GUI.skin.button.Draw(rect, HotkeysContent, hover, false, false, false);
         }
 
+        // Selects a node and frames it like F; a node in another layer opens that layer first.
+        private void RevealNode(string layerId, string nodeId)
+        {
+            if (repository?.FindLayer(layerId) == null || string.IsNullOrEmpty(nodeId))
+                return;
+            if (!string.Equals(activeLayerId, layerId, StringComparison.Ordinal))
+                OpenLayer(layerId);
+            else
+                layerCanvas.SelectOnly(nodeId);
+            layerCanvas.RevealChange("node", nodeId);
+            Repaint();
+        }
+
         private void DrawNodeInspector()
         {
             UpdateInspectorSelection();
@@ -2077,7 +2090,7 @@ namespace Architector.Editor
             }
             if (!string.IsNullOrEmpty(inspectedNodeId))
             {
-                nodeInspector.Draw(inspectedLayerId, inspectedNodeId, repository, typeIndex, Run, layerCanvas.SelectOnly, layerId => OpenLayer(layerId));
+                nodeInspector.Draw(inspectedLayerId, inspectedNodeId, repository, typeIndex, Run, layerCanvas.SelectOnly, layerId => OpenLayer(layerId), RevealNode);
                 return;
             }
             DrawLayerInspector(repository.FindLayer(inspectedLayerId));

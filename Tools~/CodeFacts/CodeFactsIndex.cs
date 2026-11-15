@@ -14,7 +14,7 @@ namespace Architector.CodeFacts;
 // The index is saved under Library/Architector and reused while no C# file, csproj or code-facts.json changed.
 public sealed class CodeIndex
 {
-    private const int FormatVersion = 6;
+    private const int FormatVersion = 9;
 
     public string Signature { get; private set; } = string.Empty;
     public string ReferenceSet { get; private set; } = string.Empty;
@@ -72,11 +72,32 @@ public sealed class CodeIndex
         hash.AppendData(Encoding.UTF8.GetBytes($"format {FormatVersion}\n"));
         foreach (var file in FactsModel.SourceFilePaths(root))
             Add(file);
-        foreach (var extra in new[] { Path.Combine(root, "Architector", "code-facts.json") }
-                     .Concat(Directory.Exists(root) ? Directory.GetFiles(root, "*.csproj").OrderBy(path => path, StringComparer.Ordinal) : Enumerable.Empty<string>()))
+        // code-facts.json counts without its rules section: rules are checked over the index, they do not shape it.
+        var codeFacts = Path.Combine(root, "Architector", "code-facts.json");
+        if (File.Exists(codeFacts))
+            hash.AppendData(Encoding.UTF8.GetBytes("code-facts " + WithoutRules(codeFacts) + "\n"));
+        foreach (var extra in Directory.Exists(root) ? Directory.GetFiles(root, "*.csproj").OrderBy(path => path, StringComparer.Ordinal) : Enumerable.Empty<string>())
             if (File.Exists(extra))
                 Add(extra);
         return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    private static string WithoutRules(string path)
+    {
+        var text = File.ReadAllText(path);
+        try
+        {
+            if (System.Text.Json.Nodes.JsonNode.Parse(text, documentOptions: new System.Text.Json.JsonDocumentOptions { CommentHandling = System.Text.Json.JsonCommentHandling.Skip, AllowTrailingCommas = true })
+                is System.Text.Json.Nodes.JsonObject settings)
+            {
+                settings.Remove("rules");
+                return settings.ToJsonString();
+            }
+        }
+        catch (System.Text.Json.JsonException)
+        {
+        }
+        return text;
     }
 
     public static CodeIndex Build(string root, string referenceSet, IEnumerable<MetadataReference> references, string signature)
@@ -1052,6 +1073,7 @@ public sealed class CodeIndex
                     continue;
                 type.AddBehaviour("assigns", MemberName(target), At(assignment));
             }
+            Slices(declaration, owner, type, semantic, At);
             if (owner.TypeKind != TypeKind.Class || !DerivesFrom(owner, "MonoBehaviour") && !DerivesFrom(owner, "ScriptableObject"))
                 return;
             foreach (var method in declaration.DescendantNodes().OfType<MethodDeclarationSyntax>()
@@ -1084,6 +1106,138 @@ public sealed class CodeIndex
                         type.AddBehaviour("lifecycle_subscriptions", method.Identifier.ValueText, At(subscription.Assignment));
                 }
             }
+        }
+
+        // Calls that end a subscription; a method passed to one of them is not run by it.
+        private static readonly string[] RemovalPrefixes = { "Unsubscribe", "Remove", "Unregister", "Off", "Stop", "Cancel", "Detach", "Unbind" };
+
+        // What slice needs (behaviour sections not shown by layer_facts):
+        //   sites   "<Type>.<member>|r or w|<holder>": a member of another project type used here, in which method;
+        //   runs    "<method>|<how>|<holder>": a method passed to a call or constructor (how = its name and enum arguments,
+        //           "SubscribeOnTick Post"), added to an event ("event Type.Event"), an override ("override")
+        //           or a Unity callback ("Unity");
+        //   calls   "<caller>><callee>": calls between the type's own methods, so a tick method's helpers count as run by it;
+        //   toggles "<receiver>.SetActive(<argument>)|<holder>" and "<receiver>.enabled = <value>|<holder>".
+        // A lambda is its own holder, "<method>~<line>", so what it does is not mixed with the method that subscribes it.
+        private void Slices(SyntaxNode declaration, INamedTypeSymbol owner, IndexType type, SemanticModel semantic, Func<SyntaxNode, string> at)
+        {
+            string Holder(SyntaxNode node)
+            {
+                foreach (var ancestor in node.Ancestors())
+                {
+                    switch (ancestor)
+                    {
+                        case AnonymousFunctionExpressionSyntax lambda when lambda.Parent is ArgumentSyntax or AssignmentExpressionSyntax:
+                            return $"{Holder(lambda)}~{lambda.GetLocation().GetLineSpan().StartLinePosition.Line + 1}";
+                        case MethodDeclarationSyntax method:
+                            return method.Identifier.ValueText;
+                        case ConstructorDeclarationSyntax:
+                            return ".ctor";
+                        case PropertyDeclarationSyntax property:
+                            return property.Identifier.ValueText;
+                        case BaseTypeDeclarationSyntax:
+                            return string.Empty;
+                    }
+                }
+                return string.Empty;
+            }
+            bool Own(ISymbol? symbol) => symbol?.ContainingType != null && symbol.ContainingType.Locations.Any(location => location.IsInSource)
+                                         && (SymbolEqualityComparer.Default.Equals(symbol.ContainingType.OriginalDefinition, owner.OriginalDefinition)
+                                             || DerivesFromSymbol(owner, symbol.ContainingType));
+            foreach (var access in declaration.DescendantNodes().OfType<MemberAccessExpressionSyntax>())
+            {
+                if (access.Expression is ThisExpressionSyntax or BaseExpressionSyntax
+                    || semantic.GetSymbolInfo(access.Expression).Symbol is not (IFieldSymbol or IPropertySymbol or ILocalSymbol or IParameterSymbol { IsThis: false }))
+                    continue;
+                if (semantic.GetTypeInfo(access.Expression).Type is not INamedTypeSymbol receiver || receiver.TypeKind is not (TypeKind.Class or TypeKind.Interface)
+                    || !receiver.Locations.Any(location => location.IsInSource)
+                    || SymbolEqualityComparer.Default.Equals(receiver.OriginalDefinition, owner.OriginalDefinition))
+                    continue;
+                var member = access.Name.Identifier.ValueText;
+                // r read, w write, s subscribe (+= on an event or delegate); -= is the matching removal and not a use.
+                var kind = access.Parent is AssignmentExpressionSyntax assignment && assignment.Left == access
+                    ? assignment.Kind() switch { SyntaxKind.AddAssignmentExpression => "s", SyntaxKind.SubtractAssignmentExpression => null, _ => "w" }
+                    : access.Parent is InvocationExpressionSyntax && extractors.Access(member) == "write" ? "w" : "r";
+                if (kind != null)
+                    type.AddBehaviour("sites", $"{FullName(receiver.OriginalDefinition)}.{member}|{kind}|{Holder(access)}", at(access));
+            }
+            foreach (var argument in declaration.DescendantNodes().OfType<ArgumentSyntax>())
+            {
+                var target = argument.Expression is AnonymousFunctionExpressionSyntax lambda
+                    ? $"{Holder(lambda)}~{lambda.GetLocation().GetLineSpan().StartLinePosition.Line + 1}"
+                    : semantic.GetSymbolInfo(argument.Expression).Symbol is IMethodSymbol { MethodKind: MethodKind.Ordinary } method && Own(method) ? method.Name : null;
+                if (target == null || argument.Parent is not ArgumentListSyntax list)
+                    continue;
+                var how = list.Parent switch
+                {
+                    InvocationExpressionSyntax invocation => CallName(invocation),
+                    ObjectCreationExpressionSyntax creation => creation.Type.ToString().Split('.').Last(),
+                    ImplicitObjectCreationExpressionSyntax implicitCreation => semantic.GetTypeInfo(implicitCreation).Type?.Name ?? string.Empty,
+                    _ => string.Empty
+                };
+                var genericArgument = how.IndexOf('<');
+                if (genericArgument > 0)
+                    how = how[..genericArgument];
+                if (how.Length == 0 || RemovalPrefixes.Any(prefix => how.StartsWith(prefix, StringComparison.Ordinal)))
+                    continue;
+                var enums = list.Arguments.Where(other => other != argument)
+                    .Select(other => semantic.GetSymbolInfo(other.Expression).Symbol)
+                    .OfType<IFieldSymbol>()
+                    .Where(field => field.ContainingType?.TypeKind == TypeKind.Enum)
+                    .Select(field => field.Name)
+                    .ToArray();
+                type.AddBehaviour("runs", $"{target}|{how}{(enums.Length > 0 ? " " + string.Join(" ", enums) : string.Empty)}|{Holder(argument)}", at(argument));
+            }
+            foreach (var assignment in declaration.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+            {
+                if (assignment.IsKind(SyntaxKind.AddAssignmentExpression))
+                {
+                    var target = assignment.Right is AnonymousFunctionExpressionSyntax lambda
+                        ? $"{Holder(lambda)}~{lambda.GetLocation().GetLineSpan().StartLinePosition.Line + 1}"
+                        : semantic.GetSymbolInfo(assignment.Right).Symbol is IMethodSymbol { MethodKind: MethodKind.Ordinary } method && Own(method) ? method.Name : null;
+                    if (target == null || semantic.GetSymbolInfo(assignment.Left).Symbol is not (IEventSymbol or IFieldSymbol or IPropertySymbol) || semantic.GetSymbolInfo(assignment.Left).Symbol is not { } eventSymbol)
+                        continue;
+                    var receiverName = assignment.Left is MemberAccessExpressionSyntax eventAccess && semantic.GetTypeInfo(eventAccess.Expression).Type is { } receiverType
+                        ? receiverType.Name
+                        : owner.Name;
+                    type.AddBehaviour("runs", $"{target}|event {receiverName}.{eventSymbol.Name}|{Holder(assignment)}", at(assignment));
+                }
+                else if (assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) && assignment.Left is MemberAccessExpressionSyntax { Name.Identifier.ValueText: "enabled" } enabledAccess)
+                    type.AddBehaviour("toggles", $"{enabledAccess.Expression}.enabled = {assignment.Right}|{Holder(assignment)}", at(assignment));
+            }
+            foreach (var method in declaration.DescendantNodes().OfType<MethodDeclarationSyntax>().Where(method => method.Parent == declaration))
+            {
+                if (method.Modifiers.Any(SyntaxKind.OverrideKeyword))
+                    type.AddBehaviour("runs", $"{method.Identifier.ValueText}|override|", at(method.Identifier.Parent!));
+                else if (LifecycleMethods.Contains(method.Identifier.ValueText) && (DerivesFrom(owner, "MonoBehaviour") || DerivesFrom(owner, "ScriptableObject")))
+                    type.AddBehaviour("runs", $"{method.Identifier.ValueText}|Unity|", at(method.Identifier.Parent!));
+            }
+            foreach (var call in declaration.DescendantNodes().OfType<InvocationExpressionSyntax>())
+            {
+                var name = CallName(call);
+                if (name == "SetActive")
+                {
+                    var receiver = (call.Expression as MemberAccessExpressionSyntax)?.Expression.ToString() ?? "gameObject";
+                    type.AddBehaviour("toggles", $"{receiver}.SetActive({call.ArgumentList.Arguments.FirstOrDefault()})|{Holder(call)}", at(call));
+                    continue;
+                }
+                if (call.Expression is MemberAccessExpressionSyntax { Expression: not (ThisExpressionSyntax or BaseExpressionSyntax) })
+                    continue;
+                if (semantic.GetSymbolInfo(call).Symbol is IMethodSymbol callee && Own(callee))
+                {
+                    var holder = Holder(call);
+                    if (holder.Length > 0 && holder != callee.Name)
+                        type.AddBehaviour("calls", $"{holder}>{callee.Name}", at(call));
+                }
+            }
+        }
+
+        private static bool DerivesFromSymbol(INamedTypeSymbol type, INamedTypeSymbol candidate)
+        {
+            for (var current = type.BaseType; current != null; current = current.BaseType)
+                if (SymbolEqualityComparer.Default.Equals(current.OriginalDefinition, candidate.OriginalDefinition))
+                    return true;
+            return false;
         }
 
         // An assignment whose receiver chain starts at a local or a by-value parameter of a value type changes a copy,
@@ -1371,7 +1525,8 @@ public sealed class CodeIndex
         }
     }
 
-    public static CodeIndex? TryLoad(string path, string signature)
+    // signature null loads the saved index whatever code it was built from (check uses a stale index rather than wait).
+    public static CodeIndex? TryLoad(string path, string? signature)
     {
         if (!File.Exists(path))
             return null;
@@ -1383,7 +1538,7 @@ public sealed class CodeIndex
             if (reader.ReadString() != "ArchitectorCodeIndex" || reader.ReadInt32() != FormatVersion)
                 return null;
             var index = new CodeIndex { Signature = reader.ReadString(), ReferenceSet = reader.ReadString(), FromDisk = true };
-            if (index.Signature != signature)
+            if (signature != null && index.Signature != signature)
                 return null;
             var table = new string[reader.ReadInt32()];
             for (var position = 0; position < table.Length; position++)

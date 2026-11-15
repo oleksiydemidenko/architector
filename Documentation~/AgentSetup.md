@@ -89,6 +89,18 @@ For one run, use `--docs=docs/design,docs/technical`.
 
 If an agent will write architecture, copy `Skills~/architector-authoring/` into your agent's skills folder, for example `.claude/skills/` or `.agents/skills/`, or point the agent at it from your instructions.
 
+## 5. Optional: Checks After Edits (Claude Code)
+
+When the project has absence rules (`rules.startedBy` in `Architector/code-facts.json`), the agent can be told about a broken rule right after it edits a prefab, scene or script:
+
+```
+architector-mcp skill install claude --hooks
+```
+
+This adds two hooks to `.claude/settings.local.json` (your own settings, not committed): `check` for the file after an Edit or Write of a `.cs`, `.prefab`, `.unity` or `.asset` file, and `check` for the files git sees as changed when the agent stops. Both print nothing when the rules hold; findings reach the agent, and stopping a second time always goes through. On a fresh clone the check says the code index is being built and does not wait. Edits made through Unity tools instead of Edit or Write are caught by the stop hook. `architector-mcp skill hooks` shows whether they are installed; turn them off with `architector-mcp skill hooks remove`, or delete the two entries with `check --hook` from that file. `skill sync` points them at the current server version.
+
+Every call of the server, the command line and the hooks is logged to `Library/Architector/calls.jsonl` with its size and duration, for measuring how agents use the tools; `ARCHITECTOR_CALL_LOG=0` turns it off.
+
 ## Several Agents
 
 Only one agent work session can exist per Editor. A session locks the Architector windows while the agent works, if window locking is on. End it before handing the result to a person.

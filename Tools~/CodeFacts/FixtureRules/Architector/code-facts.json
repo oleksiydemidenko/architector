@@ -1,0 +1,19 @@
+{
+    "rules": {
+        "startedBy": [
+            {
+                "name": "handlers are started",
+                "component": "Handler",
+                "in": "Starter",
+                "lists": [
+                    "Starter._handlers",
+                    "PhaseHost/StartList._handlers",
+                    "PhaseHost/TickList._handlers"
+                ],
+                "filledAtRuntime": [
+                    "Assets/Prefabs/Runtime.prefab"
+                ]
+            }
+        ]
+    }
+}

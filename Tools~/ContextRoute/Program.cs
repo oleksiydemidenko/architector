@@ -35,7 +35,10 @@ public static class Program
 
         if (args.Contains("--json"))
         {
-            Console.WriteLine(JsonSerializer.Serialize(routes.Select(route => route.ToJson()), new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
+            var array = new System.Text.Json.Nodes.JsonArray();
+            foreach (var route in routes)
+                array.Add(route.ToJson());
+            Console.WriteLine(array.ToJsonString(new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
             return routes.All(route => route.Found) ? 0 : 1;
         }
 
@@ -317,27 +320,47 @@ public static class Program
                 text.AppendLine($"    node {NodeHits[layer]} read by (code facts): {access.Readers}");
         }
 
-        public object ToJson()
+        // Built as JSON nodes, not by reflection: the trimmed server binary that hosts this code has no reflection-based
+        // serialization.
+        public System.Text.Json.Nodes.JsonObject ToJson()
         {
-            return new
+            static System.Text.Json.Nodes.JsonArray Array(IEnumerable<System.Text.Json.Nodes.JsonNode?> items)
             {
-                query = Query,
-                file = File,
-                layers = Layers.Select(entry => new
+                var array = new System.Text.Json.Nodes.JsonArray();
+                foreach (var item in items)
+                    array.Add(item);
+                return array;
+            }
+            return new System.Text.Json.Nodes.JsonObject
+            {
+                ["query"] = Query,
+                ["file"] = File,
+                ["layers"] = Array(Layers.Select(entry => (System.Text.Json.Nodes.JsonNode?)new System.Text.Json.Nodes.JsonObject
                 {
-                    path = entry.Layer.Path,
-                    id = entry.Layer.Id,
-                    reason = entry.Reason,
-                    purpose = entry.Layer.Purpose,
-                    digest = Model.DigestSections.TryGetValue(entry.Layer.Path, out var section) ? $"{section.Start}-{section.End}" : null,
-                    connected = entry.Layer.Connected.Select(id => Model.Layers.FirstOrDefault(other => other.Id == id)?.Path).Where(path => path != null).Order(StringComparer.Ordinal),
-                    design = Model.DigestSections.ContainsKey(entry.Layer.Path) ? null : Model.Summary(entry.Layer),
-                    node = NodeHits.TryGetValue(entry.Layer, out var title) ? title : null,
-                    written_by = Access(entry.Layer)?.Writers,
-                    read_by = Access(entry.Layer)?.Readers
-                }),
-                linked_elsewhere = LinkedElsewhere.Select(entry => new { layer = entry.Layer.Path, node = entry.Node, written_by = Access(entry.Layer)?.Writers, read_by = Access(entry.Layer)?.Readers }),
-                documents = Documents.Select(entry => new { path = entry.Path, matches = entry.Matches })
+                    ["path"] = entry.Layer.Path,
+                    ["id"] = entry.Layer.Id,
+                    ["reason"] = entry.Reason,
+                    ["purpose"] = entry.Layer.Purpose,
+                    ["digest"] = Model.DigestSections.TryGetValue(entry.Layer.Path, out var section) ? $"{section.Start}-{section.End}" : null,
+                    ["connected"] = Array(entry.Layer.Connected.Select(id => Model.Layers.FirstOrDefault(other => other.Id == id)?.Path).Where(path => path != null)
+                        .Order(StringComparer.Ordinal).Select(path => (System.Text.Json.Nodes.JsonNode?)path)),
+                    ["design"] = Model.DigestSections.ContainsKey(entry.Layer.Path) ? null : Array(Model.Summary(entry.Layer).Select(line => (System.Text.Json.Nodes.JsonNode?)line)),
+                    ["node"] = NodeHits.TryGetValue(entry.Layer, out var title) ? title : null,
+                    ["written_by"] = Access(entry.Layer)?.Writers,
+                    ["read_by"] = Access(entry.Layer)?.Readers
+                })),
+                ["linked_elsewhere"] = Array(LinkedElsewhere.Select(entry => (System.Text.Json.Nodes.JsonNode?)new System.Text.Json.Nodes.JsonObject
+                {
+                    ["layer"] = entry.Layer.Path,
+                    ["node"] = entry.Node,
+                    ["written_by"] = Access(entry.Layer)?.Writers,
+                    ["read_by"] = Access(entry.Layer)?.Readers
+                })),
+                ["documents"] = Array(Documents.Select(entry => (System.Text.Json.Nodes.JsonNode?)new System.Text.Json.Nodes.JsonObject
+                {
+                    ["path"] = entry.Path,
+                    ["matches"] = entry.Matches
+                }))
             };
         }
 

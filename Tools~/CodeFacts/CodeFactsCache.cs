@@ -55,4 +55,50 @@ public sealed class FactsCache
     }
 
     public FactsModel Architecture() => FactsModel.ArchitectureOnly(root);
+
+    // For check: an index without waiting for an analysis. The current one ("fresh"), else the one in memory or saved
+    // even when the code changed since ("stale"; a refresh starts in the background), else none ("building"; the first
+    // analysis starts in the background).
+    public (CodeIndex? Index, string State) IndexForCheck()
+    {
+        var signature = CodeIndex.ComputeSignature(root);
+        CodeIndex? current;
+        lock (gate)
+            current = index;
+        current ??= CodeIndex.TryLoad(CodeIndex.SnapshotPath(root, referenceSet), null);
+        if (current != null && current.Signature == signature)
+        {
+            lock (gate)
+                index ??= current;
+            return (current, "fresh");
+        }
+        Refresh();
+        return (current, current == null ? "building" : "stale");
+    }
+
+    private int refreshing;
+
+    // Analyses the code once in the background, unless an analysis already runs.
+    private void Refresh()
+    {
+        if (Interlocked.Exchange(ref refreshing, 1) == 1)
+            return;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                lock (gate)
+                    index = CodeIndex.LoadOrBuild(root, referenceSet, references);
+            }
+            catch (Exception)
+            {
+                // The next facts call analyses again and reports the error.
+            }
+            finally
+            {
+                Interlocked.Exchange(ref refreshing, 0);
+            }
+        }) { IsBackground = true, Name = "Architector code index refresh" };
+        thread.Start();
+    }
 }

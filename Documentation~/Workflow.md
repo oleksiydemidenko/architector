@@ -14,7 +14,8 @@ Architector separates what is agreed from what is being tried. This page describ
 Search the code for names and text. Architector answers what the C# text does not show, so use it for those questions:
 
 - **Placement and wiring:** where a component is placed, which serialized lists of other components hold it, whether a type is wired, created in code or dead (`layer_facts` with `type`, its `wiring`).
-- **State access:** who writes and who reads a state type, with their layers (`architector-mcp route <file|type>` for the node it names, or the behaviour facts of a type).
+- **State access:** who writes and who reads a state type, where that runs and on which prefab instance (`architector-mcp slice <type>`, about 1,500 tokens with the lines themselves; `route <file|type>` names them only).
+- **Rules over assets:** whether an edited prefab, scene or placed script breaks a project rule, such as a component missing from the lists that start it (`architector-mcp check <changed files>`, silent when clean).
 - **Ownership and dependencies:** which layer owns a file (`route`), which layer pairs the code evidences (`code_evidence`), what a move would change (`scope_what_if`).
 - **Agreed design:** the approved contracts and relationships of a layer you change or review (`digest <layer>`).
 
@@ -22,7 +23,8 @@ Search the code for names and text. Architector answers what the C# text does no
 2. `architector-mcp digest` (MCP `architector_digest`) without layers only lists the approved layers by group with their node counts; it is cheap. Ask for content by name: a layer (`digest Core/Input Core/Player`) gives its full section with members and relationships; a group (`digest Core/Gameplay`) gives its layers in a compact form: per node its title, kind, type, the first sentence of its responsibility and the types that write and read its state. `--form compact` without layers gives every layer compactly, which is large on big graphs (about 90,000 characters for 60 layers); `--form full` gives the whole digest.
    "written by" and "read by" are generated from the behaviour facts `writes` and `reads` (the configured read and write calls in `code-facts.json`), capped with a total. Responsibilities are written by people or agents and can drift from the code; for "who writes or reads X" trust the generated lines and `layer_facts` over the description.
 3. `layer_facts` gives a layer's files and types, its references to and from other layers, node candidates and how its scripts are wired in prefabs and scenes, each with file:line. For one type it gives its behaviour facts: what it reads, writes, subscribes to, assigns in other types and which Unity callbacks it has. A type that looks dead or test-only in C# is decided by its wiring: only `unwired` marks a dead-code candidate. `base_only` types live through their placed subclasses, `created_in_code` types are created by `AddComponent` or `CreateInstance`, `created_by_reflection` types by a reflection site, and `not_tracked` types cannot be seen in assets at all. Wiring is trusted only after the project lists its sandboxes and old copies in `code-facts.json` (`wiring.testPlaces`). To check an existing graph, start from `facts_audit`: it lists the contradictions between graph and facts with their evidence. After a tool update or a code change, `facts_diff` against a saved `facts_snapshot` shows what to re-check. These code facts (`code_evidence`, `layer_facts`, `scope_what_if`, `layer_dump`, `lookup`) come from the server without Unity.
-4. Use `layer_dump` or paged `layer_graph` only when editing a layer. They return much more than a digest section.
+4. `slice <type|file.cs>` answers "what writes and reads this, where does it run, on which object" in one reply: the prefabs that hold the type, per holder the writers and readers with the prefab they sit in, the text field of the holder that names that prefab (an asset id or address naming the prefab, for example the one loaded on every peer or only on the authority) and their start lists, and for each the lines inside the methods that ticks, callbacks, events or Unity run, with how each runs. For a component it gives placement, how its methods run, lifecycle effects and what it writes.
+5. Use `layer_dump` or paged `layer_graph` only when editing a layer. They return much more than a digest section.
 
 Keep results small: summary and search first, then the exact contract you need.
 
@@ -52,6 +54,10 @@ After implementing:
 3. For layers with a code scope, run `code_evidence` (or `DependencyEvidence`; the totals are the same). Fix an undeclared dependency in the code, or agree to declare it. Do not widen a scope to silence the report.
 
 Conformance checks compiled structure. It says nothing about lifecycle behaviour, method bodies or whether the feature works.
+
+## Rules Over Assets
+
+Some links live only in serialized data: a handler on a prefab runs only when another component of that prefab lists it. `rules.startedBy` in `Architector/code-facts.json` writes such a link down once (see the README), and `architector-mcp check <changed files>` (or `check --git`) answers it after each edit: one line per component that is missing from a list, nothing when everything is in place. `facts audit` reports the same findings for the whole project. A rule with false findings is worse than none: name the files whose lists code fills in `filledAtRuntime`, and fix a finding in the prefab rather than widening the rule. The optional Claude Code hooks (`skill install claude --hooks`) run `check` after edits and when the agent stops.
 
 ## Dependency cycles
 

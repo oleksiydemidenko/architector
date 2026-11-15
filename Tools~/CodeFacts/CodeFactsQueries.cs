@@ -8,7 +8,7 @@ namespace Architector.CodeFacts;
 // full lists come by offset/limit paging or with output "file".
 public static class FactsQueries
 {
-    public static readonly string[] Actions = { "code_evidence", "layer_facts", "scope_what_if", "layer_dump", "lookup", "facts_audit", "facts_snapshot", "facts_diff" };
+    public static readonly string[] Actions = { "code_evidence", "layer_facts", "scope_what_if", "layer_dump", "lookup", "facts_audit", "facts_snapshot", "facts_diff", "slice" };
     public static readonly string[] ArchitectureOnlyActions = { "layer_dump", "lookup" };
 
     // Replies are paid for in tokens: no indentation and no escaping of characters such as -> or '.
@@ -38,6 +38,7 @@ public static class FactsQueries
             "facts_audit" => Audit(model, arguments, root),
             "facts_snapshot" => FactsSnapshots.Save(model, arguments, root),
             "facts_diff" => FactsSnapshots.Diff(model, arguments, root),
+            "slice" => FactsSlice.Answer(model, arguments, root),
             _ => Failure("unknown_action", $"Unknown code facts action '{action}'. Valid: {string.Join(", ", Actions)}.")
         };
         if (root.Length > 0)
@@ -693,7 +694,11 @@ public static class FactsQueries
         public bool Script;
         public string ScriptFile = string.Empty;
         public string ScriptMatch = string.Empty;
-        public List<(string File, string Object, bool Enabled, List<string> ListedBy, string Via)> Places = new();
+        public List<(string File, string Object, bool Enabled, List<string> ListedBy, string Via, string FileId, bool Active)> Places = new();
+        // startedBy rules: whether the type is a rule's component, its findings and skipped places.
+        public bool RuleChecked;
+        public List<FactsRules.Finding> RuleFindings = new();
+        public int RuleSkipped;
         public List<string> SerializedIn = new();
         public bool TestOnly;
         public bool Found;
@@ -772,6 +777,20 @@ public static class FactsQueries
             }
         }
         ManagedReferenceOnly(model, wiring, byKey);
+        if (model.Index != null && assets.Root.Length > 0 && FactsRules.HasRules(assets.Root))
+        {
+            var rules = FactsRules.Run(model.Index, assets, assets.Root);
+            foreach (var key in rules.RuleComponentTypes)
+                if (wiring.TryGetValue(key, out var item))
+                    item.RuleChecked = true;
+            foreach (var finding in rules.Findings)
+                if (wiring.TryGetValue(finding.TypeKey, out var item))
+                    item.RuleFindings.Add(finding);
+            foreach (var skip in rules.Skipped)
+                if (wiring.TryGetValue(skip.TypeKey, out var item))
+                    item.RuleSkipped++;
+            model.RuleResult = rules;
+        }
         if (model.Index != null)
             foreach (var (baseKey, at) in model.Index.ReflectionSites)
             {
@@ -925,19 +944,22 @@ public static class FactsQueries
             wiring.ScriptMatch = script.Match;
             if (assets.ComponentsByGuid.TryGetValue(guid, out var components))
                 foreach (var (path, component) in components)
-                    wiring.Places.Add((path, component.Object, component.Enabled, component.ListedBy.Select(value =>
+                {
+                    var entry = assets.Files[path];
+                    wiring.Places.Add((path, component.Object, component.Enabled, assets.ListsOf(entry, component).Select(membership =>
                     {
-                        var parts = value.Split('|');
-                        var lister = assets.ScriptByGuid.TryGetValue(parts[0], out var listerScript) ? Path.GetFileNameWithoutExtension(listerScript) : parts[0];
-                        return $"{lister}.{parts[1]}";
-                    }).ToList(), string.Empty));
+                        var lister = assets.ScriptByGuid.TryGetValue(membership.ListerGuid, out var listerScript) ? Path.GetFileNameWithoutExtension(listerScript) : membership.ListerGuid;
+                        // A list inside a [SerializeReference] value: "<Lister>/<ManagedClass>.<field>", as rules name it.
+                        return membership.Field.Contains('.') ? $"{lister}/{membership.Field}" : $"{lister}.{membership.Field}";
+                    }).ToList(), string.Empty, component.FileId, component.Stripped || assets.ComponentActive(entry, component)));
+                }
         }
         // Abstract and generic types are never stored themselves; their concrete subclasses are.
         if (!type.IsAbstract && !type.IsGeneric)
         {
             if (assets.UsesBySerializedType.TryGetValue(type.FullName, out var uses))
                 foreach (var (path, use) in uses)
-                    wiring.Places.Add((path, use.Object, true, new List<string>(), use.Via));
+                    wiring.Places.Add((path, use.Object, true, new List<string>(), use.Via, string.Empty, true));
             if (assets.FilesBySerializedType.TryGetValue(type.FullName, out var serializedIn))
                 wiring.SerializedIn.AddRange(serializedIn);
         }
@@ -996,13 +1018,25 @@ public static class FactsQueries
         Page(places, "items", wiring.Places.Select(place =>
         {
             var row = new JsonObject { ["file"] = place.File, ["object"] = place.Object, ["enabled"] = place.Enabled };
+            if (!place.Active)
+                row["active"] = false;
             if (place.ListedBy.Count > 0)
                 row["listed_by"] = Array(place.ListedBy.Select(value => (JsonNode?)value));
+            var finding = wiring.RuleFindings.FirstOrDefault(item => item.File == place.File && item.FileId == place.FileId && item.Via.Length == 0);
+            if (finding != null)
+                row["missing"] = Array(finding.Missing.Select(list => (JsonNode?)list));
             if (place.Via.Length > 0)
                 row["via"] = place.Via;
             return (JsonNode?)row;
         }), section == "wiring" || Full(arguments) ? arguments : null, BehaviourPerSection);
         entry["places"] = places;
+        if (wiring.RuleChecked)
+        {
+            var startedBy = new JsonObject { ["findings"] = wiring.RuleFindings.Count, ["skipped"] = wiring.RuleSkipped };
+            if (wiring.RuleFindings.Count > 0)
+                startedBy["items"] = FactsRules.FindingsJson(wiring.RuleFindings.Take(BehaviourPerSection));
+            entry["started_by"] = startedBy;
+        }
         return entry;
     }
 
@@ -1089,6 +1123,32 @@ public static class FactsQueries
             Add("central_type_without_node", type.OwnerLayerId!, null, type.FullName, evidence);
         }
 
+        if (model.RuleResult != null)
+            foreach (var finding in model.RuleResult.Findings)
+            {
+                var type = model.Types.FirstOrDefault(candidate => candidate.Key == finding.TypeKey);
+                if (type?.OwnerLayerId != null ? !InScope(type.OwnerLayerId) : only != null)
+                    continue;
+                var evidence = new JsonObject
+                {
+                    ["rule"] = finding.Rule,
+                    ["file"] = finding.File,
+                    ["object"] = finding.Object,
+                    ["missing"] = Array(finding.Missing.Select(list => (JsonNode?)list))
+                };
+                if (finding.Via.Length > 0)
+                    evidence["via"] = finding.Via;
+                items.Add(new JsonObject
+                {
+                    ["kind"] = "rule_violation",
+                    ["layer"] = type?.OwnerLayerId == null ? null : architecture.Path(type.OwnerLayerId),
+                    ["node"] = type?.Nodes.FirstOrDefault(),
+                    ["node_title"] = type?.Nodes.Count > 0 ? architecture.FindNode(type.Nodes[0])?.Title : null,
+                    ["type"] = type?.FullName ?? finding.Component,
+                    ["evidence"] = evidence
+                });
+            }
+
         var pairs = Pairs(evidenceReferences);
         var scoped = model.ScopedLayers.Select(layer => layer.Id).ToHashSet(StringComparer.Ordinal);
         var dependencies = architecture.CrossRelationships.Where(relationship => relationship.Kind == "dependency"
@@ -1145,6 +1205,8 @@ public static class FactsQueries
         foreach (var group in items.GroupBy(item => (string)item["kind"]!).OrderBy(group => group.Key, StringComparer.Ordinal))
             byKind[group.Key] = group.Count();
         result["by_kind"] = byKind;
+        if (model.RuleResult != null)
+            result["rules"] = FactsRules.Summary(model.RuleResult);
         Page(result, "items", items, arguments, 100);
         return result;
     }

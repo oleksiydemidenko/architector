@@ -42,6 +42,13 @@ public static partial class McpServer
         new("digest", "digest [<layer|group>...] [--form index|compact|full|list] [--json]",
             "The approved architecture. Without layers it only lists the approved layers by group with node counts (cheap). A layer (path or unique trailing part) gives its full section with members, base types and relationships; a group gives its layers in the compact form (node, type, first sentence of its role, the types that write and read its state from the code facts, capped with a total). --form compact without layers gives every layer compactly (large on big graphs), --form full the whole digest, --form list the layer names. The text of architector_digest; --json wraps it.",
             false, new[] { "form", "json" }),
+        new("slice", "slice <type|file.cs> [--json]",
+            "Who writes and reads a type and where that runs, in about 1,500 tokens: the prefabs that hold it, then per holder the writers and readers with their placement (prefab, the field of the holder that loads that prefab, start lists) and their use sites inside methods that ticks, callbacks, events or Unity run, with how each is run. For a component type: its placement and start lists, how its methods run, lifecycle effects (Activate, Deactivate, SetActive) and what it writes with the other writers and readers. Prints text; --json wraps it.",
+            false, new[] { "json" }),
+        new("facts index", "facts index", "Builds the code index now, or confirms it is current (check starts this in the background when the index is missing or stale).", false, Array.Empty<string>()),
+        new("check", "check [<file>...] [--git] [--json]",
+            "The project's absence rules (rules.startedBy in Architector/code-facts.json) for changed files only: a prefab or scene is checked with its variants and the files that nest it, a C# file through the prefabs and scenes that place its script. --git adds the files git sees as changed; without files and --git the whole project. Prints one line per finding and nothing when clean (exit 0; 3 with findings). Never waits for a code analysis: with a stale index it answers from the saved one, on a fresh clone it says the index is building. --hook post|stop is the mode the optional Claude Code hooks use.",
+            false, new[] { "git", "json", "hook" }),
         new("facts dump", "facts dump <layer>", "A layer's nodes and relationships with ids, without layout, paged.", false, new[] { "offset", "limit", "output" }),
         new("facts lookup", "facts lookup <Layer/Path>[::Node Title[::Member]]...", "Layer, node and member ids by name.", false, Array.Empty<string>()),
         new("query", "query <action> [--<parameter> <value>]...",
@@ -56,13 +63,14 @@ public static partial class McpServer
         new("status", "status", "The project, its Architector data and whether the Unity Editor is reachable.", false, Array.Empty<string>()),
         new("doctor", "doctor", "Checks everything the tools need and says what to fix: project, data, code index, Editor, package, agent skills.", false, Array.Empty<string>()),
         new("commands", "commands", "Every command as JSON, for tools.", false, Array.Empty<string>()),
-        new("skill install", "skill install <claude|codex|all> [--force]",
-            "Installs the package's architector-authoring skill into the project for an agent (.claude/skills or .agents/skills). A copy not installed by Architector is kept unless --force.",
-            false, new[] { "force" }),
-        new("skill sync", "skill sync", "Updates every skill copy installed by Architector to the package version.", false, Array.Empty<string>())
+        new("skill install", "skill install <claude|codex|all> [--force] [--hooks]",
+            "Installs the package's architector-authoring skill into the project for an agent (.claude/skills or .agents/skills). A copy not installed by Architector is kept unless --force. --hooks also adds two optional Claude Code hooks to .claude/settings.local.json: check after an Edit or Write of a .cs, .prefab, .unity or .asset file, and check of git's changed files when the agent stops; both are silent when clean.",
+            false, new[] { "force", "hooks" }),
+        new("skill hooks", "skill hooks [remove]", "Shows whether the optional Claude Code hooks are installed; remove takes them out of .claude/settings.local.json.", false, Array.Empty<string>()),
+        new("skill sync", "skill sync", "Updates every skill copy installed by Architector to the package version, and points installed hooks at this binary.", false, Array.Empty<string>())
     };
 
-    private static readonly string[] CliWords = { "facts", "route", "digest", "query", "edit", "status", "doctor", "commands", "skill", "help", "--help", "-h" };
+    private static readonly string[] CliWords = { "facts", "route", "digest", "slice", "check", "query", "edit", "status", "doctor", "commands", "skill", "help", "--help", "-h" };
 
     private static bool IsCliCommand(string word) => CliWords.Contains(word);
 
@@ -97,7 +105,43 @@ public static partial class McpServer
         if (positional.Count == 0 || positional[0] is "help" or "--help" or "-h" || options.ContainsKey("help"))
             return Help(positional.Where(word => word is not ("help" or "--help" or "-h")).ToList());
         var project = options.TryGetValue("project", out var projectValues) ? projectValues.Last() : null;
+        // A hook gets the event as JSON on standard input: the edited file, the session id, whether a stop hook runs again.
+        JsonNode? hookInput = null;
+        if (options.ContainsKey("hook") && Console.IsInputRedirected)
+        {
+            try
+            {
+                hookInput = JsonNode.Parse(Console.In.ReadToEnd());
+            }
+            catch (Exception exception) when (exception is System.Text.Json.JsonException or IOException)
+            {
+            }
+        }
+        if (project == null && (string?)hookInput?["cwd"] is { } hookFolder)
+            project = hookFolder;
         root = FindProject(project == null ? Array.Empty<string>() : new[] { "--project", project });
+        var counting = new CountingWriter(Console.Out);
+        Console.SetOut(counting);
+        var watch = StartCall();
+        callAction = string.Join(" ", positional.Take(positional[0] is "facts" or "skill" && positional.Count > 1 ? 2 : 1));
+        var code = RunCliCommand(positional, options, hookInput);
+        if (positional[0] is not ("commands" or "doctor" or "status") && !(options.ContainsKey("hook") && code == ExitOk && counting.Count == 0 && callAction == "check" && hookSkipped))
+        {
+            var arguments = new JsonObject();
+            var rest = positional.Skip(callAction.Split(' ').Length).ToArray();
+            if (rest.Length > 0)
+                arguments["args"] = Nodes(rest.Select(item => (JsonNode?)item));
+            foreach (var (name, values) in options.Where(pair => pair.Key is not ("project" or "pretty")))
+                arguments[name] = values.Last();
+            LogCall(options.ContainsKey("hook") ? "hook" : "cli", callAction, arguments, counting.Count, watch.ElapsedMilliseconds,
+                (string?)hookInput?["session_id"]);
+        }
+        Console.Out.Flush();
+        return code;
+    }
+
+    private static int RunCliCommand(List<string> positional, Dictionary<string, List<string>> options, JsonNode? hookInput)
+    {
         try
         {
             switch (positional[0])
@@ -136,6 +180,10 @@ public static partial class McpServer
                     return CliBridge(positional[0], positional, options);
                 case "skill":
                     return Skill(positional, options);
+                case "slice":
+                    return CliSlice(positional, options);
+                case "check":
+                    return HasData() || FactsRules.HasRules(root) ? CliCheck(positional, options, hookInput) : HookQuiet(options, () => Fail("no_architecture", NoData, ExitSetup));
             }
             return Fail("unknown_command", $"Unknown command '{positional[0]}'. Commands: {string.Join(", ", CliCommands.Select(command => command.Name))}.", ExitUsage);
         }
@@ -204,6 +252,8 @@ public static partial class McpServer
                     arguments["against"] = positional[3];
                 Copy("offset", "limit", "output");
                 break;
+            case "index":
+                return CliIndex();
             case "what-if":
                 action = "scope_what_if";
                 var moves = new JsonArray();
@@ -220,12 +270,27 @@ public static partial class McpServer
                 Copy("output");
                 break;
             default:
-                return Fail("usage", "facts takes evidence, layer, audit, snapshot, diff, what-if, dump or lookup. architector-mcp help facts lists their options.", ExitUsage);
+                return Fail("usage", "facts takes evidence, layer, audit, snapshot, diff, what-if, dump, lookup or index. architector-mcp help facts lists their options.", ExitUsage);
         }
         var cache = new FactsCache(root!, "net100", () => Basic.Reference.Assemblies.Net100.References.All);
         var model = FactsQueries.ArchitectureOnlyActions.Contains(action) ? cache.Architecture() : cache.Get();
         var answer = FactsQueries.Answer(model, action, arguments, root!);
         return Emit(answer, answer["success"]?.GetValue<bool>() == true ? ExitOk : ExitFailed);
+    }
+
+    private static int CliSlice(List<string> positional, Dictionary<string, List<string>> options)
+    {
+        if (!HasData())
+            return Fail("no_architecture", NoData, ExitSetup);
+        if (positional.Count < 2)
+            return Fail("usage", "Usage: architector-mcp slice <type|file.cs> [--json]", ExitUsage);
+        var cache = new FactsCache(root!, "net100", () => Basic.Reference.Assemblies.Net100.References.All);
+        var answer = FactsQueries.Answer(cache.Get(), "slice", new JsonObject { ["target"] = positional[1] }, root!);
+        var ok = answer["success"]?.GetValue<bool>() == true;
+        if (options.ContainsKey("json") || !ok)
+            return Emit(answer, ok ? ExitOk : ExitFailed);
+        Console.Out.Write((string?)answer["text"]);
+        return ExitOk;
     }
 
     // route and digest print the text of their MCP tools, which agents read directly; --json wraps it (route: the
@@ -337,6 +402,9 @@ public static partial class McpServer
             Check("editor", EditorReachable(), EditorReachable() ? "Reachable; query and edit work." : "Not reachable: open the project in Unity for query and edit. facts, status and doctor work without it.", false);
             var package = FindPackage(root);
             Check("package", package != null, package == null ? "The Architector package was not found in Packages, Library/PackageCache or the manifest." : $"{package.Value.Version} at {package.Value.Path}", false);
+            Check("hooks", true, HooksInstalled(root)
+                ? "Claude Code hooks installed in .claude/settings.local.json (check after edits and at stop); skill hooks remove takes them out."
+                : "Optional Claude Code hooks are not installed; skill install claude --hooks adds them.", false);
             foreach (var (agent, folder) in SkillTargets(root))
             {
                 var stamp = Path.Combine(folder, StampFile);
@@ -365,8 +433,16 @@ public static partial class McpServer
     private static int Skill(List<string> positional, Dictionary<string, List<string>> options)
     {
         var sub = positional.Count > 1 ? positional[1] : string.Empty;
+        if (sub == "hooks")
+        {
+            if (positional.Count > 2 && positional[2] != "remove")
+                return Fail("usage", "Usage: architector-mcp skill hooks [remove]", ExitUsage);
+            if (positional.Count > 2)
+                return Emit(new JsonObject { ["success"] = true, ["hooks"] = UpdateHooks("remove") }, ExitOk);
+            return Emit(new JsonObject { ["success"] = true, ["installed"] = HooksInstalled(root!), ["settings"] = HookSettingsPath(root!).Replace('\\', '/') }, ExitOk);
+        }
         if (sub is not ("install" or "sync"))
-            return Fail("usage", "Usage: architector-mcp skill install <claude|codex|all> [--force] | skill sync", ExitUsage);
+            return Fail("usage", "Usage: architector-mcp skill install <claude|codex|all> [--force] [--hooks] | skill hooks [remove] | skill sync", ExitUsage);
         var package = FindPackage(root!);
         if (package == null)
             return Fail("package_not_found", "The Architector package was not found in Packages, Library/PackageCache or the manifest.", ExitSetup);
@@ -413,7 +489,12 @@ public static partial class McpServer
             results.Add((JsonNode)new JsonObject { ["agent"] = name, ["folder"] = folder.Replace('\\', '/'), ["status"] = status });
         }
         var conflict = results.Any(item => ((string?)item?["status"])?.StartsWith("conflict", StringComparison.Ordinal) == true);
-        return Emit(new JsonObject { ["success"] = !conflict, ["version"] = package.Value.Version, ["skills"] = results }, conflict ? ExitFailed : ExitOk);
+        var reply = new JsonObject { ["success"] = !conflict, ["version"] = package.Value.Version, ["skills"] = results };
+        if (sub == "install" && options.ContainsKey("hooks"))
+            reply["hooks"] = agent is "claude" or "all" ? UpdateHooks("install") : new JsonObject { ["status"] = "hooks are for Claude Code; use skill install claude --hooks" };
+        else if (sub == "sync")
+            reply["hooks"] = UpdateHooks("sync");
+        return Emit(reply, conflict ? ExitFailed : ExitOk);
     }
 
     // The installed Architector package: embedded in Packages, a file: path from the manifest, or the package cache.
@@ -469,7 +550,8 @@ public static partial class McpServer
         text.AppendLine();
         text.AppendLine("Global: --project <path> (default: the Unity project containing the current folder), --pretty (indented JSON).");
         text.AppendLine("Paged replies take --offset and --limit and report next_offset; --output file writes the full answer under Library/Architector/facts.");
-        text.AppendLine("Every reply is JSON with success, except route and digest, which print the text of their MCP tools (--json gives JSON). Exit codes: 0 success, 1 internal error, 2 usage, 4 setup missing, 6 success=false, 7 Unity Editor not reachable (retry when it is open).");
+        text.AppendLine("Every reply is JSON with success, except route and digest, which print the text of their MCP tools, and check, which prints findings only (--json gives JSON). Exit codes: 0 success, 1 internal error, 2 usage, 3 check findings, 4 setup missing, 6 success=false, 7 Unity Editor not reachable (retry when it is open).");
+        text.AppendLine("Every call is logged to Library/Architector/calls.jsonl (time, caller, action, arguments, reply size, duration); ARCHITECTOR_CALL_LOG=0 turns that off.");
         Console.Out.Write(text.ToString());
         return ExitOk;
     }
@@ -494,7 +576,7 @@ public static partial class McpServer
                 value = name[(equals + 1)..];
                 name = name[..equals];
             }
-            else if (index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal) && name is not ("pretty" or "force" or "help" or "json" or "full"))
+            else if (index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal) && name is not ("pretty" or "force" or "help" or "json" or "full" or "git" or "hooks"))
                 value = args[++index];
             else
                 value = "true";

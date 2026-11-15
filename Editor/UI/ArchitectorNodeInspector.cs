@@ -59,6 +59,13 @@ namespace Architector.Editor
         private int cachedPortalRelationshipRevision = -1;
         private string pendingFocusNodeId = string.Empty;
         private string pendingFocusMemberId = string.Empty;
+        private bool membersExpanded = true;
+        private bool relationshipsExpanded = true;
+        private IReadOnlyList<ArchitectorNodeRelationshipGroup> cachedRelationshipGroups =
+            Array.Empty<ArchitectorNodeRelationshipGroup>();
+        private string cachedRelationshipLayerId = string.Empty;
+        private string cachedRelationshipNodeId = string.Empty;
+        private int cachedRelationshipRevision = -1;
 
         public void RequestMemberFocus(string nodeId, string memberId)
         {
@@ -73,7 +80,8 @@ namespace Architector.Editor
             ArchitectorTypeIndex typeIndex,
             Action<Action> execute,
             Action<string> selectOnly,
-            Action<string> openLayer)
+            Action<string> openLayer,
+            Action<string, string> revealNode = null)
         {
             if (!string.Equals(cachedDocumentsLayerId, layerId, StringComparison.Ordinal)
                 || cachedDocumentsRevision != repository.Revision)
@@ -106,12 +114,12 @@ namespace Architector.Editor
                 DrawResponsibility(layerId, node, repository, execute);
                 if (string.Equals(node.type?.mode, "none", StringComparison.Ordinal))
                 {
-                    DrawEmptyNode(node, layerId, repository, typeIndex, execute, selectOnly);
+                    DrawEmptyNode(node, layerId, repository, typeIndex, execute, selectOnly, revealNode);
                     return;
                 }
                 if (string.Equals(node.type?.mode, "linked", StringComparison.Ordinal))
                 {
-                    DrawLinkedNode(node, layerId, repository, typeIndex, execute);
+                    DrawLinkedNode(node, layerId, repository, typeIndex, execute, revealNode);
                     return;
                 }
 
@@ -154,32 +162,38 @@ namespace Architector.Editor
                 }
 
                 EditorGUILayout.Space(10f);
-                using (new EditorGUILayout.HorizontalScope())
+                using (var box = FoldoutBox($"Members ({members.Count})", ref membersExpanded))
                 {
-                    GUILayout.Label($"Contract Members ({members.Count})", EditorStyles.boldLabel);
-                    GUILayout.FlexibleSpace();
-                    if (GUILayout.Button("Add", EditorStyles.miniButton, GUILayout.Width(50f)))
-                        ShowAddMemberMenu();
-                }
-
-                members = ArchitectorMemberOrder.SortStable(members);
-                for (var index = 0; index < members.Count; index++)
-                {
-                    var member = members[index];
-                    using (new EditorGUILayout.HorizontalScope())
+                    if (box.Expanded)
                     {
-                        var memberKindIndex = Mathf.Max(0, Array.IndexOf(MemberKinds, member.kind));
-                        member.kind = MemberKinds[EditorGUILayout.Popup(memberKindIndex, MemberKinds, GUILayout.Width(88f))];
-                        member.declaration = EditorGUILayout.TextField(member.declaration);
-                        if (GUILayout.Button("−", EditorStyles.miniButton, GUILayout.Width(24f)))
+                        using (new EditorGUILayout.HorizontalScope())
                         {
-                            members.RemoveAt(index);
-                            GUI.changed = true;
-                            GUI.FocusControl(null);
-                            break;
+                            GUILayout.FlexibleSpace();
+                            if (GUILayout.Button("Add", EditorStyles.miniButton, GUILayout.Width(50f)))
+                                ShowAddMemberMenu();
+                        }
+
+                        members = ArchitectorMemberOrder.SortStable(members);
+                        for (var index = 0; index < members.Count; index++)
+                        {
+                            var member = members[index];
+                            using (new EditorGUILayout.HorizontalScope())
+                            {
+                                var memberKindIndex = Mathf.Max(0, Array.IndexOf(MemberKinds, member.kind));
+                                member.kind = MemberKinds[EditorGUILayout.Popup(memberKindIndex, MemberKinds, GUILayout.Width(88f))];
+                                member.declaration = EditorGUILayout.TextField(member.declaration);
+                                if (GUILayout.Button("−", EditorStyles.miniButton, GUILayout.Width(24f)))
+                                {
+                                    members.RemoveAt(index);
+                                    GUI.changed = true;
+                                    GUI.FocusControl(null);
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
+                DrawRelationships(layerId, node, repository, revealNode);
                 EditorGUILayout.EndScrollView();
                 if (EditorGUI.EndChangeCheck())
                     dirty = true;
@@ -331,7 +345,8 @@ namespace Architector.Editor
             ArchitectorRepository repository,
             ArchitectorTypeIndex typeIndex,
             Action<Action> execute,
-            Action<string> selectOnly)
+            Action<string> selectOnly,
+            Action<string, string> revealNode)
         {
             EditorGUI.BeginChangeCheck();
             scroll = EditorGUILayout.BeginScrollView(scroll);
@@ -339,6 +354,8 @@ namespace Architector.Editor
                 "Empty Node represents a high-level architectural idea without a C# type. It can later become a Manual Type or be linked to an indexed project type.",
                 MessageType.Info);
             nodeTitle = DrawTitleField(nodeTitle);
+            EditorGUILayout.Space(8f);
+            DrawRelationships(layerId, node, repository, revealNode);
             EditorGUILayout.EndScrollView();
             if (EditorGUI.EndChangeCheck())
                 dirty = true;
@@ -400,7 +417,8 @@ namespace Architector.Editor
             string layerId,
             ArchitectorRepository repository,
             ArchitectorTypeIndex typeIndex,
-            Action<Action> execute)
+            Action<Action> execute,
+            Action<string, string> revealNode)
         {
             scroll = EditorGUILayout.BeginScrollView(scroll);
             var resolution = typeIndex.Resolve(node.type);
@@ -438,61 +456,69 @@ namespace Architector.Editor
             if (!string.Equals(editedStandalone, standalone, StringComparison.Ordinal))
                 execute(() => repository.SetStandaloneNode(layerId, node.id, editedStandalone));
             EditorGUILayout.Space(8f);
-            using (new EditorGUILayout.HorizontalScope())
+            // A member focus request (a diagnostic row) needs the member list open to scroll to it.
+            if (string.Equals(pendingFocusNodeId, node.id, StringComparison.Ordinal))
+                membersExpanded = true;
+            using (var box = FoldoutBox($"Members ({node.members.Count})", ref membersExpanded))
             {
-                GUILayout.Label($"Contract Members ({node.members.Count})", EditorStyles.boldLabel);
-                GUILayout.FlexibleSpace();
-                using (new EditorGUI.DisabledScope(resolution != ArchitectorTypeResolution.Resolved))
-                {
-                    if (GUILayout.Button("Add", EditorStyles.miniButton, GUILayout.Width(50f)))
-                    {
-                        var selectedKeys = new HashSet<string>(node.members.Select(member => member.symbolKey), StringComparer.Ordinal);
-                        var available = typeIndex.GetMembers(node.type)
-                            .Where(member => !selectedKeys.Contains(member.SymbolKey))
-                            .ToArray();
-                        var screenPosition = GUIUtility.GUIToScreenPoint(Event.current.mousePosition);
-                        ArchitectorMemberPickerWindow.Show(
-                            screenPosition,
-                            available,
-                            repository.Settings.optimization,
-                            indexedMember => execute(() => repository.AddLinkedMember(layerId, node.id, indexedMember)),
-                            indexedMembers => execute(() => repository.AddLinkedMembers(layerId, node.id, indexedMembers)));
-                    }
-                }
-            }
-            foreach (var member in ArchitectorMemberOrder.SortStable(node.members))
-            {
-                var memberResolution = typeIndex.ResolveMember(node.type, member);
-                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+                if (box.Expanded)
                 {
                     using (new EditorGUILayout.HorizontalScope())
                     {
-                        var statusStyle = new GUIStyle(EditorStyles.miniBoldLabel);
-                        statusStyle.normal.textColor = MemberStatusColor(memberResolution);
-                        GUILayout.Label(memberResolution.ToString(), statusStyle, GUILayout.Width(112f));
                         GUILayout.FlexibleSpace();
-                        if (GUILayout.Button("−", EditorStyles.miniButton, GUILayout.Width(24f)))
+                        using (new EditorGUI.DisabledScope(resolution != ArchitectorTypeResolution.Resolved))
                         {
-                            execute(() => repository.RemoveLinkedMember(layerId, node.id, member.id));
-                            GUIUtility.ExitGUI();
+                            if (GUILayout.Button("Add", EditorStyles.miniButton, GUILayout.Width(50f)))
+                            {
+                                var selectedKeys = new HashSet<string>(node.members.Select(member => member.symbolKey), StringComparer.Ordinal);
+                                var available = typeIndex.GetMembers(node.type)
+                                    .Where(member => !selectedKeys.Contains(member.SymbolKey))
+                                    .ToArray();
+                                var screenPosition = GUIUtility.GUIToScreenPoint(Event.current.mousePosition);
+                                ArchitectorMemberPickerWindow.Show(
+                                    screenPosition,
+                                    available,
+                                    repository.Settings.optimization,
+                                    indexedMember => execute(() => repository.AddLinkedMember(layerId, node.id, indexedMember)),
+                                    indexedMembers => execute(() => repository.AddLinkedMembers(layerId, node.id, indexedMembers)));
+                            }
                         }
                     }
-                    declarationStyle ??= new GUIStyle(EditorStyles.wordWrappedMiniLabel) { richText = true };
-                    GUILayout.Label(
-                        new GUIContent(ArchitectorSemanticPalette.RichDeclaration(member.declaration), member.declaration),
-                        declarationStyle);
-                }
-                if (string.Equals(pendingFocusNodeId, node.id, StringComparison.Ordinal)
-                    && string.Equals(pendingFocusMemberId, member.id, StringComparison.Ordinal)
-                    && Event.current.type == EventType.Repaint)
-                {
-                    var memberRect = GUILayoutUtility.GetLastRect();
-                    scroll.y = Mathf.Max(0f, memberRect.y - 28f);
-                    pendingFocusNodeId = string.Empty;
-                    pendingFocusMemberId = string.Empty;
+                    foreach (var member in ArchitectorMemberOrder.SortStable(node.members))
+                    {
+                        var memberResolution = typeIndex.ResolveMember(node.type, member);
+                        using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+                        {
+                            using (new EditorGUILayout.HorizontalScope())
+                            {
+                                var statusStyle = new GUIStyle(EditorStyles.miniBoldLabel);
+                                statusStyle.normal.textColor = MemberStatusColor(memberResolution);
+                                GUILayout.Label(memberResolution.ToString(), statusStyle, GUILayout.Width(112f));
+                                GUILayout.FlexibleSpace();
+                                if (GUILayout.Button("−", EditorStyles.miniButton, GUILayout.Width(24f)))
+                                {
+                                    execute(() => repository.RemoveLinkedMember(layerId, node.id, member.id));
+                                    GUIUtility.ExitGUI();
+                                }
+                            }
+                            declarationStyle ??= new GUIStyle(EditorStyles.wordWrappedMiniLabel) { richText = true };
+                            GUILayout.Label(
+                                new GUIContent(ArchitectorSemanticPalette.RichDeclaration(member.declaration), member.declaration),
+                                declarationStyle);
+                        }
+                        if (string.Equals(pendingFocusNodeId, node.id, StringComparison.Ordinal)
+                            && string.Equals(pendingFocusMemberId, member.id, StringComparison.Ordinal)
+                            && Event.current.type == EventType.Repaint)
+                        {
+                            var memberRect = GUILayoutUtility.GetLastRect();
+                            scroll.y = Mathf.Max(0f, memberRect.y - 28f);
+                            pendingFocusNodeId = string.Empty;
+                            pendingFocusMemberId = string.Empty;
+                        }
+                    }
                 }
             }
-            EditorGUILayout.Space(8f);
+            DrawRelationships(layerId, node, repository, revealNode);
             if (resolution != ArchitectorTypeResolution.Resolved)
             {
                 EditorGUILayout.HelpBox(
@@ -508,6 +534,127 @@ namespace Architector.Editor
         }
 
         private static GUIStyle declarationStyle;
+
+        // Opening or closing a box is not an edit: GUI.changed is kept so a manual node does not turn dirty.
+        private static ArchitectorFoldoutBox FoldoutBox(string title, ref bool expanded)
+        {
+            var changed = GUI.changed;
+            var box = new ArchitectorFoldoutBox(title, ref expanded);
+            GUI.changed = changed;
+            return box;
+        }
+
+        private void DrawRelationships(
+            string layerId,
+            ArchitectorNodeRecord node,
+            ArchitectorRepository repository,
+            Action<string, string> revealNode)
+        {
+            if (!string.Equals(cachedRelationshipLayerId, layerId, StringComparison.Ordinal)
+                || !string.Equals(cachedRelationshipNodeId, node.id, StringComparison.Ordinal)
+                || cachedRelationshipRevision != repository.Revision)
+            {
+                cachedRelationshipGroups = LoadRelationshipGroups(layerId, node.id, repository);
+                cachedRelationshipLayerId = layerId;
+                cachedRelationshipNodeId = node.id;
+                cachedRelationshipRevision = repository.Revision;
+            }
+            var groups = cachedRelationshipGroups;
+            using var box = FoldoutBox($"Relationships ({groups.Sum(group => group.Rows.Count)})", ref relationshipsExpanded);
+            if (!box.Expanded)
+                return;
+            if (groups.Count == 0)
+            {
+                GUILayout.Label("No relationships.", EditorStyles.miniLabel);
+                return;
+            }
+            bool? incoming = null;
+            foreach (var group in groups)
+            {
+                if (incoming != group.Incoming)
+                {
+                    if (incoming != null)
+                        EditorGUILayout.Space(6f);
+                    incoming = group.Incoming;
+                    var count = groups.Where(candidate => candidate.Incoming == group.Incoming).Sum(candidate => candidate.Rows.Count);
+                    GUILayout.Label($"{(group.Incoming ? "Incoming" : "Outgoing")} ({count})", EditorStyles.boldLabel);
+                }
+                GUILayout.Label($"{group.Title} ({group.Rows.Count})", EditorStyles.miniBoldLabel);
+                foreach (var row in group.Rows)
+                {
+                    if (DrawRelationshipRow(group, row) && revealNode != null)
+                    {
+                        revealNode(row.LayerId, row.NodeId);
+                        GUI.FocusControl(null);
+                    }
+                }
+            }
+        }
+
+        // A row is the node at the other end in the color of its type kind, as members color type names, and its layer;
+        // a click reports true so the caller selects and frames that node.
+        private static bool DrawRelationshipRow(ArchitectorNodeRelationshipGroup group, ArchitectorNodeRelationshipRow row)
+        {
+            declarationStyle ??= new GUIStyle(EditorStyles.wordWrappedMiniLabel) { richText = true };
+            Color? titleColor = string.IsNullOrEmpty(row.TypeKind)
+                ? null
+                : (Color?)ArchitectorSemanticPalette.ForTypeKind(row.TypeKind.EndsWith("struct", StringComparison.Ordinal) ? "struct" : row.TypeKind);
+            var title = ArchitectorSemanticPalette.RichSegments(new List<(string Text, Color? Color)> { (row.Title, titleColor) });
+            var label = string.IsNullOrEmpty(row.Label) || !string.IsNullOrEmpty(group.Label) ? string.Empty : $" · {row.Label}";
+            var tooltip = $"{group.Title}{label}\n{row.LayerName} / {row.Title}";
+            var layerWidth = Mathf.Min(EditorStyles.miniLabel.CalcSize(new GUIContent(row.LayerName)).x, 160f);
+            Rect rowRect;
+            using (var scope = new EditorGUILayout.HorizontalScope())
+            {
+                GUILayout.Label(new GUIContent(title, tooltip), declarationStyle);
+                GUILayout.Label(
+                    new GUIContent(Ellipsize(row.LayerName, layerWidth, EditorStyles.miniLabel), tooltip),
+                    EditorStyles.miniLabel,
+                    GUILayout.Width(layerWidth));
+                rowRect = scope.rect;
+            }
+            EditorGUIUtility.AddCursorRect(rowRect, MouseCursor.Link);
+            var current = Event.current;
+            if (current.type == EventType.Repaint && rowRect.Contains(current.mousePosition))
+            {
+                var hover = GUI.skin.settings.selectionColor;
+                hover.a = Mathf.Min(hover.a, 0.2f);
+                EditorGUI.DrawRect(rowRect, hover);
+            }
+            if (current.type == EventType.MouseUp && current.button == 0 && rowRect.Contains(current.mousePosition))
+            {
+                current.Use();
+                return true;
+            }
+            return false;
+        }
+
+        private static IReadOnlyList<ArchitectorNodeRelationshipGroup> LoadRelationshipGroups(
+            string layerId,
+            string nodeId,
+            ArchitectorRepository repository)
+        {
+            var nodesByLayerId = new Dictionary<string, Dictionary<string, ArchitectorNodeRecord>>(StringComparer.Ordinal);
+            ArchitectorNodeRecord FindNode(string otherLayerId, string otherNodeId)
+            {
+                if (string.IsNullOrEmpty(otherLayerId) || string.IsNullOrEmpty(otherNodeId) || repository.FindLayer(otherLayerId) == null)
+                    return null;
+                if (!nodesByLayerId.TryGetValue(otherLayerId, out var nodes))
+                {
+                    nodes = new Dictionary<string, ArchitectorNodeRecord>(StringComparer.Ordinal);
+                    foreach (var candidate in repository.LoadLayer(otherLayerId).semantic.nodes)
+                        nodes[candidate.id] = candidate;
+                    nodesByLayerId.Add(otherLayerId, nodes);
+                }
+                return nodes.TryGetValue(otherNodeId, out var found) ? found : null;
+            }
+            return ArchitectorNodeRelationships.Build(
+                layerId,
+                nodeId,
+                repository.GetRelationshipsForLayer(layerId),
+                FindNode,
+                otherLayerId => repository.FindLayer(otherLayerId)?.name);
+        }
 
         private static Color MemberStatusColor(ArchitectorMemberResolution resolution)
         {

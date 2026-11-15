@@ -7,7 +7,7 @@ using Architector.CodeFacts;
 public static partial class McpServer
 {
     private const string ProtocolVersion = "2025-06-18";
-    private const string Instructions = "Architector holds the architecture of this Unity project as layers with contracts, and facts about the project that a code search does not show. Search the code for names and text; use Architector when the answer lives outside the C# text: where a component is placed and which serialized lists start it, and whether a type is wired at all (architector_query layer_facts with type: wiring); who writes or reads a state type, with their layers (architector_route for a file or type); which layer owns a file and which layer dependencies the code evidences (code_evidence; scope_what_if for a planned move); the approved design of named layers (architector_digest with layers; a bare call only lists them). Code facts work without Unity; layer_dump and lookup give ids by name. Writing needs the open Unity Editor: use architector_edit with a work session (begin_work, dry_run_plan, apply_plan, end_work). Saving does not approve. Approving needs the user's confirmation in the Editor unless capabilities reports agent_may_approve. With a shell, the same binary is a command line: architector_status gives its path (cli); run it with help.";
+    private const string Instructions = "Architector holds the architecture of this Unity project as layers with contracts, and facts about the project that a code search does not show. Search the code for names and text; use Architector when the answer lives outside the C# text: where a component is placed and which serialized lists start it, and whether a type is wired at all (architector_query layer_facts with type: wiring); who writes or reads a state type, where that runs (tick, callback, event) and on which prefab instance (architector_query slice with target); whether edited prefabs, scenes or placed scripts break the project's asset rules (architector_query check with files); which layer owns a file and which layer dependencies the code evidences (code_evidence; scope_what_if for a planned move); the approved design of named layers (architector_digest with layers; a bare call only lists them). Code facts work without Unity; layer_dump and lookup give ids by name. Writing needs the open Unity Editor: use architector_edit with a work session (begin_work, dry_run_plan, apply_plan, end_work). Saving does not approve. Approving needs the user's confirmation in the Editor unless capabilities reports agent_may_approve. With a shell, the same binary is a command line: architector_status gives its path (cli); run it with help.";
     private static readonly UTF8Encoding Utf8 = new(false);
     private static string? root;
     private static FactsCache? facts;
@@ -87,7 +87,7 @@ public static partial class McpServer
     {
         return method switch
         {
-            "initialize" => new JsonObject
+            "initialize" => Initialize(parameters) ?? new JsonObject
             {
                 ["protocolVersion"] = (string?)parameters?["protocolVersion"] ?? ProtocolVersion,
                 ["capabilities"] = new JsonObject { ["tools"] = new JsonObject() },
@@ -96,7 +96,7 @@ public static partial class McpServer
             },
             "ping" => new JsonObject(),
             "tools/list" => new JsonObject { ["tools"] = Tools() },
-            "tools/call" => Call((string?)parameters?["name"] ?? "", parameters?["arguments"]),
+            "tools/call" => LoggedCall(parameters),
             _ => null
         };
     }
@@ -118,11 +118,11 @@ public static partial class McpServer
                     ["layers"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Several layers." },
                     ["form"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("index", "compact", "full", "list"), ["description"] = "index (default without layers: groups, layers, node counts), full (default for layers), compact (default for groups), list (layer names only)." }
                 })),
-            Tool("architector_query", "Read Architector data. code_evidence, layer_facts, scope_what_if, layer_dump, lookup, facts_audit (graph against facts), facts_snapshot and facts_diff answer without Unity from the code and the Architector files; the other actions need the open Unity Editor. Prefer the narrow actions node, relationships and dependency_path, or layer_graph with detail=summary, over a full layer_graph.", ActionSchema(
-                new[] { "capabilities", "work_status", "project_summary", "group_contents", "layer_graph", "node", "relationships", "dependency_path", "setup_check", "approval_status", "baseline_diff", "conformance", "find", "type_search", "type_contract", "validate", "code_evidence", "layer_facts", "scope_what_if", "layer_dump", "lookup", "facts_audit", "facts_snapshot", "facts_diff" },
+            Tool("architector_query", "Read Architector data. code_evidence, layer_facts, scope_what_if, layer_dump, lookup, facts_audit (graph against facts), facts_snapshot, facts_diff, slice (writers and readers of a type with the lines ticks and callbacks run and the prefab instance) and check (asset rules for changed files) answer without Unity from the code and the Architector files; the other actions need the open Unity Editor. Prefer the narrow actions node, relationships and dependency_path, or layer_graph with detail=summary, over a full layer_graph.", ActionSchema(
+                new[] { "capabilities", "work_status", "project_summary", "group_contents", "layer_graph", "node", "relationships", "dependency_path", "setup_check", "approval_status", "baseline_diff", "conformance", "find", "type_search", "type_contract", "validate", "code_evidence", "layer_facts", "scope_what_if", "layer_dump", "lookup", "facts_audit", "facts_snapshot", "facts_diff", "check", "slice" },
                 new JsonObject
                 {
-                    ["target"] = TextParameter("Layer or group ID or path; a type for type_contract."),
+                    ["target"] = TextParameter("Layer or group ID or path; a type for type_contract; a type or C# file for slice."),
                     ["node"] = TextParameter("Node ID or title in the target layer."),
                     ["to"] = TextParameter("Destination layer for dependency_path."),
                     ["query"] = TextParameter("Search text."),
@@ -143,7 +143,8 @@ public static partial class McpServer
                     ["min_uses"] = new JsonObject { ["type"] = "integer", ["description"] = "facts_audit: uses by other layers that make a type central (default 20)." },
                     ["name"] = TextParameter("facts_snapshot: snapshot name (default: the time)."),
                     ["snapshot"] = TextParameter("facts_diff: a snapshot name or file."),
-                    ["against"] = TextParameter("facts_diff: another snapshot; default the current code.")
+                    ["against"] = TextParameter("facts_diff: another snapshot; default the current code."),
+                    ["files"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "check: changed files (project paths); none checks the whole project." }
                 })),
             Tool("architector_edit", "Change the architecture in the open Unity Editor. Call architector_query with action capabilities for the plan format and rules.", ActionSchema(
                 new[] { "begin_work", "resume_work", "end_work", "approve_layers", "revoke_approvals", "revert_to_approved", "dry_run", "apply", "dry_run_plan", "apply_plan", "arrange_layer", "arrange_changed_layers", "relink_node", "set_standalone", "validate_external", "reload_external" },
@@ -194,6 +195,23 @@ public static partial class McpServer
         return new JsonObject { ["type"] = "string", ["description"] = description };
     }
 
+    private static JsonNode LoggedCall(JsonNode? parameters)
+    {
+        var name = (string?)parameters?["name"] ?? "";
+        var arguments = parameters?["arguments"];
+        var watch = StartCall();
+        var reply = Call(name, arguments);
+        var characters = reply["content"] is JsonArray content ? content.Sum(item => ((string?)item?["text"])?.Length ?? 0) : 0;
+        var action = (string?)arguments?["action"];
+        var meta = parameters?["_meta"];
+        LogCall("mcp", action == null ? name : $"{name} {action}", arguments, characters, watch.ElapsedMilliseconds,
+            (string?)meta?["sessionId"] ?? (string?)meta?["session_id"] ?? clientSession);
+        return reply;
+    }
+
+    // A session id the client sent at initialize, if any (no standard field; some clients put one in _meta).
+    private static string? clientSession;
+
     private static JsonNode Call(string name, JsonNode? arguments)
     {
         if (name == "architector_status")
@@ -204,7 +222,8 @@ public static partial class McpServer
         {
             "architector_route" => HasData() ? Text(Route(arguments), false) : Text(NoData, true),
             "architector_digest" => Digest(arguments),
-            "architector_query" => FactsQueries.Actions.Contains((string?)arguments?["action"] ?? string.Empty) ? Facts(arguments) : Bridge("query", arguments),
+            "architector_query" => (string?)arguments?["action"] == "check" ? Check(arguments)
+                : FactsQueries.Actions.Contains((string?)arguments?["action"] ?? string.Empty) ? Facts(arguments) : Bridge("query", arguments),
             "architector_edit" => Bridge("edit", arguments),
             _ => Text("Unknown tool: " + name, true)
         };
@@ -256,6 +275,26 @@ public static partial class McpServer
     {
         var text = DigestText(arguments, out var error);
         return Text(text, error);
+    }
+
+    private static JsonObject? Initialize(JsonNode? parameters)
+    {
+        clientSession = (string?)parameters?["_meta"]?["sessionId"] ?? (string?)parameters?["_meta"]?["session_id"];
+        return null;
+    }
+
+    // check through MCP: the warm server answers from its index, a stale one while it refreshes in the background.
+    private static JsonNode Check(JsonNode? arguments)
+    {
+        var files = arguments?["files"] switch
+        {
+            JsonArray list => list.Select(item => (string?)item ?? string.Empty).ToList(),
+            JsonValue value when value.TryGetValue<string>(out var text) => text.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(),
+            _ => new List<string>()
+        };
+        var (index, state) = facts!.IndexForCheck();
+        var answer = FactsRules.Check(index, state, files, root!, files.Count == 0);
+        return Text(answer.ToJsonString(FactsQueries.Compact), false);
     }
 
     private static JsonNode Facts(JsonNode? arguments)
