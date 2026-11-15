@@ -5,21 +5,28 @@ using System.Xml.Linq;
 // Which Unity assembly compiles each C# file of the project, as the Editor's CompilationPipeline says: from the project
 // files Unity writes (<AssemblyName> and <Compile Include> of every *.csproj in the project folder) when they exist;
 // otherwise from the folders: the nearest .asmdef or .asmref, else Unity's predefined assemblies (Assembly-CSharp,
-// -Editor, -firstpass). A git worktree has no project files, so it uses the folders.
+// -Editor, -firstpass). A linked git worktree (or a shared clone) has no project files and no Library: it reads those of
+// its main checkout, whose paths are the same, and a file only the worktree has goes by its folders.
 internal sealed class McpProjectAssemblies
 {
     private static readonly Regex NameField = new("\"name\"\\s*:\\s*\"([^\"]+)\"");
     private static readonly Regex ReferenceField = new("\"reference\"\\s*:\\s*\"([^\"]+)\"");
 
     private readonly string root;
+    private readonly string referenceRoot;
     private readonly Dictionary<string, string> byFile = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string?> byFolder = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, string>? asmdefByGuid;
 
-    private McpProjectAssemblies(string root)
+    private McpProjectAssemblies(string root, string referenceRoot)
     {
         this.root = root;
+        this.referenceRoot = referenceRoot;
     }
+
+    // The checkout whose Unity project files and Library/ScriptAssemblies give the references: this one, or the main
+    // checkout of a linked worktree.
+    public string ReferenceRoot => referenceRoot;
 
     // Project-relative paths of the project's own sources (those under Assets), the files the Editor compiles itself.
     public IReadOnlyList<string> SourceFiles { get; private set; } = Array.Empty<string>();
@@ -28,7 +35,9 @@ internal sealed class McpProjectAssemblies
 
     public static McpProjectAssemblies Read(string root)
     {
-        var result = new McpProjectAssemblies(Path.GetFullPath(root));
+        var full = Path.GetFullPath(root);
+        var reference = HasProjectFiles(full) ? full : MainCheckout(full) is { } main && HasProjectFiles(main) ? main : full;
+        var result = new McpProjectAssemblies(full, reference);
         result.Load();
         return result;
     }
@@ -36,7 +45,7 @@ internal sealed class McpProjectAssemblies
     private void Load()
     {
         var sources = new List<string>();
-        foreach (var project in Directory.GetFiles(root, "*.csproj"))
+        foreach (var project in Directory.GetFiles(referenceRoot, "*.csproj"))
         {
             XDocument document;
             try
@@ -54,18 +63,18 @@ internal sealed class McpProjectAssemblies
                          .Select(node => node.Attribute("Include")?.Value ?? string.Empty)
                          .Where(value => value.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)))
             {
-                var full = Path.GetFullPath(Path.Combine(root, include.Replace('\\', Path.DirectorySeparatorChar)));
-                var path = Normalize(Path.GetRelativePath(root, full));
+                var full = Path.GetFullPath(Path.Combine(referenceRoot, include.Replace('\\', Path.DirectorySeparatorChar)));
+                var path = Normalize(Path.GetRelativePath(referenceRoot, full));
                 byFile[path] = name;
-                if (path.StartsWith("Assets/", StringComparison.Ordinal) && File.Exists(full))
+                if (path.StartsWith("Assets/", StringComparison.Ordinal) && File.Exists(Path.Combine(root, path)))
                     sources.Add(path);
             }
             if (string.Equals(name, "Assembly-CSharp", StringComparison.Ordinal))
                 Defines = document.Descendants().FirstOrDefault(node => node.Name.LocalName == "DefineConstants")?.Value
                     .Split(';', StringSplitOptions.RemoveEmptyEntries) ?? Array.Empty<string>();
         }
-        if (byFile.Count == 0)
-            sources.AddRange(FactsModel.SourceFilePaths(root).Select(file => Normalize(Path.GetRelativePath(root, file))));
+        // Every source of this checkout: the project files may be older than a worktree's new files.
+        sources.AddRange(FactsModel.SourceFilePaths(root).Select(file => Normalize(Path.GetRelativePath(root, file))));
         if (Defines.Length == 0)
             Defines = new[] { "UNITY_EDITOR", "UNITY_EDITOR_WIN", "UNITY_2021_2_OR_NEWER", "UNITY_2022_3_OR_NEWER", "UNITY_6000_0_OR_NEWER", "UNITY_6000_3_OR_NEWER" };
         SourceFiles = sources.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(path => path, StringComparer.Ordinal).ToArray();
@@ -135,6 +144,38 @@ internal sealed class McpProjectAssemblies
             }
         }
         return asmdefByGuid;
+    }
+
+    private static bool HasProjectFiles(string folder) => Directory.Exists(folder) && Directory.EnumerateFiles(folder, "*.csproj").Any();
+
+    // A linked worktree's .git file names its git folder, whose commondir is the main checkout's .git; a clone made with
+    // --shared names the main checkout's objects in objects/info/alternates. No git process is started.
+    private static string? MainCheckout(string folder)
+    {
+        try
+        {
+            var dotGit = Path.Combine(folder, ".git");
+            if (File.Exists(dotGit))
+            {
+                var line = File.ReadAllText(dotGit).Trim();
+                if (!line.StartsWith("gitdir:", StringComparison.Ordinal))
+                    return null;
+                var gitDir = Path.GetFullPath(Path.Combine(folder, line.Substring("gitdir:".Length).Trim()));
+                var common = Path.Combine(gitDir, "commondir");
+                if (!File.Exists(common))
+                    return null;
+                return Directory.GetParent(Path.GetFullPath(Path.Combine(gitDir, File.ReadAllText(common).Trim())).TrimEnd('\\', '/'))?.FullName;
+            }
+            var alternates = Path.Combine(dotGit, "objects", "info", "alternates");
+            if (!File.Exists(alternates))
+                return null;
+            var objects = File.ReadLines(alternates).FirstOrDefault(entry => entry.Trim().Length > 0)?.Trim();
+            return objects == null ? null : Directory.GetParent(Directory.GetParent(Path.GetFullPath(objects).TrimEnd('\\', '/'))!.FullName)?.FullName;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return null;
+        }
     }
 
     private static string Normalize(string path) => path.Replace('\\', '/');

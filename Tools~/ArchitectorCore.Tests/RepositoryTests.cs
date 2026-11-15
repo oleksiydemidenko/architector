@@ -66,6 +66,31 @@ namespace Architector.Core.Tests
         }
 
         [Test]
+        public void TheEditorFollowsACommandLineEditAndItsWorkSession()
+        {
+            var editor = Open(newSession: true);
+            var paths = new ArchitectorPaths(project);
+            var editorWork = new ArchitectorAiWorkCoordinator(true, "Test.EditorWork", paths.AiWorkRecoveryPath);
+            var commandLine = Open();
+            var commandLineWork = new ArchitectorAiWorkCoordinator(true, "Test.CommandLineWork", paths.AiWorkRecoveryPath);
+
+            var token = commandLineWork.Begin("Command line", commandLine.Revision);
+            Assert.That(editorWork.RefreshFromRecoveryMarker(), Is.True);
+            Assert.That(editorWork.WorkToken, Is.EqualTo(token), "the Editor locks its windows for the agent's work");
+
+            commandLine.ApplySemanticPlan(NewLayer(UnlockedRootGroup(commandLine), "From The Command Line"));
+            Assert.That(editor.StoredRevision, Is.GreaterThan(editor.Revision));
+            Assert.That(editor.RefreshExternalChanges(), Is.True);
+            editor.AdoptStoredRevision();
+            Assert.That(editor.Revision, Is.EqualTo(commandLine.Revision), "both give agents the same revision");
+            Assert.That(editor.Project.layers.Any(layer => layer.name == "From The Command Line"), Is.True);
+
+            commandLineWork.End(token);
+            Assert.That(editorWork.RefreshFromRecoveryMarker(), Is.True);
+            Assert.That(editorWork.IsActive, Is.False);
+        }
+
+        [Test]
         public void ASecondWriterWaitsForTheWriteLockAndIsRefusedWithoutAChange()
         {
             var repository = Open();

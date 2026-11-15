@@ -24,11 +24,16 @@ namespace Architector.Core.Tests
             encoded[ArchitectorPaths.SettingsFileName] =
                 ArchitectorJson.Serialize(ArchitectorJson.Deserialize<ArchitectorSettingsDocument>(files[ArchitectorPaths.SettingsFileName]));
 
-            // A baseline approved before 0.3.12 has no approvedByAgent; JsonUtility writes the field's default as well.
-            string Current(string path, string text) => path.EndsWith(ArchitectorPaths.BaselineFileSuffix, StringComparison.Ordinal)
-                                                        && !text.Contains("\"approvedByAgent\"")
-                ? text.Replace("\",\n    \"baseline\": {", "\",\n    \"approvedByAgent\": false,\n    \"baseline\": {")
-                : text;
+            // Files written before 0.3.12 lack two fields of 0.3.12; JsonUtility writes their defaults as well: a baseline's
+            // approvedByAgent and the settings' standaloneNodes.
+            string Current(string path, string text)
+            {
+                if (path.EndsWith(ArchitectorPaths.BaselineFileSuffix, StringComparison.Ordinal) && !text.Contains("\"approvedByAgent\""))
+                    return text.Replace("\",\n    \"baseline\": {", "\",\n    \"approvedByAgent\": false,\n    \"baseline\": {");
+                if (path == ArchitectorPaths.SettingsFileName && !text.Contains("\"standaloneNodes\""))
+                    return System.Text.RegularExpressions.Regex.Replace(text, "(\"uncheckedGroupIds\": \\[[^\\]]*\\])\n", "$1,\n        \"standaloneNodes\": []\n");
+                return text;
+            }
             var different = files.Keys.Where(path => !encoded.TryGetValue(path, out var text) || text != Current(path, files[path])).ToArray();
             foreach (var path in different.Take(3))
                 TestContext.Out.WriteLine($"{path}: {(encoded.TryGetValue(path, out var text) ? FirstDifference(text, files[path]) : "not written")}");

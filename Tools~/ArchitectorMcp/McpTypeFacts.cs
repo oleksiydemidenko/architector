@@ -84,7 +84,7 @@ internal sealed class McpTypeFacts : IArchitectorTypeFacts
                 .Select(path => CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(root, path)), options, path))
                 .ToArray();
             var platform = Basic.Reference.Assemblies.Net100.References.All.Cast<MetadataReference>().ToList();
-            var unity = CodeIndex.UnityReferences(root, platform).References;
+            var unity = CodeIndex.UnityReferences(assemblies.ReferenceRoot, platform).References;
             var compilation = CSharpCompilation.Create(
                 "Architector.TypeFacts",
                 trees,
