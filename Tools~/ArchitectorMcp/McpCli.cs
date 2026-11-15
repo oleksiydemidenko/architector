@@ -52,16 +52,19 @@ public static partial class McpServer
         new("facts dump", "facts dump <layer>", "A layer's nodes and relationships with ids, without layout, paged.", false, new[] { "offset", "limit", "output" }),
         new("facts lookup", "facts lookup <Layer/Path>[::Node Title[::Member]]...", "Layer, node and member ids by name.", false, Array.Empty<string>()),
         new("query", "query <action> [--<parameter> <value>]...",
-            "Any architector_query action through the open Unity Editor, for example: query layer_graph --target Core/Input --detail summary. "
-            + "The Editor answers while the integration Architector CLI is on. While Unity runs but its bridge does not answer (compile, domain reload), it retries for up to 30 s (--wait <seconds>, 0 turns it off).",
-            true, new[] { "wait", "any architector_query parameter" }),
+            "Any architector_query action, for example: query layer_graph --target Core/Input --detail summary. "
+            + "The open Editor answers while the integration Architector CLI is on and its bridge answers now; otherwise the same query runs at once on the Architector files "
+            + "(reply source files; type facts from the sources with Roslyn). --source editor waits for a compiling or reloading Editor up to 30 s (--wait <seconds>, 0 off); --source files never asks it.",
+            false, new[] { "source", "wait", "any architector_query parameter" }),
         new("edit", "edit <action> [--plan plan.json] [--<parameter> <value>]...",
             "Any architector_edit action through the open Unity Editor, for example: edit dry_run_plan --plan plan.json. --plan takes a file or JSON text. "
             + "approve_layers needs --approve_changes true for layers changed since their last approval. implements and extends are labels on a dependency relationship (kind dependency, label implements), not relationship kinds. "
             + "dry_run_plan lists permissions_lost: layer pairs the plan leaves without any dependency, with their code_references. set_standalone --target <layer> --node <node> --reason <why> marks a linked node that has no relationship on purpose. "
             + "A list parameter takes a repeated flag (--layers A --layers B) or a comma list (--layers A,B). A node responsibility has at most 240 characters. "
-            + "Waits for a compiling or reloading Editor like query (--wait); an edit is never sent twice.",
-            true, new[] { "plan", "approve_changes", "work_token", "expected_revision", "wait", "any architector_edit parameter" }),
+            + "Without an answering Editor the edit runs at once on the Architector files with the same checks: the revision, validation, group locks, the work token; "
+            + "one writer at a time (Library/Architector/write.lock, busy after 15 s), and the open Editor reloads the change. approve_layers, revoke_approvals and revert_to_approved need a person in the Editor (needs_person). "
+            + "--source editor waits like query; an edit that reached the Editor is never sent twice.",
+            false, new[] { "plan", "approve_changes", "work_token", "expected_revision", "source", "wait", "any architector_edit parameter" }),
         new("status", "status", "The project, its Architector data, whether Unity runs and its bridge is reachable, which clients the bridge serves (editor_serves), the saved switches of Architector CLI and Architector MCP server, and how query and edit wait for the Editor (editor_wait).", false, Array.Empty<string>()),
         new("doctor", "doctor", "Checks everything the tools need and says what to fix: project, data, code index, Editor, package, agent skills.", false, Array.Empty<string>()),
         new("commands", "commands", "Every command as JSON, for tools.", false, Array.Empty<string>()),
@@ -618,9 +621,9 @@ public static partial class McpServer
         }
         text.AppendLine();
         text.AppendLine("Global: --project <path> (default: the Unity project containing the current folder), --pretty (indented JSON).");
-        text.AppendLine($"query and edit: the Editor answers the command line while the integration Architector CLI is on (Window > Architector > Settings > AI > Connections). While Unity runs for the project but its bridge does not answer (compile, domain reload), they retry for up to {DefaultEditorWaitSeconds} s, then exit 7; --wait <seconds> changes it, 0 turns it off. An edit that reached the Editor is never sent twice.");
+        text.AppendLine($"query and edit: the integration Architector CLI must be on (Window > Architector > Settings > AI > Connections). The open Editor answers when its bridge answers now; otherwise, also while Unity compiles or reloads, the Architector core answers at once on the files (source files), one writer at a time. With --source editor they wait up to {DefaultEditorWaitSeconds} s for the Editor, then exit 7; --wait <seconds> changes it, 0 turns it off. An edit that reached the Editor is never sent twice.");
         text.AppendLine("Paged replies take --offset and --limit and report next_offset; --output file writes the full answer under Library/Architector/facts.");
-        text.AppendLine("Every reply is JSON with success, except route and digest, which print the text of their MCP tools, and check, which prints findings only (--json gives JSON). Exit codes: 0 success, 1 internal error, 2 usage, 3 check findings, 4 setup missing, 6 success=false (also integration_disabled), 7 Unity Editor not reachable (after the wait; retry when it is open).");
+        text.AppendLine("Every reply is JSON with success, except route and digest, which print the text of their MCP tools, and check, which prints findings only (--json gives JSON). Exit codes: 0 success, 1 internal error, 2 usage, 3 check findings, 4 setup missing, 6 success=false (also integration_disabled), 7 Unity Editor not reachable with --source editor, or an edit sent to it without an answer.");
         text.AppendLine("Every call is logged to Library/Architector/calls.jsonl (time, caller, action, arguments, reply size, duration); ARCHITECTOR_CALL_LOG=0 turns that off.");
         Console.Out.Write(text.ToString());
         return ExitOk;
