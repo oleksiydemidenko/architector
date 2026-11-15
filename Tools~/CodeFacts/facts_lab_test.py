@@ -241,8 +241,8 @@ catalog = {member[1]: member[3] for member in answer({"action": "layer_facts", "
 refs = sorted((ref["name"], tuple(ref.get("parameters", []))) for ref in catalog.values())
 assert refs == [("Distance", ("in:Spot",)), ("GetAll", ()), ("GetAll`1", ())], refs
 # 0.3.10: a command-line value that starts with a bracket but is not JSON stays text.
-# Without an Editor the call stops at the bridge, after the value was parsed.
-code, text = cli("query", "lookup", "--reason", "[InitializeOnLoad] hook")
+# Asked for the Editor without one, the call stops at the bridge, after the value was parsed.
+code, text = cli("query", "lookup", "--reason", "[InitializeOnLoad] hook", "--source", "editor", "--wait", "0")
 assert code == 7 and json.loads(text)["code"] == "editor_unreachable", text
 
 # 0.3.11: digest and route on the command line, the compact and full digest, writers and readers from the code facts.

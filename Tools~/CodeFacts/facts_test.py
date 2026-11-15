@@ -158,7 +158,7 @@ code, text = cli("facts", "lookup", "Sample/Core::Clock::Advance")
 assert code == 0 and json.loads(text)["results"][0]["member"] == "member_advance", text
 assert cli("facts", "layer", "Missing")[0] == 6
 assert cli("facts", "nothing")[0] == 2
-assert cli("query", "work_status")[0] == 7
+assert cli("query", "work_status", "--source", "editor", "--wait", "0")[0] == 7
 code, text = cli("status")
 assert code == 0 and json.loads(text)["cli"], text
 code, text = cli("commands")
