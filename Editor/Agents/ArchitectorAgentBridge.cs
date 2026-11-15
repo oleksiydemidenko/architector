@@ -200,9 +200,18 @@ namespace Architector.Editor.Agents
                 started = true;
                 ArchitectorSession.Instance.Repository.Changed += Sync;
                 Sync();
+                // The first tick runs after every [InitializeOnLoad], so optional modes such as Lazy are registered.
+                ArchitectorAgentPreferences.Changed += MirrorMode;
+                MirrorMode();
             }
             while (Pending.TryDequeue(out var action))
                 action();
+        }
+
+        // A command line without the Editor takes the user's workflow mode from this file (ArchitectorAgentModeMirror).
+        private static void MirrorMode()
+        {
+            ArchitectorAgentModeMirror.Write(ArchitectorHost.Current.ProjectRoot, ArchitectorAgentPreferences.Current.Mode);
         }
 
         private static string NewToken()

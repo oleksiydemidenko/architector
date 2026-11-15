@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.15
+
+- **Lazy mode approves without the Editor too.** The Editor mirrors the user's workflow mode (EditorPrefs, and optional modes such as Lazy registered by their package) to `Library/Architector/agent-mode.json`; the command line without an Editor adopts it, so in Lazy mode `approve_layers`, `revoke_approvals` and `revert_to_approved` run on the files and the baseline records the agent as in the Editor. Safe and Free mode, or no mirror yet, still answer `needs_person`.
+
 ## 0.3.14
 
 **Architector without the Editor:**

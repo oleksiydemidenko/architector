@@ -78,13 +78,30 @@ if locked:
                   "--expected_revision", str(after), "--work_token", token, check=6)
     assert "lock" in json.dumps(refused).lower(), refused
 
-approval = cli("edit", "approve_layers", "--layers", layer["data"]["layer"]["id"], "--approve_changes", "true",
+layer_id = layer["data"]["layer"]["id"]
+# Without the mirrored workflow mode (no Editor opened yet) the command line is in Safe mode: a person approves.
+approval = cli("edit", "approve_layers", "--layers", layer_id, "--approve_changes", "true",
                "--expected_revision", str(after), "--work_token", token, check=6)
 assert approval["code"] == "needs_person", approval
 
-# A second writer waits for the write lock, then answers busy and changes nothing.
+# The Editor mirrors the user's Lazy mode; the command line then approves on its own and the baseline says so.
+with open(os.path.join(project, "Library", "Architector", "agent-mode.json"), "w", encoding="utf-8") as file:
+    json.dump({"workflowMode": "lazy", "displayName": "Lazy", "description": "", "agentRule": "Approve on your own.",
+               "agentMayApprove": True, "showsNotice": True}, file)
+assert cli("query", "capabilities", check=0)["data"]["workflow_mode"] == "lazy"
+approved = cli("edit", "approve_layers", "--layers", layer_id, "--approve_changes", "true",
+               "--expected_revision", str(after), "--work_token", token, check=0)
+baselines = os.path.join(project, "Architector", "Baselines")
+baseline = [name for name in os.listdir(baselines) if layer_id in name]
+assert baseline and json.load(open(os.path.join(baselines, baseline[0]), encoding="utf-8")).get("approvedByAgent"), (approved, baseline)
+
+# A second writer waits for the write lock, then answers busy and changes nothing. .NET locks with FileShare.None:
+# on Windows any open handle blocks it, on Linux and macOS only an advisory flock.
 lock_path = os.path.join(project, "Library", "Architector", "write.lock")
 held = open(lock_path, "a")
+if os.name != "nt":
+    import fcntl
+    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
 try:
     started = time.time()
     busy = cli("edit", "end_work", "--work_token", token, check=6)

@@ -23,6 +23,7 @@ public static partial class McpServer
             return;
         localReady = true;
         ArchitectorHost.Current = new ArchitectorProcessHost(root!);
+        ArchitectorAgentModeMirror.Adopt(root!);
         ArchitectorTypeIndex.CreateFacts = _ => new McpTypeFacts(root!);
         ArchitectorAgentEdit.PlanTokenFolder = Path.Combine(root!, "Library", "Architector", "plan-tokens");
     }
