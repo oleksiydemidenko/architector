@@ -8,6 +8,7 @@ using Newtonsoft.Json.Linq;
 // are the Editor's: the revision check, validation, group locks, the agent work token. An edit holds
 // Library/Architector/write.lock from reading the files to the last write, so there is one writer at a time with the
 // Editor and other command lines; the open Editor reloads the change within a second. Approvals need a person.
+// Data built here is JObject, not anonymous types: the published binary is trimmed, and only the core keeps its types whole.
 public static partial class McpServer
 {
     // How long a busy Editor may take to start a call before the call goes to the files. A call the Editor did not
@@ -42,13 +43,13 @@ public static partial class McpServer
 
         // The saved switch counts as in the Editor; the command line never creates the Architector data.
         if (!IntegrationOn(integrationId))
-            return Reply(ArchitectorAgentResult.Fail("integration_disabled", new
+            return Reply(ArchitectorAgentResult.Fail("integration_disabled", new JObject
             {
-                integration = integrationId,
-                message = $"The integration '{ArchitectorAgentIntegrationRegistry.DisplayName(integrationId)}' is off for this project. Turn it on in Window > Architector > Settings > AI > Connections."
+                ["integration"] = integrationId,
+                ["message"] = $"The integration '{ArchitectorAgentIntegrationRegistry.DisplayName(integrationId)}' is off for this project. Turn it on in Window > Architector > Settings > AI > Connections."
             }));
         if (!File.Exists(paths.ProjectPath))
-            return Reply(ArchitectorAgentResult.Fail("no_data", new { message = NoData }));
+            return Reply(ArchitectorAgentResult.Fail("no_data", new JObject { ["message"] = NoData }));
         ArchitectorAgentResult Run()
         {
             var repository = new ArchitectorRepository(paths, newSession: false);
@@ -66,11 +67,11 @@ public static partial class McpServer
         }
         catch (ArchitectorWriteBusyException exception)
         {
-            result = ArchitectorAgentResult.Fail("busy", new { message = exception.Message });
+            result = ArchitectorAgentResult.Fail("busy", new JObject { ["message"] = exception.Message });
         }
         catch (ArchitectorDataException exception)
         {
-            result = ArchitectorAgentResult.Fail("invalid_data", new { message = exception.Message });
+            result = ArchitectorAgentResult.Fail("invalid_data", new JObject { ["message"] = exception.Message });
         }
         return Reply(result);
     }

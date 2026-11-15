@@ -4,7 +4,7 @@ on:
   push:
     tags: ["v*"]
   pull_request:
-    paths: ["Tools~/**", ".github/workflows/mcp-server.yml"]
+    paths: ["Tools~/**", "Editor/**", ".github/workflows/mcp-server.yml"]
   workflow_dispatch:
 
 permissions:
@@ -37,6 +37,10 @@ jobs:
             -p:Version="$version" -o out
           mkdir dist
           cp "out/architector-mcp${{ matrix.ext }}" "dist/architector-mcp-${{ matrix.rid }}${{ matrix.ext }}"
+      - name: Core tests
+        if: matrix.rid == 'linux-x64'
+        shell: bash
+        run: dotnet test "Tools~/ArchitectorCore.Tests" -c Release
       - name: Smoke test
         if: matrix.smoke
         shell: bash
