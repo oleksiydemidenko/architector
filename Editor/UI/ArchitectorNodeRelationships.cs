@@ -75,6 +75,25 @@ namespace Architector.Editor
                 .ToArray();
         }
 
+        // The rows the Inspector lists for the kinds switched on in its toolbar: by kind in ArchitectorEdgeKinds.All
+        // order, incoming before outgoing, then by the title of the node at the other end.
+        public static IReadOnlyList<ArchitectorNodeRelationshipRow> Visible(
+            IEnumerable<ArchitectorNodeRelationshipGroup> groups,
+            ICollection<string> kinds)
+        {
+            return (groups ?? Enumerable.Empty<ArchitectorNodeRelationshipGroup>())
+                .SelectMany(group => group.Rows)
+                .Where(row => kinds == null || kinds.Contains(row.Kind))
+                .OrderBy(row => KindOrder(row.Kind))
+                .ThenBy(row => row.Kind, StringComparer.Ordinal)
+                .ThenBy(row => row.Incoming ? 0 : 1)
+                .ThenBy(row => row.Title, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(row => row.Title, StringComparer.Ordinal)
+                .ThenBy(row => row.LayerName, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(row => row.EdgeId, StringComparer.Ordinal)
+                .ToArray();
+        }
+
         public static string GroupTitle(string kind, string label)
         {
             var name = ArchitectorEdgeKinds.DisplayName(kind);

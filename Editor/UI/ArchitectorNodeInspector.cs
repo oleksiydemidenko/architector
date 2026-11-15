@@ -151,7 +151,7 @@ namespace Architector.Editor
                     using (new EditorGUILayout.HorizontalScope())
                     {
                         interfaceNames[index] = EditorGUILayout.TextField(interfaceNames[index]);
-                        if (GUILayout.Button("−", EditorStyles.miniButton, GUILayout.Width(24f)))
+                        if (RemoveButton())
                         {
                             interfaceNames.RemoveAt(index);
                             GUI.changed = true;
@@ -182,7 +182,7 @@ namespace Architector.Editor
                                 var memberKindIndex = Mathf.Max(0, Array.IndexOf(MemberKinds, member.kind));
                                 member.kind = MemberKinds[EditorGUILayout.Popup(memberKindIndex, MemberKinds, GUILayout.Width(88f))];
                                 member.declaration = EditorGUILayout.TextField(member.declaration);
-                                if (GUILayout.Button("−", EditorStyles.miniButton, GUILayout.Width(24f)))
+                                if (RemoveButton())
                                 {
                                     members.RemoveAt(index);
                                     GUI.changed = true;
@@ -488,23 +488,22 @@ namespace Architector.Editor
                     {
                         var memberResolution = typeIndex.ResolveMember(node.type, member);
                         using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+                        using (new EditorGUILayout.HorizontalScope())
                         {
-                            using (new EditorGUILayout.HorizontalScope())
-                            {
-                                var statusStyle = new GUIStyle(EditorStyles.miniBoldLabel);
-                                statusStyle.normal.textColor = MemberStatusColor(memberResolution);
-                                GUILayout.Label(memberResolution.ToString(), statusStyle, GUILayout.Width(112f));
-                                GUILayout.FlexibleSpace();
-                                if (GUILayout.Button("−", EditorStyles.miniButton, GUILayout.Width(24f)))
-                                {
-                                    execute(() => repository.RemoveLinkedMember(layerId, node.id, member.id));
-                                    GUIUtility.ExitGUI();
-                                }
-                            }
+                            // The state is an icon at the left; a member that resolves has none.
+                            var icon = MemberStatusIcon(memberResolution);
+                            if (icon != null)
+                                GUILayout.Label(icon, GUILayout.Width(18f), GUILayout.Height(EditorGUIUtility.singleLineHeight));
                             declarationStyle ??= new GUIStyle(EditorStyles.wordWrappedMiniLabel) { richText = true };
                             GUILayout.Label(
                                 new GUIContent(ArchitectorSemanticPalette.RichDeclaration(member.declaration), member.declaration),
-                                declarationStyle);
+                                declarationStyle,
+                                GUILayout.ExpandWidth(true));
+                            if (RemoveButton())
+                            {
+                                execute(() => repository.RemoveLinkedMember(layerId, node.id, member.id));
+                                GUIUtility.ExitGUI();
+                            }
                         }
                         if (string.Equals(pendingFocusNodeId, node.id, StringComparison.Ordinal)
                             && string.Equals(pendingFocusMemberId, member.id, StringComparison.Ordinal)
@@ -560,53 +559,128 @@ namespace Architector.Editor
                 cachedRelationshipRevision = repository.Revision;
             }
             var groups = cachedRelationshipGroups;
-            using var box = FoldoutBox($"Relationships ({groups.Sum(group => group.Rows.Count)})", ref relationshipsExpanded);
+            var all = ArchitectorNodeRelationships.Visible(groups, null);
+            using var box = FoldoutBox($"Relationships ({all.Count})", ref relationshipsExpanded);
             if (!box.Expanded)
                 return;
-            if (groups.Count == 0)
+            var palette = EditorGUIUtility.isProSkin ? repository.Settings.palette.dark : repository.Settings.palette.light;
+            DrawKindToolbar(all, palette);
+            var rows = ArchitectorNodeRelationships.Visible(groups, ShownKinds());
+            if (rows.Count == 0)
             {
-                GUILayout.Label("No relationships.", EditorStyles.miniLabel);
+                GUILayout.Label(all.Count == 0 ? "No relationships." : "No relationships of the selected kinds.", EditorStyles.miniLabel);
                 return;
             }
-            bool? incoming = null;
-            foreach (var group in groups)
+            foreach (var row in rows)
             {
-                if (incoming != group.Incoming)
+                if (DrawRelationshipRow(row, palette) && revealNode != null)
                 {
-                    if (incoming != null)
-                        EditorGUILayout.Space(6f);
-                    incoming = group.Incoming;
-                    var count = groups.Where(candidate => candidate.Incoming == group.Incoming).Sum(candidate => candidate.Rows.Count);
-                    GUILayout.Label($"{(group.Incoming ? "Incoming" : "Outgoing")} ({count})", EditorStyles.boldLabel);
-                }
-                GUILayout.Label($"{group.Title} ({group.Rows.Count})", EditorStyles.miniBoldLabel);
-                foreach (var row in group.Rows)
-                {
-                    if (DrawRelationshipRow(group, row) && revealNode != null)
-                    {
-                        revealNode(row.LayerId, row.NodeId);
-                        GUI.FocusControl(null);
-                    }
+                    revealNode(row.LayerId, row.NodeId);
+                    GUI.FocusControl(null);
                 }
             }
         }
 
-        // A row is the node at the other end in the color of its type kind, as members color type names, and its layer;
-        // a click reports true so the caller selects and frames that node.
-        private static bool DrawRelationshipRow(ArchitectorNodeRelationshipGroup group, ArchitectorNodeRelationshipRow row)
+        private const string ShownKindsKey = "Architector.NodeInspector.RelationshipKinds";
+        private static HashSet<string> shownKinds;
+        private static readonly Dictionary<string, GUIStyle> KindButtonStyles = new(StringComparer.Ordinal);
+        private static GUIStyle arrowStyle;
+
+        // The relationship kinds the list shows, kept per Editor; all of them until the user changes the toolbar.
+        private static HashSet<string> ShownKinds()
+        {
+            if (shownKinds != null)
+                return shownKinds;
+            shownKinds = EditorPrefs.HasKey(ShownKindsKey)
+                ? new HashSet<string>(EditorPrefs.GetString(ShownKindsKey, string.Empty).Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries), StringComparer.Ordinal)
+                : new HashSet<string>(ArchitectorEdgeKinds.All, StringComparer.Ordinal);
+            return shownKinds;
+        }
+
+        // One segmented bar, a toggle per relationship kind in that kind's color; several can be on at once.
+        private static void DrawKindToolbar(IReadOnlyList<ArchitectorNodeRelationshipRow> rows, ArchitectorThemePaletteSettings palette)
+        {
+            var shown = ShownKinds();
+            var kinds = ArchitectorEdgeKinds.All;
+            var changed = GUI.changed;
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                for (var index = 0; index < kinds.Count; index++)
+                {
+                    var kind = kinds[index];
+                    var baseStyle = kinds.Count == 1 ? EditorStyles.miniButton
+                        : index == 0 ? EditorStyles.miniButtonLeft
+                        : index == kinds.Count - 1 ? EditorStyles.miniButtonRight
+                        : EditorStyles.miniButtonMid;
+                    if (!KindButtonStyles.TryGetValue(kind, out var style) || style.name != baseStyle.name)
+                        KindButtonStyles[kind] = style = new GUIStyle(baseStyle);
+                    var color = KindColor(kind, palette);
+                    style.normal.textColor = style.onNormal.textColor = style.hover.textColor = style.onHover.textColor
+                        = style.active.textColor = style.onActive.textColor = style.focused.textColor = style.onFocused.textColor = color;
+                    var count = rows.Count(row => string.Equals(row.Kind, kind, StringComparison.Ordinal));
+                    var on = shown.Contains(kind);
+                    var now = GUILayout.Toggle(on, new GUIContent($"{ArchitectorEdgeKinds.DisplayName(kind)} ({count})", $"Show {ArchitectorEdgeKinds.DisplayName(kind)} relationships"), style);
+                    if (now == on)
+                        continue;
+                    if (now)
+                        shown.Add(kind);
+                    else
+                        shown.Remove(kind);
+                    EditorPrefs.SetString(ShownKindsKey, string.Join(",", shown.OrderBy(value => value, StringComparer.Ordinal)));
+                }
+            }
+            // Filtering the list is not an edit of the node.
+            GUI.changed = changed;
+            EditorGUILayout.Space(2f);
+        }
+
+        private static Color KindColor(string kind, ArchitectorThemePaletteSettings palette)
+        {
+            var color = kind switch
+            {
+                ArchitectorEdgeKinds.DataFlow => palette.dataFlowEdge,
+                ArchitectorEdgeKinds.Event => palette.eventEdge,
+                ArchitectorEdgeKinds.Callback => palette.callbackEdge,
+                _ => palette.edge
+            };
+            var value = color.ToColor();
+            value.a = 1f;
+            return value;
+        }
+
+        // The canvas colors of a selected node's relationships: outgoing in the selection color, incoming in the
+        // incoming highlight.
+        private static Color DirectionColor(bool incoming, ArchitectorThemePaletteSettings palette)
+        {
+            var value = (incoming ? palette.incomingEdgeHighlight : palette.selectedEdge).ToColor();
+            value.a = 1f;
+            return value;
+        }
+
+        // A row: the direction arrow, the node at the other end in the color of its type kind (as members color type
+        // names), a dependency's label, and the node's layer; a click reports true so the caller selects and frames it.
+        private static bool DrawRelationshipRow(ArchitectorNodeRelationshipRow row, ArchitectorThemePaletteSettings palette)
         {
             declarationStyle ??= new GUIStyle(EditorStyles.wordWrappedMiniLabel) { richText = true };
+            arrowStyle ??= new GUIStyle(EditorStyles.boldLabel) { alignment = TextAnchor.MiddleCenter, padding = new RectOffset(0, 0, 0, 0) };
+            arrowStyle.normal.textColor = DirectionColor(row.Incoming, palette);
             Color? titleColor = string.IsNullOrEmpty(row.TypeKind)
                 ? null
                 : (Color?)ArchitectorSemanticPalette.ForTypeKind(row.TypeKind.EndsWith("struct", StringComparison.Ordinal) ? "struct" : row.TypeKind);
-            var title = ArchitectorSemanticPalette.RichSegments(new List<(string Text, Color? Color)> { (row.Title, titleColor) });
-            var label = string.IsNullOrEmpty(row.Label) || !string.IsNullOrEmpty(group.Label) ? string.Empty : $" · {row.Label}";
-            var tooltip = $"{group.Title}{label}\n{row.LayerName} / {row.Title}";
+            var segments = new List<(string Text, Color? Color)> { (row.Title, titleColor) };
+            if (!string.IsNullOrEmpty(row.Label))
+                segments.Add(($" · {row.Label}", KindColor(row.Kind, palette)));
+            var title = ArchitectorSemanticPalette.RichSegments(segments);
+            var kindName = ArchitectorEdgeKinds.DisplayName(row.Kind) + (string.IsNullOrEmpty(row.Label) ? string.Empty : $" · {row.Label}");
+            var tooltip = row.Incoming
+                ? $"{kindName} from {row.LayerName} / {row.Title}"
+                : $"{kindName} to {row.LayerName} / {row.Title}";
             var layerWidth = Mathf.Min(EditorStyles.miniLabel.CalcSize(new GUIContent(row.LayerName)).x, 160f);
             Rect rowRect;
             using (var scope = new EditorGUILayout.HorizontalScope())
             {
-                GUILayout.Label(new GUIContent(title, tooltip), declarationStyle);
+                GUILayout.Label(new GUIContent(row.Incoming ? "\u2190" : "\u2192", row.Incoming ? "Incoming" : "Outgoing"), arrowStyle, GUILayout.Width(16f));
+                GUILayout.Label(new GUIContent(title, tooltip), declarationStyle, GUILayout.ExpandWidth(true));
                 GUILayout.Label(
                     new GUIContent(Ellipsize(row.LayerName, layerWidth, EditorStyles.miniLabel), tooltip),
                     EditorStyles.miniLabel,
@@ -656,20 +730,26 @@ namespace Architector.Editor
                 otherLayerId => repository.FindLayer(otherLayerId)?.name);
         }
 
-        private static Color MemberStatusColor(ArchitectorMemberResolution resolution)
+        // Missing: the error icon; a changed signature: the warning icon; resolved: no icon.
+        private static GUIContent MemberStatusIcon(ArchitectorMemberResolution resolution)
         {
             return resolution switch
             {
-                ArchitectorMemberResolution.Resolved => EditorGUIUtility.isProSkin
-                    ? new Color(0.45f, 0.82f, 0.48f)
-                    : new Color(0.08f, 0.48f, 0.12f),
-                ArchitectorMemberResolution.SignatureChanged => EditorGUIUtility.isProSkin
-                    ? new Color(0.95f, 0.72f, 0.25f)
-                    : new Color(0.65f, 0.38f, 0.02f),
-                _ => EditorGUIUtility.isProSkin
-                    ? new Color(0.95f, 0.38f, 0.34f)
-                    : new Color(0.70f, 0.08f, 0.06f)
+                ArchitectorMemberResolution.Missing => new GUIContent(ArchitectorIcons.Get("console.erroricon.sml").image,
+                    "Missing: the linked type has no such member."),
+                ArchitectorMemberResolution.SignatureChanged => new GUIContent(ArchitectorIcons.Get("console.warnicon.sml").image,
+                    "Signature changed since the member was linked."),
+                _ => null
             };
+        }
+
+        private static bool RemoveButton()
+        {
+            var previous = GUI.backgroundColor;
+            GUI.backgroundColor = new Color(1f, 0.65f, 0.65f);
+            var remove = GUILayout.Button(new GUIContent("\u00d7", "Remove element"), GUILayout.Width(18f), GUILayout.Height(EditorGUIUtility.singleLineHeight));
+            GUI.backgroundColor = previous;
+            return remove;
         }
 
         private static void DrawPathLabel(string label, string path)
@@ -813,7 +893,7 @@ namespace Architector.Editor
                     using (new EditorGUILayout.HorizontalScope())
                     {
                         GUILayout.Label(new GUIContent(ArchitectorTypeReference.FullName(interfaceType), ArchitectorTypeReference.Key(interfaceType)), EditorStyles.miniLabel);
-                        if (GUILayout.Button("−", EditorStyles.miniButton, GUILayout.Width(24f)))
+                        if (RemoveButton())
                         {
                             var key = ArchitectorTypeReference.Key(interfaceType);
                             var next = node.type.interfaces.Where(candidate => !string.Equals(ArchitectorTypeReference.Key(candidate), key, StringComparison.Ordinal))

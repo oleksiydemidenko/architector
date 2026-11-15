@@ -64,6 +64,25 @@ namespace Architector.Editor.Tests
         }
 
         [Test]
+        public void VisibleRowsAreByKindThenIncomingFirstThenTitleAndKeepOnlyShownKinds()
+        {
+            var groups = Build(
+                Edge("e1", "core", "hub", "core", "zeta"),
+                Edge("e2", "core", "beta", "core", "hub"),
+                Edge("e3", "core", "hub", "core", "alpha", label: "implements"),
+                Edge("e4", "ui", "view", "core", "hub", ArchitectorEdgeKinds.Event),
+                Edge("e5", "core", "hub", "ui", "view", ArchitectorEdgeKinds.DataFlow));
+
+            var all = ArchitectorNodeRelationships.Visible(groups, null);
+            Assert.That(all.Select(row => row.EdgeId), Is.EqualTo(new[] { "e2", "e3", "e1", "e5", "e4" }));
+            Assert.That(all.Select(row => row.Incoming), Is.EqualTo(new[] { true, false, false, false, true }));
+
+            var events = ArchitectorNodeRelationships.Visible(groups, new HashSet<string> { ArchitectorEdgeKinds.Event });
+            Assert.That(events.Select(row => row.EdgeId), Is.EqualTo(new[] { "e4" }));
+            Assert.That(ArchitectorNodeRelationships.Visible(groups, new HashSet<string>()), Is.Empty);
+        }
+
+        [Test]
         public void OutgoingGroupsComeBeforeIncomingAndIncludeCrossLayerRelationships()
         {
             var groups = Build(

@@ -31,7 +31,7 @@ Facts about a Unity project that the agent cannot see in C#, delivered short, at
 
 **Editor:**
 
-- **Node Inspector: Members and Relationships.** The contract members are in a **Members** foldout. A **Relationships** foldout lists the node's relationships, in its layer and across layers, grouped by kind (dependency and each of its labels, such as implements and extends, and the other kinds), outgoing and incoming apart, each with a count, sorted by the other node's title; a row shows that node in its type color and its layer. Clicking a row selects and frames the node, opening its layer first when it is in another one. Both foldouts use the Inspector's existing box style.
+- **Node Inspector: Members and Relationships.** The contract members are in a **Members** foldout; a member's state is an icon at the left of its row (the error icon when the type has no such member, the warning icon when its signature changed, none when it resolves), and the remove button is a red cross. A **Relationships** foldout lists the node's relationships, in its layer and across layers. A segmented bar of toggles, one per relationship kind in its kind's color, chooses the kinds shown; several can be on, and the choice is kept per Editor. The list is sorted by kind, incoming before outgoing, then by the other node's title; an arrow at the start of a row gives the direction in the canvas colors (incoming highlight, selection color), and a row shows that node in its type color, a dependency's label (implements, extends) and its layer. Clicking a row selects and frames the node, opening its layer first when it is in another one. Both foldouts use the Inspector's existing box style.
 
 ## 0.3.11
 
