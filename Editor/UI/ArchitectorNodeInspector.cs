@@ -167,20 +167,23 @@ namespace Architector.Editor
                     if (box.Expanded)
                     {
                         members = ArchitectorMemberOrder.SortStable(members);
-                        for (var index = 0; index < members.Count; index++)
+                        using (new EditorGUILayout.VerticalScope(ListBodyStyle))
                         {
-                            var member = members[index];
-                            using (new EditorGUILayout.HorizontalScope())
+                            for (var index = 0; index < members.Count; index++)
                             {
-                                var memberKindIndex = Mathf.Max(0, Array.IndexOf(MemberKinds, member.kind));
-                                member.kind = MemberKinds[EditorGUILayout.Popup(memberKindIndex, MemberKinds, GUILayout.Width(88f))];
-                                member.declaration = EditorGUILayout.TextField(member.declaration);
-                                if (RemoveButton())
+                                var member = members[index];
+                                using (new EditorGUILayout.HorizontalScope())
                                 {
-                                    members.RemoveAt(index);
-                                    GUI.changed = true;
-                                    GUI.FocusControl(null);
-                                    break;
+                                    var memberKindIndex = Mathf.Max(0, Array.IndexOf(MemberKinds, member.kind));
+                                    member.kind = MemberKinds[EditorGUILayout.Popup(memberKindIndex, MemberKinds, GUILayout.Width(88f))];
+                                    member.declaration = EditorGUILayout.TextField(member.declaration);
+                                    if (RemoveButton())
+                                    {
+                                        members.RemoveAt(index);
+                                        GUI.changed = true;
+                                        GUI.FocusControl(null);
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -458,6 +461,7 @@ namespace Architector.Editor
             {
                 if (box.Expanded)
                 {
+                    using (new EditorGUILayout.VerticalScope(ListBodyStyle))
                     foreach (var member in ArchitectorMemberOrder.SortStable(node.members))
                     {
                         var memberResolution = typeIndex.ResolveMember(node.type, member);
@@ -489,9 +493,12 @@ namespace Architector.Editor
                             pendingFocusMemberId = string.Empty;
                         }
                     }
-                    using (new EditorGUI.DisabledScope(resolution != ArchitectorTypeResolution.Resolved))
+                    var typeFound = resolution == ArchitectorTypeResolution.Resolved;
+                    using (new EditorGUI.DisabledScope(!typeFound))
                     {
-                        if (ListAddButton("Add members of the linked type"))
+                        if (ListAddButton(typeFound
+                                ? "Add members of the linked type"
+                                : "The linked type is not in the code, so it has no members to add. Link the node to an existing type first."))
                         {
                             var selectedKeys = new HashSet<string>(node.members.Select(member => member.symbolKey), StringComparer.Ordinal);
                             var available = typeIndex.GetMembers(node.type)
@@ -733,19 +740,27 @@ namespace Architector.Editor
             };
         }
 
+        private static GUIStyle listBodyStyle;
         private static GUIStyle listFooterStyle;
         private static GUIStyle listFooterButtonStyle;
 
+        // The body and footer of Unity's ReorderableList, as UMP lists draw them: the rows sit in one box and the add tab
+        // hangs under its right edge.
+        private static GUIStyle ListBodyStyle =>
+            listBodyStyle ??= new GUIStyle("RL Background") { padding = new RectOffset(4, 4, 4, 4), margin = new RectOffset(0, 0, 0, 0), stretchHeight = false };
+
+        // Every add opens a menu or a picker, so the tab shows the "+ with arrow" icon of ReorderableList.
         private static bool ListAddButton(string tooltip)
         {
             listFooterStyle ??= new GUIStyle("RL Footer");
             listFooterButtonStyle ??= new GUIStyle("RL FooterButton");
             var rect = GUILayoutUtility.GetRect(4f, 20f, GUILayout.ExpandWidth(true));
-            var footer = new Rect(rect.xMax - 33f, rect.y, 33f, rect.height);
+            var rightEdge = rect.xMax - 10f;
+            var footer = new Rect(rightEdge - 33f, rect.y, 33f, rect.height);
             if (Event.current.type == EventType.Repaint)
                 listFooterStyle.Draw(footer, false, false, false, false);
             var button = new Rect(footer.x + 4f, footer.y, 25f, 16f);
-            return GUI.Button(button, EditorGUIUtility.TrIconContent("Toolbar Plus", tooltip), listFooterButtonStyle);
+            return GUI.Button(button, EditorGUIUtility.TrIconContent("Toolbar Plus More", tooltip), listFooterButtonStyle);
         }
 
         private static bool RemoveButton()
